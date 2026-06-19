@@ -1,0 +1,14 @@
+.git
+.gitignore
+docs
+*.gif
+.sessions
+.env
+agents.json
+tg_convo.log
+.tg_bridge_state.json
+__pycache__
+**/__pycache__
+.pytest_cache
+node_modules
+pre-public-backup

@@ -1,0 +1,6 @@
+{
+  "_order": ["1", "2", "3"],
+  "1": { "project": "my-app",    "locked": true,  "model": "sonnet", "effort": "auto" },
+  "2": { "project": "docs-site", "locked": true },
+  "3": { "locked": false }
+}

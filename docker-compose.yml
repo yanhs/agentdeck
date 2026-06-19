@@ -1,0 +1,18 @@
+services:
+  agentdeck:
+    build: .
+    container_name: agentdeck
+    ports:
+      - "8080:80"            # open http://localhost:8080
+    volumes:
+      # Your Claude login — REQUIRED so the agents can authenticate.
+      # Run `claude` once on the host first to create ~/.claude, then:
+      - ${HOME}/.claude:/root/.claude
+      # Keep agent conversations resumable across container restarts.
+      - agentdeck-sessions:/app/.sessions
+      # OPTIONAL — let agents read/write your project files:
+      # - ./my-project:/work
+    restart: unless-stopped
+
+volumes:
+  agentdeck-sessions:

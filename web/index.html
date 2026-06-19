@@ -1,0 +1,1203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>Agents — ianprog.com</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+
+    body {
+      height: 100vh;
+      overflow: hidden;
+      background: #09090b;
+      color: #e4e4e7;
+      font-family: 'Inter', -apple-system, system-ui, sans-serif;
+      display: flex;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .sidebar {
+      width: 260px;
+      min-width: 260px;
+      height: 100vh;
+      background: #0c0c0f;
+      border-right: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar-header {
+      padding: 0.5rem 0.6rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #fafafa;
+      display: flex;
+      align-items: center;
+      flex-wrap: nowrap;
+      gap: 0.35rem;
+    }
+
+    .sys-stats {
+      display: flex;
+      gap: 0.3rem;
+      font-size: 0.54rem;
+      font-weight: 400;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      margin-left: auto;
+      flex: none;
+      white-space: nowrap;
+    }
+
+    .sys-stats.hidden .val { display: none; }
+
+    .stat { color: #52525b; }
+    .stat .val { color: #a1a1aa; }
+    .stat.warn .val { color: #fbbf24; }
+    .stat.crit .val { color: #f87171; }
+
+    .agent-list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; overscroll-behavior: contain; }
+    /* When a card is being dragged (long-press reorder on mobile), lock the
+       list so the browser does not scroll under the finger. The dragging
+       class is added by the touchstart timer in JS and removed on touchend. */
+    .agent-list:has(.card.dragging) { touch-action: none; }
+
+    /* ── Card ── */
+    .card {
+      position: relative;
+      cursor: grab;
+      user-select: none;
+      padding: 6px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      transition: background 0.12s, transform 0.15s, box-shadow 0.15s;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: rgba(99,102,241,0.15);
+    }
+
+    .card:hover { background: rgba(255,255,255,0.025); }
+
+    .card.sel {
+      background: rgba(99,102,241,0.07);
+      border-left: 2px solid #818cf8;
+      padding-left: 8px;
+    }
+
+    .card.dragging {
+      opacity: 0.85;
+      transform: scale(1.02);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      z-index: 10;
+      background: #151518;
+    }
+
+    .card.drag-over-top { box-shadow: inset 0 2px 0 #818cf8; }
+    .card.drag-over-bot { box-shadow: inset 0 -2px 0 #818cf8; }
+
+    .card-top {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .proj {
+      flex: 1;
+      min-width: 0;
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: #d4d4d8;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .proj.empty { color: #3f3f46; font-weight: 400; }
+
+    .card-btns {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      transition: all 0.3s;
+      flex-shrink: 0;
+    }
+
+    .dot.working {
+      background: #fbbf24;
+      box-shadow: 0 0 6px rgba(251,191,36,0.5);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    .dot.idle {
+      background: #4ade80;
+      box-shadow: 0 0 4px rgba(74,222,128,0.3);
+    }
+
+    .dot.off { background: #3f3f46; }
+
+    .oo-tag {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #3b82f6;
+      box-shadow: 0 0 3px rgba(59,130,246,0.5);
+      flex-shrink: 0;
+    }
+
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    .task {
+      font-size: 0.75rem;
+      color: #52525b;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 1px;
+      padding-left: 1px;
+    }
+
+    .card-btn {
+      visibility: visible;
+      width: 22px;
+      height: 22px;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 4px;
+      background: rgba(255,255,255,0.03);
+      color: rgba(161,161,170,0.55);
+      font-size: 0.85rem;
+      cursor: pointer;
+      line-height: 20px;
+      text-align: center;
+      transition: all 0.12s;
+      flex-shrink: 0;
+    }
+    .card-btn:hover { background: rgba(255,255,255,0.08); color: #e4e4e7; border-color: rgba(255,255,255,0.16); }
+    .card-btn.edit { color: rgba(165,180,252,0.55); background: rgba(99,102,241,0.05); border-color: rgba(99,102,241,0.12); }
+    .card-btn.edit:hover { background: rgba(99,102,241,0.16); color: #c7d2fe; border-color: rgba(99,102,241,0.32); }
+    .card-btn.del { color: rgba(252,165,165,0.55); background: rgba(239,68,68,0.05); border-color: rgba(239,68,68,0.12); }
+    .card-btn.del:hover { background: rgba(239,68,68,0.16); color: #fecaca; border-color: rgba(239,68,68,0.32); }
+    /* Compact button — same dimensions as other row-1 buttons (22×22),
+       with a subtle green tint to stand out as the action button. */
+    .card-btn.compact {
+      font-weight: 600;
+      color: rgba(134,239,172,0.55);
+      background: rgba(34,197,94,0.05);
+      border-color: rgba(34,197,94,0.12);
+    }
+    .card-btn.compact:hover {
+      background: rgba(34,197,94,0.16);
+      border-color: rgba(34,197,94,0.32);
+      color: #86efac;
+    }
+    .card-btn.compact:active { transform: scale(0.94); }
+
+    .proj-edit {
+      font-size: 0.82rem;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(129,140,248,0.4);
+      border-radius: 3px;
+      color: #e4e4e7;
+      padding: 1px 4px;
+      width: 100%;
+      outline: none;
+      font-family: inherit;
+    }
+
+    /* ── Second row on each card: task text ── */
+    .card-row2 {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 8px 3px 1px;
+    }
+    .card-row2 .task { margin-top: 0; padding-left: 0; flex: 1; min-width: 0; }
+
+    /* ── Add buttons (inside the sidebar header, next to "Agents") ── */
+    .header-add {
+      display: flex;
+      gap: 3px;
+      flex: none;
+    }
+
+    .add-btn {
+      background: rgba(99,102,241,0.12);
+      border: 1px solid rgba(99,102,241,0.25);
+      color: #a5b4fc;
+      font: 600 0.6rem 'Inter', system-ui, sans-serif;
+      padding: 2px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.12s;
+      line-height: 1.3;
+      white-space: nowrap;
+    }
+
+    .add-btn:hover { background: rgba(99,102,241,0.22); color: #c7d2fe; }
+    .add-btn:active { transform: scale(0.96); }
+    .add-btn.disabled { pointer-events: none; opacity: 0.45; }
+
+    .btn-logout { color: #fca5a5; border-color: rgba(239,68,68,0.28); }
+    .btn-logout:hover { color: #fecaca; border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.12); }
+
+    /* ── Right area ── */
+    .main {
+      flex: 1;
+      min-width: 0;        /* allow main to shrink to viewport-minus-sidebar */
+      overflow: hidden;    /* a long top line must never widen the iframe */
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      padding: 0.4rem 0.8rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      background: #0c0c0f;
+      flex-shrink: 0;
+      min-width: 0;        /* don't let topbar content distend .main */
+    }
+
+    .topbar-lbl {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #818cf8;
+    }
+
+    .topbar-info {
+      flex: 1;
+      min-width: 0;        /* required so ellipsis works instead of overflowing */
+      font-size: 0.72rem;
+      color: #71717a;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .topbar-info b { color: #a1a1aa; font-weight: 500; }
+
+    .btn {
+      padding: 0.25rem 0.55rem;
+      font-size: 0.65rem;
+      font-weight: 500;
+      color: #71717a;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 4px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.12s;
+      flex-shrink: 0;
+    }
+
+    .btn:hover { color: #a1a1aa; border-color: rgba(255,255,255,0.14); }
+
+    .wrap { flex: 1; position: relative; }
+
+    .wrap iframe {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #000;
+    }
+
+    .ph {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #27272a;
+      font-size: 0.8rem;
+      pointer-events: none;
+    }
+
+    .agent-list::-webkit-scrollbar { width: 3px; }
+    .agent-list::-webkit-scrollbar-track { background: transparent; }
+    .agent-list::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
+
+    .mob-input { display: none; }
+
+    @media (max-width: 700px) {
+      html, body { position: fixed; width: 100%; height: 100%; overflow: hidden; }
+      body { flex-direction: column; }
+      .sidebar { width: 100%; min-width: 100%; height: auto; max-height: 15vh; }
+      .main { height: 85vh; display: flex; flex-direction: column; }
+      .wrap { position: static; flex: 1; display: flex; flex-direction: column; }
+      .wrap iframe { position: static; inset: auto; width: 100%; height: auto; flex: 1; touch-action: manipulation; }
+      .sidebar-header { padding: 4px 10px; font-size: 0.75rem; }
+      /* One row per agent: card becomes a horizontal flex container */
+      .card { display: flex; align-items: center; padding: 3px 8px; cursor: pointer; gap: 4px; }
+      .card-top { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+      .card-btn { visibility: visible; width: 20px; height: 20px; line-height: 18px; font-size: 0.8rem; }
+      .proj { font-size: 0.8rem; }
+      .task { display: none; }
+      /* card-row2 holds only the (hidden) task on phone → collapse it. */
+      .card-row2 { display: none; }
+      /* Compact header buttons on phone. */
+      .header-add { gap: 3px; }
+      .add-btn { font-size: 0.68rem; padding: 2px 6px; }
+
+      .mob-input {
+        display: flex;
+        gap: 0;
+        background: #0c0c0f;
+        border-top: 1px solid rgba(255,255,255,0.08);
+        flex-shrink: 0;
+      }
+      .mob-input input {
+        flex: 1 1 0;        /* shrink past intrinsic width */
+        min-width: 0;       /* without this, the input refuses to shrink and
+                               pushes the arrow cluster + ↵ off-screen */
+        background: #18181b;
+        border: none;
+        color: #e4e4e7;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 14px;
+        padding: 10px 10px;
+        outline: none;
+      }
+      .mob-input input::placeholder { color: #3f3f46; }
+      .mob-input button {
+        background: none;
+        border: none;
+        color: #52525b;
+        font-size: 16px;
+        padding: 8px 8px;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+      .mob-input button:active { color: #818cf8; }
+      /* Brighten ↵ to match the cursor arrows — it's the most-used button. */
+      .mob-input #mobSend { color: #a1a1aa; font-size: 17px; }
+      .mob-input #mobSend:active { color: #818cf8; background: rgba(129,140,248,0.10); }
+
+      /* Cursor-arrow cluster: 4 compact pills sitting between input and ↵.
+         Kept narrow so right-arrow + ↵ stay on-screen even on the smallest
+         iPhone widths (≈ 320 CSS px). */
+      .mob-arrows {
+        display: flex;
+        gap: 1px;
+        align-items: stretch;
+        flex-shrink: 0;
+      }
+      .mob-arrows .mob-arrow {
+        padding: 8px 5px;
+        font-size: 14px;
+        line-height: 1;
+        color: #a1a1aa;
+        font-family: 'JetBrains Mono', monospace;
+        min-width: 22px;
+      }
+      .mob-arrows .mob-arrow:active { color: #818cf8; background: rgba(129,140,248,0.10); }
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <div class="header-add">
+        <button type="button" class="add-btn" id="addBtn" title="Add a Claude agent">+ Claude</button>
+        <a class="add-btn" href="/tasks/" target="_blank" title="Task board — shared progress across all agents" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">📋 Tasks</a>
+      </div>
+      <div class="sys-stats" id="sysStats" onclick="this.classList.toggle('hidden');localStorage.setItem('stats-hidden',this.classList.contains('hidden'))">
+        <span class="stat" id="cpuStat">CPU <span class="val" id="cpuVal">—</span></span>
+        <span class="stat" id="ramStat">RAM <span class="val" id="ramVal">—</span></span>
+      </div>
+    </div>
+    <div class="agent-list" id="list"></div>
+  </div>
+  <div class="main">
+    <div class="topbar" id="topbar" style="display:none">
+      <span class="topbar-lbl" id="tNum"></span>
+      <div class="topbar-info" id="tInfo"></div>
+      <button class="btn" id="tPasteImg" title="Paste image from clipboard">📎 Image</button>
+      <a class="btn" id="tOpen" href="#" target="_blank">Open in tab</a>
+      <button class="btn" id="tEsc">Esc</button>
+      <a class="btn btn-logout" id="tLogout" href="/logout" title="Log out">Logout</a>
+    </div>
+    <div class="wrap" id="wrap">
+      <div class="ph" id="ph">Select an agent</div>
+    </div>
+    <div class="mob-input" id="mobInput">
+      <button id="mobEsc" title="Ctrl+C">⎋</button>
+      <input type="text" id="mobText" placeholder="Type here..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <div class="mob-arrows">
+        <button class="mob-arrow" id="mobLeft" title="Cursor left">←</button>
+        <button class="mob-arrow" id="mobUp" title="Cursor up / history">↑</button>
+        <button class="mob-arrow" id="mobDown" title="Cursor down / history">↓</button>
+        <button class="mob-arrow" id="mobRight" title="Cursor right">→</button>
+      </div>
+      <button id="mobSend" title="Send">↵</button>
+    </div>
+  </div>
+
+  <script>
+    const CLAUDE_IDS = ['1','2','3','4','5','6','7','8'];
+    const OO_IDS = ['9','10'];
+    const ALL_IDS = [...CLAUDE_IDS, ...OO_IDS];
+    const OO_SET = new Set(OO_IDS);
+
+    const OO_CONFIG = {
+      '9':  { path: 'terminal9', name: 'Orchestra Main' },
+      '10': { path: 'terminal10', name: 'Orchestra Dev' },
+    };
+
+    let order = JSON.parse(localStorage.getItem('agent-order'));
+    if (!order || !Array.isArray(order)) order = [...ALL_IDS];
+    order = order.filter(id => ALL_IDS.includes(id));
+
+    // Sync order from server
+    async function loadServerOrder() {
+      try {
+        const r = await fetch('/api/terminal-status');
+        const d = await r.json();
+        if (d._order && Array.isArray(d._order)) {
+          order = d._order.filter(id => ALL_IDS.includes(id));
+          localStorage.setItem('agent-order', JSON.stringify(order));
+          build(); applyData(); syncAddBtn();
+        }
+      } catch {}
+    }
+
+    function save() {
+      localStorage.setItem('agent-order', JSON.stringify(order));
+      // Save to server for cross-device sync
+      fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({_order: order})});
+    }
+
+    const _isMobile = window.matchMedia('(max-width: 700px)').matches;
+    let sel = null, data = {}, dragId = null, _justDragged = false;
+    const list = document.getElementById('list');
+    const addBtn = document.getElementById('addBtn');
+    if (localStorage.getItem('stats-hidden') === 'true') document.getElementById('sysStats').classList.add('hidden');
+
+    function build() {
+      list.innerHTML = '';
+      order.forEach(id => {
+        const c = document.createElement('div');
+        const isOO = OO_SET.has(id);
+        c.className = 'card' + (id === sel ? ' sel' : '');
+        c.id = 'c' + id;
+        c.dataset.aid = id;
+        const ooTag = isOO ? '<span class="oo-tag" title="OpenOrchestra"></span>' : '';
+        const compactHtml = isOO ? '' : `<button class="card-btn compact" title="Send /compact to TUI">⇲</button>`;
+        c.innerHTML = `
+          <div class="card-top">
+            <div class="proj empty" id="p${id}">&nbsp;</div>
+            <div class="card-btns">
+              ${compactHtml}
+              <button class="card-btn edit" title="Edit name">✎</button>
+              <button class="card-btn del" title="Remove">×</button>
+              ${ooTag}<span class="dot off" id="d${id}"></span>
+            </div>
+          </div>
+          <div class="card-row2">
+            <div class="task" id="t${id}"></div>
+          </div>`;
+
+        // Click works on both mobile and desktop
+        c.style.cursor = 'pointer';
+        c.addEventListener('click', e => {
+          if (_justDragged) return;
+          if (e.target.closest('.card-btn')) return;
+          if (e.target.tagName === 'INPUT') return;
+          pick(id);
+        });
+
+        // Desktop: drag to reorder
+        if (!_isMobile) {
+          c.draggable = true;
+          c.style.cursor = 'grab';
+          c.addEventListener('dragstart', e => { dragId = id; c.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
+          c.addEventListener('dragend', () => { dragId = null; c.classList.remove('dragging'); list.querySelectorAll('.card').forEach(el => el.classList.remove('drag-over-top','drag-over-bot')); });
+          c.addEventListener('dragover', e => {
+            e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+            if (c.dataset.aid === dragId) return;
+            const mid = c.getBoundingClientRect().top + c.getBoundingClientRect().height / 2;
+            c.classList.toggle('drag-over-top', e.clientY < mid);
+            c.classList.toggle('drag-over-bot', e.clientY >= mid);
+          });
+          c.addEventListener('dragleave', () => c.classList.remove('drag-over-top','drag-over-bot'));
+          c.addEventListener('drop', e => {
+            e.preventDefault();
+            if (!dragId || dragId === c.dataset.aid) return;
+            order.splice(order.indexOf(dragId), 1);
+            let idx = order.indexOf(c.dataset.aid);
+            if (e.clientY >= c.getBoundingClientRect().top + c.getBoundingClientRect().height / 2) idx++;
+            order.splice(idx, 0, dragId);
+            save(); build(); applyData();
+          });
+        }
+
+        // Button handlers (both mobile & desktop)
+        c.querySelector('.card-btn.edit').addEventListener('click', e => {
+          e.stopPropagation();
+          startEdit(id);
+        });
+        const compactBtn = c.querySelector('.card-btn.compact');
+        if (compactBtn) compactBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({id, action: 'compact'})}).catch(()=>{});
+        });
+        c.querySelector('.card-btn.del').addEventListener('click', e => {
+          e.stopPropagation();
+          // Unload from RAM (kill tmux only). The conversation JSONL and the
+          // overrides entry (project/task/locked) are kept on disk so re-add
+          // restores both. Fire-and-forget — the server is idempotent.
+          fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({id, reset: true})}).catch(()=>{});
+          order = order.filter(i => i !== id);
+          save();
+          if (sel === id) { sel = null; document.getElementById('topbar').style.display = 'none'; }
+          build(); applyData(); syncAddBtn();
+        });
+
+        // Model / effort are read-only indicators — they show the live value
+        // the TUI is using (read back from the session transcript) and update on
+        // each poll. Change them with /model and /effort inside the terminal;
+        // a click anywhere on the card just selects the agent.
+
+        list.appendChild(c);
+      });
+    }
+
+    function syncAddBtn() {
+      addBtn.classList.toggle('disabled', CLAUDE_IDS.every(id => order.includes(id)));
+    }
+
+    addBtn.addEventListener('click', () => {
+      const next = CLAUDE_IDS.find(id => !order.includes(id));
+      if (!next) return;
+      order.push(next);
+      save(); build(); applyData(); syncAddBtn();
+    });
+
+    build();
+    syncAddBtn();
+    loadServerOrder();
+
+    /* ── Mobile: touch drag to reorder (long press) ── */
+    if (_isMobile) {
+      let _drag = null;
+
+      list.addEventListener('touchstart', e => {
+        const card = e.target.closest('.card');
+        if (!card || e.target.closest('.card-btn') || e.target.tagName === 'INPUT') return;
+        if (e.touches.length !== 1) return;
+        const t = e.touches[0];
+        _drag = { id: card.dataset.aid, el: card, startY: t.clientY, active: false,
+          timer: setTimeout(() => {
+            if (!_drag) return;
+            _drag.active = true;
+            card.classList.add('dragging');
+            if (navigator.vibrate) navigator.vibrate(30);
+          }, 400)
+        };
+      }, {passive: true});
+
+      list.addEventListener('touchmove', e => {
+        if (!_drag) return;
+        const t = e.touches[0];
+        if (!_drag.active) {
+          if (Math.abs(t.clientY - _drag.startY) > 8) {
+            clearTimeout(_drag.timer); _drag = null;
+          }
+          return;
+        }
+        // No preventDefault — the list's touch-action: none (while a card has
+        // .dragging) tells the browser to stop scrolling. passive: true keeps
+        // normal scroll-gesture latency at zero (no main-thread wait).
+        list.querySelectorAll('.card').forEach(el => {
+          el.classList.remove('drag-over-top', 'drag-over-bot');
+          if (el.dataset.aid === _drag.id) return;
+          const r = el.getBoundingClientRect();
+          if (t.clientY >= r.top && t.clientY <= r.bottom) {
+            el.classList.add(t.clientY < r.top + r.height / 2 ? 'drag-over-top' : 'drag-over-bot');
+          }
+        });
+      }, {passive: true});
+
+      list.addEventListener('touchend', e => {
+        if (!_drag) return;
+        clearTimeout(_drag.timer);
+        if (!_drag.active) { _drag = null; return; }
+        const t = e.changedTouches[0];
+        const fromId = _drag.id;
+        list.querySelectorAll('.card').forEach(el => el.classList.remove('dragging', 'drag-over-top', 'drag-over-bot'));
+        for (const el of list.querySelectorAll('.card')) {
+          if (el.dataset.aid === fromId) continue;
+          const r = el.getBoundingClientRect();
+          if (t.clientY >= r.top && t.clientY <= r.bottom) {
+            order.splice(order.indexOf(fromId), 1);
+            let idx = order.indexOf(el.dataset.aid);
+            if (t.clientY >= r.top + r.height / 2) idx++;
+            order.splice(idx, 0, fromId);
+            save(); build(); applyData(); syncAddBtn();
+            break;
+          }
+        }
+        _drag = null;
+        _justDragged = true;
+        setTimeout(() => _justDragged = false, 100);
+      });
+
+      list.addEventListener('touchcancel', () => {
+        if (!_drag) return;
+        clearTimeout(_drag.timer);
+        list.querySelectorAll('.card').forEach(el => el.classList.remove('dragging', 'drag-over-top', 'drag-over-bot'));
+        _drag = null;
+      });
+    }
+
+    function pick(id) {
+      sel = id;
+      order.forEach(i => { const el = document.getElementById('c'+i); if(el) el.classList.toggle('sel', i===id); });
+      const info = data[id] || {};
+      const isOO = OO_SET.has(id);
+      document.getElementById('topbar').style.display = 'flex';
+      document.getElementById('tNum').textContent = '#' + id + (isOO ? ' · ' + OO_CONFIG[id]?.name : '');
+      if (isOO) info.project = OO_CONFIG[id]?.name || 'Orchestra';
+      syncTop(info);
+      const path = isOO ? '/' + (OO_CONFIG[id]?.path || 'terminal-oo') : '/' + (info.path || 'terminal');
+      document.getElementById('tOpen').href = path;
+      const wrap = document.getElementById('wrap');
+      const ph = document.getElementById('ph'); if (ph) ph.remove();
+      const old = wrap.querySelector('iframe'); if (old) old.remove();
+      const f = document.createElement('iframe'); f.src = path;
+      wrap.appendChild(f);
+      if (_isMobile) enableIframeTouchScroll(f);
+      if (!_isMobile) enableClipboardCopy(f);
+      enablePasteImage(f);
+      const doFocus = () => { try { f.focus(); f.contentWindow?.focus(); } catch(e) {} };
+      f.addEventListener('load', doFocus);
+      f.addEventListener('mousedown', doFocus);
+      document.addEventListener('click', e => { if (wrap.contains(e.target) || e.target === f) doFocus(); });
+    }
+
+    /* ── Mobile input bar ── */
+    function sendToTerminal(text) {
+      try {
+        const f = document.querySelector('#wrap iframe');
+        if (!f) return;
+        const term = f.contentWindow.term;
+        if (!term) return;
+        if (typeof term.input === 'function') { term.input(text); return; }
+        try { term._core.coreService.triggerDataEvent(text); return; } catch(e) {}
+        try { term._core._onData.fire(text); return; } catch(e) {}
+      } catch(e) {}
+    }
+
+    const mobText = document.getElementById('mobText');
+    document.getElementById('mobSend').addEventListener('click', () => {
+      const text = mobText.value;
+      sendToTerminal(text ? text + '\r' : '\r');
+      mobText.value = '';
+      mobText.focus();
+    });
+    mobText.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); document.getElementById('mobSend').click(); }
+    });
+    document.getElementById('mobEsc').addEventListener('click', () => {
+      sendToTerminal('\x03');
+      mobText.value = '';
+      mobText.focus();
+    });
+    /* ── Cursor arrows: send ANSI sequences. preventDefault stops the click
+       from stealing focus from the iframe, so repeated taps keep working. ── */
+    const ARROW_KEYS = {
+      mobLeft:  '\x1b[D',
+      mobRight: '\x1b[C',
+      mobUp:    '\x1b[A',
+      mobDown:  '\x1b[B',
+    };
+    for (const [id, seq] of Object.entries(ARROW_KEYS)) {
+      const btn = document.getElementById(id);
+      if (!btn) continue;
+      btn.addEventListener('mousedown', e => e.preventDefault());
+      btn.addEventListener('click', e => {
+        e.preventDefault();
+        sendToTerminal(seq);
+      });
+    }
+
+    /* ── Esc button: send Escape key to terminal iframe ── */
+    document.getElementById('tEsc').addEventListener('click', () => {
+      try {
+        const f = document.querySelector('#wrap iframe');
+        if (!f) return;
+        const win = f.contentWindow;
+        const term = win.term;
+        if (term) {
+          if (typeof term.input === 'function') { term.input('\x1b'); return; }
+          try { term._core.coreService.triggerDataEvent('\x1b'); return; } catch(e) {}
+          try { term._core._onData.fire('\x1b'); return; } catch(e) {}
+        }
+        const doc = f.contentDocument || win.document;
+        const el = doc.querySelector('.xterm-helper-textarea') || doc.activeElement || doc.body;
+        el.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true}));
+      } catch(e) {}
+    });
+
+    /* ── 📎 Image: the reliable path — read the clipboard image directly on a
+       button click (no fragile paste-event interception inside the ttyd iframe). ── */
+    document.getElementById('tPasteImg').addEventListener('click', () => _pasteImageFromClipboard('button'));
+
+    /* ── Mobile: touch→mouse for tmux selection + vertical scroll ── */
+    function enableIframeTouchScroll(iframe) {
+      iframe.addEventListener('load', () => {
+        let attempts = 0;
+        const poll = setInterval(() => {
+          if (++attempts > 50) { clearInterval(poll); return; }
+          try {
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            const screen = doc.querySelector('.xterm-screen');
+            if (!screen) return;
+            clearInterval(poll);
+
+            let startX = 0, startY = 0, lastY = 0;
+            let mode = null; // null | 'scroll' | 'select'
+            let accum = 0;
+            const _mobBufUrl = location.origin + '/api/tmux-buffer/?session=global';
+            const _mobReadBuf = async () => {
+              try { return (await (await fetch(_mobBufUrl)).json()).text || ''; } catch { return ''; }
+            };
+            let _mobAnchor = Promise.resolve('');   // buffer snapshot before a selection
+            let _mobGen = 0;                        // supersede older poll loops
+
+            screen.addEventListener('touchstart', e => {
+              if (e.touches.length !== 1) return;
+              const t = e.touches[0];
+              startX = t.clientX;
+              startY = lastY = t.clientY;
+              mode = null;
+              accum = 0;
+              _mobAnchor = _mobReadBuf();           // anchor for the off-by-one fix
+              screen.dispatchEvent(new MouseEvent('mousedown', {
+                clientX: t.clientX, clientY: t.clientY,
+                button: 0, bubbles: true
+              }));
+            }, {passive: true});
+
+            screen.addEventListener('touchmove', e => {
+              if (e.touches.length !== 1) return;
+              const t = e.touches[0];
+              const dx = Math.abs(t.clientX - startX);
+              const dy = Math.abs(t.clientY - startY);
+
+              if (!mode && (dx > 8 || dy > 8)) {
+                mode = dy > dx ? 'scroll' : 'select';
+              }
+              if (!mode) return;
+
+              if (mode === 'select') {
+                screen.dispatchEvent(new MouseEvent('mousemove', {
+                  clientX: t.clientX, clientY: t.clientY,
+                  button: 0, buttons: 1, bubbles: true
+                }));
+                e.preventDefault();
+              } else {
+                const dv = lastY - t.clientY;
+                lastY = t.clientY;
+                accum += dv;
+                const lines = Math.trunc(accum / 20);
+                if (lines !== 0) {
+                  accum -= lines * 20;
+                  const count = Math.abs(lines);
+                  const rect = screen.getBoundingClientRect();
+                  const WE = iframe.contentWindow.WheelEvent;
+                  for (let i = 0; i < count; i++) {
+                    screen.dispatchEvent(new WE('wheel', {
+                      deltaY: lines > 0 ? 120 : -120,
+                      deltaMode: 0, bubbles: true, cancelable: true,
+                      clientX: rect.left + rect.width / 2,
+                      clientY: rect.top + rect.height / 2
+                    }));
+                  }
+                }
+                e.preventDefault();
+              }
+            }, {passive: false});
+
+            screen.addEventListener('touchend', e => {
+              if (mode === 'select') {
+                const t = e.changedTouches[0];
+                screen.dispatchEvent(new MouseEvent('mouseup', {
+                  clientX: t.clientX, clientY: t.clientY,
+                  button: 0, bubbles: true
+                }));
+                // poll until the buffer reflects the NEW selection (not the previous
+                // one) — same off-by-one fix as the desktop path
+                const myGen = ++_mobGen;
+                (async () => {
+                  const anchor = await _mobAnchor;
+                  let last = '';
+                  for (let i = 0; i < 20; i++) {
+                    if (myGen !== _mobGen) return;           // a newer selection took over
+                    await new Promise(r => setTimeout(r, 80));
+                    const txt = await _mobReadBuf();
+                    if (txt && txt.trim()) {
+                      last = txt;
+                      if (txt !== anchor) { navigator.clipboard.writeText(txt).catch(() => {}); return; }
+                    }
+                  }
+                  // re-selected identical text → copy it anyway rather than no-op
+                  if (last && last.trim()) navigator.clipboard.writeText(last).catch(() => {});
+                })();
+              }
+              mode = null;
+            }, {passive: true});
+
+          } catch(e) { clearInterval(poll); }
+        }, 100);
+      });
+    }
+
+    /* ── Clipboard: after mouse selection in tmux, copy buffer to system clipboard ── */
+    function enableClipboardCopy(iframe) {
+      iframe.addEventListener('load', () => {
+        let attempts = 0;
+        const poll = setInterval(() => {
+          if (++attempts > 50) { clearInterval(poll); return; }
+          try {
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            if (!doc.querySelector('.xterm')) return;
+            clearInterval(poll);
+            const bufUrl = location.origin + '/api/tmux-buffer/?session=global';
+            const readBuf = async () => {
+              try { return (await (await fetch(bufUrl)).json()).text || ''; } catch { return ''; }
+            };
+            // Snapshot the tmux buffer as the selection STARTS. `tmux show-buffer`
+            // lags one selection behind the mouseup (browser→ttyd→tmux round-trip),
+            // so on copy we must wait until the buffer differs from this pre-selection
+            // anchor — otherwise we'd grab the PREVIOUS selection (the off-by-one bug
+            // where you had to copy twice to paste the current text).
+            let anchorPromise = Promise.resolve(''), _downX = 0, _downY = 0, _gen = 0;
+            doc.addEventListener('mousedown', (e) => { _downX = e.clientX; _downY = e.clientY; anchorPromise = readBuf(); });
+            doc.addEventListener('mouseup', (e) => {
+              // only a real drag is a selection — a plain click shouldn't touch the clipboard
+              if (Math.abs(e.clientX - _downX) < 4 && Math.abs(e.clientY - _downY) < 4) return;
+              const myGen = ++_gen;                          // supersede any older poll loop
+              try { window.focus(); } catch (_) {}           // clipboard.write needs a focused doc
+              // ClipboardItem with a Promise lets write() run inside the gesture while the
+              // text resolves async. CRITICAL: it must resolve FAST — real Chrome aborts the
+              // write if the promise hangs ~>1s. So poll the tmux buffer only briefly (~700ms),
+              // take the first value that differs from the pre-selection anchor (the NEW
+              // selection), and ALWAYS resolve with something so copy never silently fails.
+              const textPromise = new Promise((resolve) => {
+                (async () => {
+                  const anchor = await anchorPromise;        // buffer BEFORE this selection
+                  let last = '';
+                  for (let i = 0; i < 14; i++) {             // ~700ms max, 50ms steps
+                    const t = await readBuf();
+                    if (t && t.trim()) {
+                      last = t;
+                      if (t !== anchor) { resolve(new Blob([t], {type: 'text/plain'})); return; }  // new selection landed
+                    }
+                    if (myGen !== _gen) break;               // a newer selection took over
+                    await new Promise(r => setTimeout(r, 50));
+                  }
+                  resolve(new Blob([last], {type: 'text/plain'}));   // fallback: copy current buffer (never reject)
+                })();
+              });
+              try {
+                navigator.clipboard.write([
+                  new ClipboardItem({'text/plain': textPromise})
+                ]).catch(() => {
+                  // some browsers don't support a Promise ClipboardItem → writeText fallback
+                  textPromise.then(b => b.text()).then(t => t && navigator.clipboard.writeText(t).catch(() => {}));
+                });
+              } catch (_) {
+                textPromise.then(b => b.text()).then(t => t && navigator.clipboard.writeText(t).catch(() => {}));
+              }
+            });
+          } catch(e) { clearInterval(poll); }
+        }, 100);
+      });
+    }
+
+    /* ── Paste / drop an image into the terminal: a ttyd/tmux terminal is text-only,
+       so an image can't be pasted. Upload it, then type the saved file PATH into the
+       terminal — Claude Code auto-attaches the image path as [Image]. Visible toasts
+       so it's obvious what happened; handlers on BOTH the iframe and the parent doc
+       (the paste fires wherever focus is). ── */
+    function _toast(msg, ms) {
+      let t = document.getElementById('_imgToast');
+      if (!t) {
+        t = document.createElement('div'); t.id = '_imgToast';
+        t.style.cssText = 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:99999;' +
+          'background:#161b22;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:9px 14px;' +
+          'font:13px/1.3 Inter,system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5);opacity:0;transition:opacity .15s;pointer-events:none';
+        document.body.appendChild(t);
+      }
+      t.textContent = msg; t.style.opacity = '1';
+      clearTimeout(t._h); t._h = setTimeout(() => { t.style.opacity = '0'; }, ms || 2600);
+    }
+
+    // diagnostics disabled now that image paste works (kept as a no-op so the call
+    // sites stay harmless; flip the body back on to debug again)
+    function _clientlog() {}
+
+    function _imageFromData(dt) {
+      const items = (dt && dt.items) || [];
+      for (const it of items) { if (it.kind === 'file' && (it.type || '').startsWith('image/')) return it.getAsFile(); }
+      const files = (dt && dt.files) || [];
+      for (const fl of files) { if ((fl.type || '').startsWith('image/')) return fl; }
+      return null;
+    }
+
+    // read the clipboard image directly (used by the 📎 button AND the Ctrl+V hotkey)
+    async function _pasteImageFromClipboard(src) {
+      _clientlog({ ev: 'read-start', src: src || '?', hasAPI: !!(navigator.clipboard && navigator.clipboard.read), focused: document.hasFocus() });
+      if (!navigator.clipboard || !navigator.clipboard.read) {
+        _toast('⚠️ Browser can\'t read the clipboard — drag an image file onto the terminal', 5000); return;
+      }
+      try { window.focus(); } catch (_) {}              // clipboard.read() needs a focused doc
+      _toast('📎 Reading clipboard…', 8000);
+      try {
+        const items = await navigator.clipboard.read();
+        let blob = null; const allTypes = [];
+        for (const it of items) {
+          (it.types || []).forEach(t => allTypes.push(t));
+          const type = (it.types || []).find(t => t.startsWith('image/'));
+          if (type) { blob = await it.getType(type); break; }
+        }
+        _clientlog({ ev: 'read-done', src: src || '?', types: allTypes, gotImage: !!blob });
+        if (!blob) {
+          _toast('⚠️ No image in clipboard. Types: ' + (allTypes.join(', ') || 'none'), 6000);
+          return;
+        }
+        await _uploadAndInsertImage(blob);
+      } catch (e) {
+        _clientlog({ ev: 'read-error', src: src || '?', error: String(e && e.message || e) });
+        _toast('⚠️ Clipboard: ' + String(e && e.message || e).slice(0, 70), 6000);
+      }
+    }
+
+    // Ctrl+V (no Shift) → paste image from the BROWSER clipboard. Claude Code binds
+    // Ctrl+V to image paste but reads the SERVER's (empty) clipboard; we intercept it
+    // in the browser and read the real one. Ctrl+Shift+V stays the terminal's text paste.
+    function _onTermKeydown(e, scope) {
+      if (!e.ctrlKey || e.altKey || e.metaKey) return;
+      if ((e.key || '').toLowerCase() !== 'v') return;
+      _clientlog({ ev: 'ctrlv-seen', scope: scope || 'iframe', shift: e.shiftKey });
+      if (e.shiftKey) return;                         // Ctrl+Shift+V = text paste, leave it
+      // on the parent, don't hijack Ctrl+V in real text fields (project name, etc.)
+      if (scope === 'parent') {
+        const t = e.target, tag = (t && t.tagName || '').toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable)) return;
+      }
+      e.preventDefault(); e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      _clientlog({ ev: 'ctrlv-keydown', scope: scope || 'iframe' });
+      _pasteImageFromClipboard('ctrlv-' + (scope || 'iframe'));
+    }
+    // page-level Ctrl+V (focus on the dashboard / a button, not inside the terminal)
+    document.addEventListener('keydown', (e) => _onTermKeydown(e, 'parent'), true);
+
+    async function _uploadAndInsertImage(blob) {
+      const f = document.querySelector('#wrap iframe');
+      _clientlog({ ev: 'upload-start', size: blob && blob.size, type: blob && blob.type, hasTerminal: !!f });
+      if (!f) { _toast('⚠️ Select a terminal first'); return; }
+      _toast('📎 Uploading image…', 10000);
+      try {
+        const r = await fetch('/api/paste-image', {
+          method: 'POST', headers: { 'Content-Type': blob.type || 'image/png' },
+          body: blob, credentials: 'same-origin',
+        });
+        if (!r.ok) { _clientlog({ ev: 'upload-http-fail', status: r.status }); _toast('⚠️ Upload error (HTTP ' + r.status + ')'); return; }
+        const d = await r.json();
+        if (!d || !d.path) { _toast('⚠️ Server returned no path'); return; }
+        // ttyd's xterm has no .input(); term.paste() is the proper API, _onData.fire fallback
+        const term = f.contentWindow.term;
+        const text = d.path + ' ';
+        let how = 'none';
+        if (term && typeof term.paste === 'function') { term.paste(text); how = 'paste'; }
+        else if (term && typeof term.input === 'function') { term.input(text); how = 'input'; }
+        else if (term && term._core && term._core._onData) { try { term._core._onData.fire(text); how = 'onData'; } catch (_) {} }
+        _clientlog({ ev: 'inserted', path: d.path, how: how, hasTerm: !!term });
+        if (how === 'none') { _toast('⚠️ Terminal not ready'); return; }
+        // restore focus to the terminal's INPUT (not just the iframe window) so Enter
+        // sends immediately — the button click / Ctrl+V had moved focus away.
+        const refocus = () => {
+          try { f.contentWindow.focus(); } catch (_) {}
+          try { if (term && typeof term.focus === 'function') term.focus(); } catch (_) {}
+          try {
+            const ta = (f.contentDocument || f.contentWindow.document).querySelector('.xterm-helper-textarea');
+            if (ta) ta.focus();
+          } catch (_) {}
+        };
+        refocus();
+        setTimeout(refocus, 60);                        // again after the gesture settles
+        _toast('✅ Image pasted');
+      } catch (e) { _clientlog({ ev: 'upload-error', error: String(e && e.message || e) }); _toast('⚠️ ' + String(e && e.message || e).slice(0, 50)); }
+    }
+
+    function _onImagePaste(e) {
+      const blob = _imageFromData(e.clipboardData);
+      _clientlog({ ev: 'paste-event', gotImage: !!blob, types: e.clipboardData ? Array.from(e.clipboardData.types || []) : 'null' });
+      if (!blob) return;                              // not an image → let the terminal paste text
+      e.preventDefault(); e.stopPropagation();
+      _uploadAndInsertImage(blob);
+    }
+
+    // catch the paste wherever focus is: parent document … (image pastes only — text
+    // pastes pass through; NO global Ctrl+V keydown intercept here, or it would hijack
+    // text paste in dashboard inputs — that's bound only inside the terminal iframe).
+    document.addEventListener('paste', _onImagePaste, true);
+    window.addEventListener('drop', (e) => {
+      const blob = _imageFromData(e.dataTransfer);
+      if (!blob) return;
+      e.preventDefault(); _uploadAndInsertImage(blob);
+    }, true);
+    window.addEventListener('dragover', (e) => { if (e.dataTransfer) e.preventDefault(); }, true);
+
+    // … and inside the terminal iframe (focus is usually there). Attach on load AND
+    // immediately (the iframe may already be loaded when this runs), and mark the doc
+    // so we never double-bind.
+    function enablePasteImage(iframe) {
+      const attach = () => {
+        let attempts = 0;
+        const poll = setInterval(() => {
+          if (++attempts > 80) { clearInterval(poll); return; }
+          try {
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            if (!doc || !doc.querySelector('.xterm')) return;
+            clearInterval(poll);
+            if (doc.__pasteImgBound) return;
+            doc.__pasteImgBound = true;
+            _clientlog({ ev: 'iframe-bound' });
+            doc.addEventListener('paste', _onImagePaste, true);
+            doc.addEventListener('keydown', (e) => _onTermKeydown(e, 'iframe'), true);   // Ctrl+V image hotkey inside the terminal
+            doc.addEventListener('drop', (e) => {
+              const blob = _imageFromData(e.dataTransfer);
+              if (!blob) return;
+              e.preventDefault(); e.stopPropagation(); _uploadAndInsertImage(blob);
+            }, true);
+            doc.addEventListener('dragover', (e) => { if (e.dataTransfer) e.preventDefault(); }, true);
+          } catch (e) { clearInterval(poll); }
+        }, 100);
+      };
+      iframe.addEventListener('load', attach);
+      attach();   // in case it's already loaded
+    }
+
+    function syncTop(info) {
+      const el = document.getElementById('tInfo');
+      const p = info.project||'', t = info.task||'';
+      el.innerHTML = p ? '<b>'+esc(p)+'</b>'+(t?' &mdash; '+esc(t):'') : t?esc(t):'';
+    }
+
+    function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+    function startEdit(id) {
+      const pe = document.getElementById('p'+id);
+      if (!pe || pe.querySelector('input')) return;
+      const info = data[id]||{};
+      const cur = info.project||'';
+      const auto = info.auto_project||'';
+      const inp = document.createElement('input');
+      inp.className = 'proj-edit';
+      inp.value = cur;
+      inp.placeholder = auto ? 'Auto: '+auto : 'Project name';
+      pe.textContent = '';
+      pe.appendChild(inp);
+      inp.focus();
+      inp.select();
+
+      function commit() {
+        const val = inp.value.trim();
+        if (val) {
+          fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({id, project: val})});
+        } else {
+          fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({id, unlock: true})});
+        }
+        pe.textContent = val || auto || '';
+        pe.classList.toggle('empty', !val && !auto);
+      }
+      inp.addEventListener('keydown', e => { if(e.key==='Enter') inp.blur(); if(e.key==='Escape'){pe.textContent=cur; pe.classList.toggle('empty',!cur);} });
+      inp.addEventListener('blur', commit);
+    }
+
+    function applyData() {
+      order.forEach(id => {
+        const info = data[id]||{};
+        const isOO = OO_SET.has(id);
+        if (isOO && !data[id]) {
+          info.project = OO_CONFIG[id]?.name || 'Orchestra';
+          info.active = true;
+        }
+        const dot = document.getElementById('d'+id);
+        if(dot) dot.className = 'dot '+(!info.active?'off':info.working?'working':'idle');
+        const pe = document.getElementById('p'+id);
+        if(pe && !pe.querySelector('input')){ pe.textContent = info.project||''; pe.classList.toggle('empty',!info.project); }
+        const te = document.getElementById('t'+id);
+        if(te) te.textContent = info.task||'';
+        if(id===sel) syncTop(info);
+      });
+    }
+
+    function refresh(d) {
+      if (d._system) {
+        const s = d._system;
+        document.getElementById('cpuVal').textContent = s.cpu_pct + '%';
+        document.getElementById('ramVal').textContent = s.ram_used_mb + '/' + s.ram_total_mb + 'M';
+        document.getElementById('cpuStat').className = 'stat' + (s.cpu_pct > 90 ? ' crit' : s.cpu_pct > 70 ? ' warn' : '');
+        document.getElementById('ramStat').className = 'stat' + (s.ram_pct > 90 ? ' crit' : s.ram_pct > 70 ? ' warn' : '');
+        delete d._system;
+      }
+      if (d._order) { delete d._order; }
+      data=d; applyData();
+    }
+
+    async function poll() {
+      try {
+        const r = await fetch('/api/terminal-status');
+        if (!r.ok) return;                       // 401/5xx → skip this tick, don't churn
+        refresh(await r.json());
+      } catch {}
+    }
+    poll(); setInterval(poll, 4000);
+
+    // Live-reload: reload ONLY when the page file's version genuinely changes.
+    // Never reload on a non-OK response (e.g. a 401 HTML body) or a non-numeric
+    // body — doing that turned a single transient auth hiccup into a reload +
+    // login-prompt storm ("dozens of prompts, everything hangs"). Keep polling so
+    // it self-heals when auth recovers; only a real, changed mtime triggers a reload.
+    let _v = null;
+    setInterval(async () => {
+      try {
+        const r = await fetch('/api/page-version', {cache: 'no-store'});
+        if (!r.ok) return;                            // 401/5xx → never reload
+        const v = (await r.text()).trim();
+        if (!/^[0-9]+(\.[0-9]+)?$/.test(v)) return;   // only a real mtime is a valid version
+        if (_v && v !== _v) location.reload();
+        _v = v;
+      } catch { /* network blip — ignore, never reload on error */ }
+    }, 1500);
+  </script>
+</body>
+</html>

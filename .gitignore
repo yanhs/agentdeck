@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+logs/
+.env
+.tg_bridge_state.json
+tg_convo.log
+.tg_probe.session
+.tg_probe.codehash
+.tg_probe.session-journal
+.tg_bridge_streams.json
+.agents_auth_secret
+
+# runtime config / state (copy agents.example.json -> agents.json and edit)
+agents.json
+
+# per-machine agent session ids (keep your conversations resumable)
+.sessions/
+
+# author-specific OpenOrchestra launchers (token-bearing, not part of AgentDeck)
+launch-claude-9.sh
+launch-claude-10.sh
+launch-orchestra.sh

@@ -1,0 +1,14 @@
+[Unit]
+Description=Telegram <-> tmux terminal bridge (@terminal_cl_bot)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ubuntu/pr/terminal
+EnvironmentFile=/home/ubuntu/pr/terminal/.env
+ExecStart=/usr/bin/python3 /home/ubuntu/pr/terminal/tg_bridge.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
