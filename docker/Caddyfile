@@ -6,7 +6,7 @@
 	email {$AGENTDECK_EMAIL:you@example.com}
 }
 
-{$AGENTDECK_SITE::80} {
+{$AGENTDECK_SITE::8765} {
 	# every request (dashboard, APIs, terminals) is behind the login
 	basic_auth {
 		{$AGENTDECK_USER:admin} {$AGENTDECK_PASS_HASH}

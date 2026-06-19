@@ -3,27 +3,22 @@ services:
     build: .
     container_name: agentdeck
     ports:
-      # Fresh VPS (nothing else on 80/443): keep these — Caddy gets automatic HTTPS for
-      # AGENTDECK_SITE and you open https://your-domain.
-      # Box already running a web server on 80/443 (so they're taken)? Change to a free port,
-      # e.g. "8765:80", set AGENTDECK_SITE=":80", and reach it at http://your-ip:8765 — or
-      # have your existing nginx proxy a subdomain to it (and do TLS there).
-      - "80:80"
-      - "443:443"
+      # http://<your-vps-ip>:8765 — set AGENTDECK_PORT to pick any free host port.
+      - "${AGENTDECK_PORT:-8765}:8765"
     environment:
       # REQUIRED — the dashboard login (it exposes live agent terminals):
       AGENTDECK_PASSWORD: "${AGENTDECK_PASSWORD:?set a dashboard password in .env}"
       AGENTDECK_USER: "${AGENTDECK_USER:-admin}"
-      # Your domain -> automatic HTTPS (point its DNS at this VPS first).
-      # Leave ":80" for plain http with no certificate.
-      AGENTDECK_SITE: "${AGENTDECK_SITE:-:80}"
       AGENTDECK_EMAIL: "${AGENTDECK_EMAIL:-you@example.com}"
+      # Default: plain http on :8765. Want a domain + automatic HTTPS? Set
+      # AGENTDECK_SITE=your-domain AND change the port line above to "80:80" + "443:443".
+      AGENTDECK_SITE: "${AGENTDECK_SITE:-:8765}"
     volumes:
       # your Claude login — REQUIRED so the agents can authenticate
       - ${HOME}/.claude:/root/.claude
       # keep agent conversations resumable across restarts
       - agentdeck-sessions:/app/.sessions
-      # persist TLS certs (a restart won't re-issue and hit Let's Encrypt limits)
+      # persist TLS certs if you switch to a domain (avoids Let's Encrypt rate limits)
       - caddy-data:/data
       # OPTIONAL — let agents read/write your project files:
       # - ./my-project:/work

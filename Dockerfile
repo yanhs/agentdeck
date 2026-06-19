@@ -26,5 +26,5 @@ COPY . /app
 ENV AGENTDECK_WORKDIR=/work
 RUN mkdir -p /work /app/.sessions
 
-EXPOSE 80 443
+EXPOSE 8765 80 443
 ENTRYPOINT ["bash", "/app/docker/entrypoint.sh"]

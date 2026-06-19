@@ -87,25 +87,23 @@ The dashboard is responsive — here's an agent's terminal running on a phone:
 
 ## 🐳 Quick start (Docker — one command)
 
-Built for an internet-facing VPS — a **login** and **automatic HTTPS** out of the box. You
-only need **Docker** and your **Claude login**.
+Runs on any VPS — **no spare ports or domain needed**. You just need **Docker** and your **Claude login**.
 
 ```bash
 git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
-
-# the dashboard exposes live terminals, so set a password (and a domain for HTTPS):
-cat >> .env <<'EOF'
-AGENTDECK_PASSWORD=change-me
-AGENTDECK_SITE=agents.example.com    # your domain → auto-HTTPS, or ":80" for plain http
-AGENTDECK_EMAIL=you@example.com
-EOF
-
-docker compose up -d                 # → https://agents.example.com  (log in with the password)
+echo 'AGENTDECK_PASSWORD=change-me' >> .env     # the dashboard exposes live terminals
+docker compose up -d                            # → http://<your-vps-ip>:8765  (log in)
 ```
 
-Point the domain's DNS at the VPS first so Caddy can fetch a TLS certificate. Your `~/.claude`
-is mounted so the agents authenticate; add agents with the **+ Claude** button. To let agents
-read/write your project, mount it at `/work` (uncomment the line in `docker-compose.yml`).
+Open `http://<your-vps-ip>:8765` and log in with that password. Use a different port with
+`AGENTDECK_PORT`. Your `~/.claude` is mounted so the agents authenticate; add agents with the
+**+ Claude** button.
+
+> **Want HTTPS?** Certificate authorities only issue for a **domain**, not a bare IP. Set
+> `AGENTDECK_SITE` to your domain — or, with no domain, to `<your-ip>.sslip.io` (a free wildcard
+> DNS that resolves straight to your IP) — and map ports `80:80` + `443:443`. Caddy then fetches
+> a real, trusted certificate automatically. (Plain `https://<ip>` only works self-signed, with
+> a browser warning.)
 
 ## ✅ Requirements (for the manual setup)
 
