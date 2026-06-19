@@ -9,6 +9,15 @@ EnvironmentFile=/home/ubuntu/pr/terminal/.env
 ExecStart=/usr/bin/python3 /home/ubuntu/pr/terminal/tg_bridge.py
 Restart=always
 RestartSec=5
+# python-telegram-bot shuts down cleanly on SIGINT (its KeyboardInterrupt path);
+# plain SIGTERM was ignored → systemd waited the full 90s then SIGKILL, freezing
+# any live stream. SIGINT + a short stop timeout makes restarts near-instant.
+KillSignal=SIGINT
+# the main process exits on SIGINT in <1s, but a worker thread/child kept the
+# cgroup alive → control-group mode waited the full timeout. 'mixed' signals the
+# main process (fast graceful exit = service stopped) and SIGKILLs any leftovers.
+KillMode=mixed
+TimeoutStopSec=10
 
 [Install]
 WantedBy=default.target
