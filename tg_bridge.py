@@ -650,7 +650,7 @@ def _has_freetext(menu: dict) -> bool:
 def _chat_option(menu: dict) -> int | None:
     """The option number of Claude Code's 'Chat about this instead' row, if the
     picker has one — selecting it abandons the question and returns to free chat.
-    Surfaced as a '💬 Поговорить' button (triggered via Escape, never arrow-nav)."""
+    Surfaced as a '💬 Talk' button (triggered via Escape, never arrow-nav)."""
     for n, t in menu["options"]:
         if (t or "").strip().lower().startswith("chat about this"):
             return n
@@ -661,7 +661,7 @@ def _menu_keyboard(aid: str, menu: dict) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(f"{n}. {t[:48]}", callback_data=f"msel:{aid}:{n}")]
             for n, t in _real_options(menu)]
     if _chat_option(menu) is not None:                 # Claude Code's 'Chat about this instead'
-        rows.append([InlineKeyboardButton("💬 Поговорить", callback_data=f"mchat:{aid}")])
+        rows.append([InlineKeyboardButton("💬 Talk", callback_data=f"mchat:{aid}")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -674,7 +674,7 @@ def _menu_text(menu: dict, chosen: int | None = None) -> str:
         if d:
             lines.append(f"      ↳ {d}")          # the option's description from the screen
     if chosen is None and _has_freetext(menu):
-        lines.append("✍️ …или просто напиши ответ текстом")
+        lines.append("✍️ …or just type your answer")
     return "\n".join(lines)[:TG_EDIT_LIMIT]
 
 
@@ -1052,7 +1052,7 @@ async def on_menu_select_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def on_menu_chat_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Tap '💬 Поговорить' → abandon the AskUserQuestion and return to free chat
+    """Tap '💬 Talk' → abandon the AskUserQuestion and return to free chat
     (Claude Code's 'Chat about this instead'). Cancels the picker with Escape —
     NOT arrow-nav — so it can never accidentally select a real option."""
     q = update.callback_query
@@ -1071,7 +1071,7 @@ async def on_menu_chat_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         log.info("CHAT-DECLINE #%s (Escape)", aid)
         send_key(session, "Escape")          # cancel the picker → agent gets a decline
         try:
-            await q.edit_message_text("💬 Вопрос закрыт — пиши, обсудим.", reply_markup=None)
+            await q.edit_message_text("💬 Question dismissed — type and let's talk.", reply_markup=None)
         except TelegramError:
             pass
         for _ in range(8):                   # wait for the picker to clear

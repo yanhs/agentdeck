@@ -355,7 +355,7 @@ def test_menu_keyboard_excludes_builtins():
     assert "Type something" not in joined and "Chat about this" not in joined
 
 
-# --- '💬 Поговорить' button: decline the question, return to free chat --------
+# --- '💬 Talk' button: decline the question, return to free chat --------
 
 def test_chat_option_finds_builtin():
     assert tb._chat_option(_builtin_menu()) == 6
