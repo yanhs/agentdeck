@@ -101,11 +101,14 @@ Open `http://<your-vps-ip>:8765`:
 
 Use a different port with `AGENTDECK_PORT`.
 
-> **Want HTTPS?** Certificate authorities only issue for a **domain**, not a bare IP. Set
-> `AGENTDECK_SITE` to your domain — or, with no domain, to `<your-ip>.sslip.io` (a free wildcard
-> DNS that resolves straight to your IP) — and map ports `80:80` + `443:443`. Caddy then fetches
-> a real, trusted certificate automatically. (Plain `https://<ip>` only works self-signed, with
-> a browser warning.)
+> **Want HTTPS?**
+> - **Trusted, no warning** — set `AGENTDECK_SITE` to a domain (or `<your-ip>.sslip.io`, a free
+>   name that resolves to your IP) and map `80:80` + `443:443`. Caddy fetches a real Let's Encrypt
+>   certificate automatically.
+> - **Self-signed, no domain** — set `AGENTDECK_SITE=https://:8443` and map `8443:8443`. A
+>   certificate is generated on first run (kept in the volume); the browser shows a one-time
+>   "not trusted" warning you click through. (Needed if you want clipboard copy, which browsers
+>   only allow over HTTPS or localhost.)
 
 ## ✅ Requirements (for the manual setup)
 

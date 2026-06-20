@@ -35,5 +35,21 @@ for id in 1 2 3 4 5 6 7 8; do
   ttyd -W -i lo -p "${PORT[$id]}" --base-path "$base" bash "./$script" &
 done
 
-echo "[agentdeck] caddy -> ${AGENTDECK_SITE:-:8765}  (automatic HTTPS if it's a domain)"
-exec caddy run --config /app/docker/Caddyfile --adapter caddyfile
+CADDYFILE=/app/docker/Caddyfile
+# AGENTDECK_SITE=https://... (a port or IP, no real domain) → self-signed HTTPS:
+# generate a certificate on first run (kept in the volume) and serve with it.
+case "${AGENTDECK_SITE:-}" in
+  https://*)
+    CD=/app/.sessions/tls; mkdir -p "$CD"
+    if [ ! -s "$CD/cert.pem" ]; then
+      openssl req -x509 -newkey rsa:2048 -keyout "$CD/key.pem" -out "$CD/cert.pem" \
+        -days 3650 -nodes -subj "/CN=agentdeck" \
+        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
+      echo "[agentdeck] generated a self-signed TLS certificate (first run)"
+    fi
+    CD="$CD" python3 -c 'import os;cd=os.environ["CD"];p="/app/docker/Caddyfile";s=open(p).read().replace("{$AGENTDECK_SITE::8765} {","{$AGENTDECK_SITE::8765} {\n\ttls "+cd+"/cert.pem "+cd+"/key.pem");open("/tmp/Caddyfile","w").write(s)'
+    CADDYFILE=/tmp/Caddyfile
+    ;;
+esac
+echo "[agentdeck] caddy -> ${AGENTDECK_SITE:-:8765}  (domain=auto-HTTPS, https://:port=self-signed)"
+exec caddy run --config "$CADDYFILE" --adapter caddyfile
