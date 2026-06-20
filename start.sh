@@ -25,6 +25,8 @@ fi
 
 mkdir -p .sessions
 export AGENTDECK_PASSFILE="${AGENTDECK_PASSFILE:-$PWD/.sessions/.dashpass}"
+# cookie-signing key in .sessions too, so logins survive restarts (kept out of the image/git)
+export AGENTDECK_AUTH_SECRET="${AGENTDECK_AUTH_SECRET:-$PWD/.sessions/.agents_auth_secret}"
 # OPTIONAL: pre-seed the password from an env var (else set it on first visit)
 if [ -n "${AGENTDECK_PASSWORD:-}" ] && [ ! -s "$AGENTDECK_PASSFILE" ]; then
   python3 - "$AGENTDECK_PASSFILE" "$AGENTDECK_PASSWORD" <<'PY'

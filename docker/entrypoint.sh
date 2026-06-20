@@ -10,8 +10,10 @@ cd /app
 # non-login bash that sources no profile, so the locale must be a real env var on the tree.)
 export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}"
 
-# the login password lives here (persisted in the agentdeck-sessions volume)
+# the login password + the cookie-signing key both live in the persisted sessions volume,
+# so they survive a container recreate and the key is never baked into the image
 export AGENTDECK_PASSFILE="${AGENTDECK_PASSFILE:-/app/.sessions/.dashpass}"
+export AGENTDECK_AUTH_SECRET="${AGENTDECK_AUTH_SECRET:-/app/.sessions/.agents_auth_secret}"
 
 # OPTIONAL: pre-seed the password from an env var (otherwise set it on first visit)
 if [ -n "${AGENTDECK_PASSWORD:-}" ] && [ ! -s "$AGENTDECK_PASSFILE" ]; then

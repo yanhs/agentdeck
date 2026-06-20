@@ -687,7 +687,13 @@ class LiveHandler(BaseHTTPRequestHandler):
 # SAME (verified against the existing /etc/nginx/.htpasswd_agents).
 
 HTPASSWD_FILE = "/etc/nginx/.htpasswd_agents"
-AUTH_SECRET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".agents_auth_secret")
+# Cookie-signing key. AGENTDECK_AUTH_SECRET lets the entrypoint keep it in the persistent
+# volume (so sessions survive a container recreate and the key is never baked into the image);
+# the default sits next to this module, leaving the existing host service untouched.
+AUTH_SECRET_FILE = os.environ.get(
+    "AGENTDECK_AUTH_SECRET",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), ".agents_auth_secret"),
+)
 AUTH_COOKIE = "agents_session"
 AUTH_TTL = 30 * 24 * 3600          # 30 days
 

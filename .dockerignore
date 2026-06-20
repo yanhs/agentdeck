@@ -4,6 +4,8 @@ docs
 *.gif
 .sessions
 .env
+.agents_auth_secret
+.dashpass
 agents.json
 tg_convo.log
 .tg_bridge_state.json
