@@ -23,8 +23,6 @@ SESSIONS = [
     {"id": "6",  "session": "claude-terminal-6",   "path": "terminal6"},
     {"id": "7",  "session": "claude-terminal-7",   "path": "terminal7"},
     {"id": "8",  "session": "claude-terminal-8",   "path": "terminal8"},
-    {"id": "9",  "session": "orchestra-terminal-9",  "path": "terminal9"},
-    {"id": "10", "session": "orchestra-terminal-10", "path": "terminal10"},
 ]
 
 AGENTS_FILE = os.path.join(os.path.dirname(__file__), "agents.json")
@@ -368,8 +366,8 @@ class Handler(BaseHTTPRequestHandler):
 
         result["_system"] = get_system_stats()
         # Respect the user's saved _order:
-        #   - missing key OR empty list → fresh install / new browser →
-        #     show every known agent
+        #   - missing key OR empty list → fresh install / new browser → start with
+        #     the first four agents (add more with the "+ Claude" button)
         #   - non-empty list → echo it exactly, only stripping ids that no
         #     longer exist as a SESSION (e.g. leftover "k1" from a removed
         #     setup). DO NOT re-add ids the user explicitly removed with ×,
@@ -379,7 +377,7 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(stored, list) and stored:
             result["_order"] = [i for i in stored if i in all_ids]
         else:
-            result["_order"] = all_ids
+            result["_order"] = all_ids[:4]
         self._json_response(200, result)
 
     def do_POST(self):

@@ -47,7 +47,7 @@ for id in 1 2 3 4 5 6 7 8; do
   [ -f "$script" ] || continue
   base="/terminal"; [ "$id" != "1" ] && base="/terminal$id"
   echo "[agentdeck] ttyd :${PORT[$id]} ($base) -> $script"
-  ttyd -W -i lo -p "${PORT[$id]}" --base-path "$base" "bash ./$script" & pids+=($!)
+  ttyd -W -i lo -p "${PORT[$id]}" --base-path "$base" bash "./$script" & pids+=($!)
 done
 
 echo "[agentdeck] caddy -> ${AGENTDECK_SITE:-:8765}"

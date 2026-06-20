@@ -12,3 +12,8 @@ __pycache__
 .pytest_cache
 node_modules
 pre-public-backup
+
+# author-specific OpenOrchestra launchers (token-bearing, not part of AgentDeck)
+launch-claude-9.sh
+launch-claude-10.sh
+launch-orchestra.sh
