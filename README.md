@@ -31,7 +31,8 @@ reference you adapt, not a turn-key installer.
   nothing stops the agent. Re-opening (or a restart) resumes the exact same conversation via
   `claude --resume`, because each agent's session id is kept in `.sessions/`. Nothing is lost.
 - **Browser terminals, no SSH.** Every agent is a full interactive terminal in the browser
-  through `ttyd` — type, scroll, paste, run anything.
+  through `ttyd` — type, scroll, **copy & paste**, run anything (copy needs HTTPS or localhost,
+  per browser clipboard rules).
 - **Live status dashboard.** Per-agent CPU activity, idle/working detection, and
   auto-detected project/task pulled from the live `tmux` pane.
 - **One login for everything.** An `nginx` `auth_request` gate backed by a tiny Python

@@ -22,6 +22,12 @@ fi
 [ -s "$AGENTDECK_PASSFILE" ] && echo "[agentdeck] dashboard password is set" \
   || echo "[agentdeck] no password yet — open the dashboard and set one on first visit"
 
+# ~/.claude.json (claude's home-level config) is NOT inside the ~/.claude volume on its own —
+# keep it persisted: store it in the volume and symlink it back, so a restart doesn't lose the
+# login/onboarding (otherwise claude reports "configuration file not found").
+[ -f /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv -f /root/.claude.json /root/.claude/.claude.json
+ln -sfn /root/.claude/.claude.json /root/.claude.json
+
 echo "[agentdeck] backend: status_server.py"
 python3 status_server.py &
 sleep 1
