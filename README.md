@@ -191,6 +191,11 @@ numeric Telegram user id.
   <img src="docs/screenshots/telegram-live.gif" width="300" alt="The Telegram bridge streaming an agent's reply in real time, then showing an interactive prompt as inline buttons">
 </p>
 
+> **Docker users — no files to edit.** Open the dashboard, click **Telegram** in the top bar,
+> paste your bot token + your Telegram user id, and hit **Save & start**. The bridge launches
+> right away and comes back automatically on restart. Steps 1–2 below show where to get those
+> two values; the `.env` steps (3–5) are only for the manual, non-Docker setup.
+
 ### 1. Create a bot and copy the token
 
 Message [@BotFather](https://t.me/BotFather), send `/newbot`, follow the prompts, and copy

@@ -132,7 +132,8 @@ def start_session(aid: str) -> tuple[bool, str]:
     cmd = cmd[-1] if cmd else ""
     if not cmd:
         return False, f"could not resolve the launch command for #{aid}"
-    _tmux("new-session", "-d", "-s", session, "-c", "/home/ubuntu/pr")
+    _tmux("new-session", "-d", "-s", session, "-c",
+          os.environ.get("TG_AGENT_CWD", "/home/ubuntu/pr"))
     _tmux("set", "-t", session, "mouse", "on")
     time.sleep(0.3)
     _tmux("send-keys", "-t", session, "-l", cmd)

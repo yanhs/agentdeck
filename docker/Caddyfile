@@ -31,6 +31,11 @@
 			}
 		}
 
+		# Telegram-bot setup page (status_server, behind the login gate)
+		handle /telegram* {
+			reverse_proxy 127.0.0.1:3011
+		}
+
 		handle_path /api/terminal-status* {
 			reverse_proxy 127.0.0.1:3011
 		}
