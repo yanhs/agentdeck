@@ -7,6 +7,7 @@ docs
 .agents_auth_secret
 .dashpass
 agents.json
+tasks-dashboard/state.json
 tg_convo.log
 .tg_bridge_state.json
 __pycache__

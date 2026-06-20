@@ -36,6 +36,12 @@
 			reverse_proxy 127.0.0.1:3011
 		}
 
+		# task board (the 📋 Tasks button) — its own backend on :9308
+		redir /tasks /tasks/
+		handle_path /tasks/* {
+			reverse_proxy 127.0.0.1:9308
+		}
+
 		handle_path /api/terminal-status* {
 			reverse_proxy 127.0.0.1:3011
 		}

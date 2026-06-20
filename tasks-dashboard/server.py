@@ -14,7 +14,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
-STATE = BASE / "state.json"
+# Same env var as tracker.py so the CLI and the server share one state file. The
+# entrypoint points this at the persistent volume so the board survives a recreate.
+STATE = Path(os.getenv("TRACKER_STATE", str(BASE / "state.json")))
 INDEX = BASE / "static" / "index.html"
 PORT = int(os.getenv("TASKS_PORT", "9308"))
 

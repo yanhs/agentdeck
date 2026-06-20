@@ -14,6 +14,8 @@ export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}"
 # so they survive a container recreate and the key is never baked into the image
 export AGENTDECK_PASSFILE="${AGENTDECK_PASSFILE:-/app/.sessions/.dashpass}"
 export AGENTDECK_AUTH_SECRET="${AGENTDECK_AUTH_SECRET:-/app/.sessions/.agents_auth_secret}"
+# task board state lives in the volume too (survives recreate; author's tasks not baked in)
+export TRACKER_STATE="${TRACKER_STATE:-/app/.sessions/tasks-state.json}"
 
 # OPTIONAL: pre-seed the password from an env var (otherwise set it on first visit)
 if [ -n "${AGENTDECK_PASSWORD:-}" ] && [ ! -s "$AGENTDECK_PASSFILE" ]; then
@@ -38,6 +40,11 @@ ln -sfn /root/.claude/.claude.json /root/.claude.json
 echo "[agentdeck] backend: status_server.py"
 python3 status_server.py &
 sleep 1
+
+# task board (the 📋 Tasks button in the dashboard) on :9308, behind the same login
+[ -f "$TRACKER_STATE" ] || echo '{"title":"Task Tracker","tasks":[]}' > "$TRACKER_STATE"
+echo "[agentdeck] task board: tasks-dashboard/server.py"
+python3 tasks-dashboard/server.py &
 
 declare -A PORT=( [1]=3005 [2]=3006 [3]=3008 [4]=3009 [5]=3012 [6]=3013 [7]=3015 [8]=3016 )
 for id in 1 2 3 4 5 6 7 8; do

@@ -27,6 +27,7 @@ mkdir -p .sessions
 export AGENTDECK_PASSFILE="${AGENTDECK_PASSFILE:-$PWD/.sessions/.dashpass}"
 # cookie-signing key in .sessions too, so logins survive restarts (kept out of the image/git)
 export AGENTDECK_AUTH_SECRET="${AGENTDECK_AUTH_SECRET:-$PWD/.sessions/.agents_auth_secret}"
+export TRACKER_STATE="${TRACKER_STATE:-$PWD/.sessions/tasks-state.json}"  # task board state in the volume
 # OPTIONAL: pre-seed the password from an env var (else set it on first visit)
 if [ -n "${AGENTDECK_PASSWORD:-}" ] && [ ! -s "$AGENTDECK_PASSFILE" ]; then
   python3 - "$AGENTDECK_PASSFILE" "$AGENTDECK_PASSWORD" <<'PY'
@@ -46,6 +47,11 @@ trap cleanup EXIT INT TERM
 echo "[agentdeck] backend: status_server.py"
 python3 status_server.py & pids+=($!)
 sleep 1
+
+# task board (the 📋 Tasks button) on :9308, behind the same login
+[ -f "$TRACKER_STATE" ] || echo '{"title":"Task Tracker","tasks":[]}' > "$TRACKER_STATE"
+echo "[agentdeck] task board: tasks-dashboard/server.py"
+python3 tasks-dashboard/server.py & pids+=($!)
 
 declare -A PORT=( [1]=3005 [2]=3006 [3]=3008 [4]=3009 [5]=3012 [6]=3013 [7]=3015 [8]=3016 )
 for id in 1 2 3 4 5 6 7 8; do
