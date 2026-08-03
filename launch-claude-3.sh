@@ -37,8 +37,8 @@ if [ "${DRY_RUN:-}" = "1" ]; then
   exit 0
 fi
 
-if tmux has-session -t "$SESSION" 2>/dev/null; then
-  exec tmux attach-session -t "$SESSION"
+if tmux has-session -t "=$SESSION" 2>/dev/null; then
+  exec tmux attach-session -t "=$SESSION"
 else
   # === Order gate: don't auto-spawn a brand-new tmux session if this agent
   # was not enabled in the dashboard list (`_order` in agents.json). Existing
