@@ -102,12 +102,6 @@ def test_task_line_is_small(page):
     assert px(page, ".card .task", "fontSize") <= 11.0
 
 
-def test_add_buttons_are_small_and_not_bold(page):
-    assert px(page, ".add-btn", "fontSize") <= 9.0
-    assert px(page, ".add-btn", "fontWeight") <= 400
-    assert px(page, ".add-btn", "height") <= 18
-
-
 def test_card_buttons_are_small(page):
     assert px(page, ".card-btn", "width") <= 19
     assert px(page, ".card-btn", "height") <= 19
@@ -143,7 +137,34 @@ def test_header_add_buttons_are_narrow(page):
     widths = page.eval_on_selector_all(
         ".add-btn", "els => els.map(e => e.getBoundingClientRect().width)")
     assert widths, "no add buttons found"
-    assert max(widths) <= 26, f"widest header button is {max(widths):.0f}px"
+    assert max(widths) <= 34, f"widest header button is {max(widths):.0f}px"
+
+
+def test_header_add_buttons_are_substantial(page):
+    """Icon-only labels still have to read as buttons, not as stray glyphs.
+
+    This supersedes an earlier "add buttons are small" assertion: once the
+    labels became bare glyphs, shrinking them further made them vanish.
+    """
+    assert px(page, ".add-btn", "fontSize") >= 11.0
+    assert px(page, ".add-btn", "fontWeight") <= 500  # sturdy, still not bold
+    boxes = page.eval_on_selector_all(
+        ".add-btn",
+        "els => els.map(e => e.getBoundingClientRect()).map(r => [r.width, r.height])")
+    assert min(w for w, _ in boxes) >= 20, f"narrowest header button {boxes}"
+    assert min(h for _, h in boxes) >= 18, f"shortest header button {boxes}"
+
+
+def test_header_add_buttons_have_a_visible_border(page):
+    """The '+' disappears without a frame around it."""
+    assert px(page, ".add-btn", "borderTopWidth") >= 1
+    alpha = page.eval_on_selector(".add-btn", """el => {
+      const c = getComputedStyle(el).borderTopColor;
+      const m = c.match(/rgba?\\(([^)]+)\\)/);
+      const parts = m[1].split(',').map(s => parseFloat(s));
+      return parts.length > 3 ? parts[3] : 1;
+    }""")
+    assert alpha >= 0.45, f"border is too faint (alpha {alpha})"
 
 
 def test_header_add_buttons_keep_a_tooltip(page):
@@ -154,7 +175,8 @@ def test_header_add_buttons_keep_a_tooltip(page):
 
 
 def test_topbar_is_thin(selected):
-    assert px(selected, ".topbar", "height") <= 20
+    """Thin, but not at the cost of the buttons — see the two tests below."""
+    assert px(selected, ".topbar", "height") <= 28
 
 
 def test_topbar_text_is_small(selected):
@@ -162,11 +184,25 @@ def test_topbar_text_is_small(selected):
     assert px(selected, ".topbar-info", "fontSize") <= 10.5
 
 
-def test_topbar_buttons_are_small(selected):
-    assert px(selected, ".topbar .btn", "fontSize") <= 7.8
+def test_topbar_buttons_are_small_but_legible(selected):
+    """Compact, yet still obviously clickable — 0.46rem made them vanish."""
+    size = px(selected, ".topbar .btn", "fontSize")
+    assert 9.0 <= size <= 11.5, f"topbar button font is {size}px"
     heights = selected.eval_on_selector_all(
         ".topbar .btn", "els => els.map(e => e.getBoundingClientRect().height)")
-    assert max(heights) <= 15, f"tallest topbar button is {max(heights):.0f}px"
+    assert max(heights) <= 22, f"tallest topbar button is {max(heights):.0f}px"
+    assert min(heights) >= 16, f"shortest topbar button is {min(heights):.0f}px"
+
+
+def test_topbar_buttons_have_a_visible_border(selected):
+    """Without a frame the row reads as plain text, not as controls."""
+    assert px(selected, ".topbar .btn", "borderTopWidth") >= 1
+    alpha = selected.eval_on_selector(".topbar .btn", """el => {
+      const m = getComputedStyle(el).borderTopColor.match(/rgba?\\(([^)]+)\\)/);
+      const parts = m[1].split(',').map(s => parseFloat(s));
+      return parts.length > 3 ? parts[3] : 1;
+    }""")
+    assert alpha >= 0.16, f"topbar button border is too faint (alpha {alpha})"
 
 
 def test_topbar_does_not_overflow(selected):
