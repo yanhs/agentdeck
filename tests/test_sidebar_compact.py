@@ -8,6 +8,7 @@ tell us whether the header still fits once everything shrinks.
 """
 import http.server
 import json
+import re
 import socket
 import threading
 from contextlib import closing
@@ -123,6 +124,48 @@ def test_sidebar_does_not_scroll_horizontally(page):
     overflow = page.eval_on_selector(
         ".agent-list", "el => el.scrollWidth - el.clientWidth")
     assert overflow <= 1, f"agent list overflows by {overflow}px"
+
+
+@pytest.fixture(scope="module")
+def selected(page):
+    """The topbar only exists once an agent is picked, so pick one."""
+    # Block only the ttyd iframe (/terminal, /terminal2, …). A glob like
+    # "**/terminal*" would also swallow /api/terminal-status and leave every
+    # card blank, which quietly weakens every assertion below.
+    page.route(re.compile(r"/terminal\d*(\?|$)"), lambda route: route.abort())
+    page.click(".card")
+    page.wait_for_selector("#topbar:visible")
+    page.wait_for_timeout(150)
+    return page
+
+
+def test_header_add_buttons_are_narrow(page):
+    widths = page.eval_on_selector_all(
+        ".add-btn", "els => els.map(e => e.getBoundingClientRect().width)")
+    assert widths, "no add buttons found"
+    assert max(widths) <= 42, f"widest header button is {max(widths):.0f}px"
+
+
+def test_topbar_is_thin(selected):
+    assert px(selected, ".topbar", "height") <= 26
+
+
+def test_topbar_text_is_small(selected):
+    assert px(selected, ".topbar-lbl", "fontSize") <= 10.0
+    assert px(selected, ".topbar-info", "fontSize") <= 10.5
+
+
+def test_topbar_buttons_are_small(selected):
+    assert px(selected, ".topbar .btn", "fontSize") <= 9.0
+    heights = selected.eval_on_selector_all(
+        ".topbar .btn", "els => els.map(e => e.getBoundingClientRect().height)")
+    assert max(heights) <= 18, f"tallest topbar button is {max(heights):.0f}px"
+
+
+def test_topbar_does_not_overflow(selected):
+    overflow = selected.eval_on_selector(
+        ".topbar", "el => el.scrollWidth - el.clientWidth")
+    assert overflow <= 1, f"topbar overflows by {overflow}px"
 
 
 def test_card_buttons_stay_inside_the_column(page):
