@@ -143,11 +143,18 @@ def test_header_add_buttons_are_narrow(page):
     widths = page.eval_on_selector_all(
         ".add-btn", "els => els.map(e => e.getBoundingClientRect().width)")
     assert widths, "no add buttons found"
-    assert max(widths) <= 42, f"widest header button is {max(widths):.0f}px"
+    assert max(widths) <= 26, f"widest header button is {max(widths):.0f}px"
+
+
+def test_header_add_buttons_keep_a_tooltip(page):
+    """Labels are short enough to be cryptic, so each must explain itself."""
+    missing = page.eval_on_selector_all(
+        ".add-btn", "els => els.filter(e => !e.title.trim()).length")
+    assert missing == 0, f"{missing} header buttons have no title tooltip"
 
 
 def test_topbar_is_thin(selected):
-    assert px(selected, ".topbar", "height") <= 26
+    assert px(selected, ".topbar", "height") <= 20
 
 
 def test_topbar_text_is_small(selected):
@@ -156,10 +163,10 @@ def test_topbar_text_is_small(selected):
 
 
 def test_topbar_buttons_are_small(selected):
-    assert px(selected, ".topbar .btn", "fontSize") <= 9.0
+    assert px(selected, ".topbar .btn", "fontSize") <= 7.8
     heights = selected.eval_on_selector_all(
         ".topbar .btn", "els => els.map(e => e.getBoundingClientRect().height)")
-    assert max(heights) <= 18, f"tallest topbar button is {max(heights):.0f}px"
+    assert max(heights) <= 15, f"tallest topbar button is {max(heights):.0f}px"
 
 
 def test_topbar_does_not_overflow(selected):

@@ -264,7 +264,7 @@
     }
 
     .topbar {
-      padding: 0.2rem 0.5rem;
+      padding: 0.1rem 0.4rem;
       border-bottom: 1px solid rgba(255,255,255,0.06);
       display: flex;
       align-items: center;
@@ -294,8 +294,8 @@
     .topbar-info b { color: #a1a1aa; font-weight: 500; }
 
     .btn {
-      padding: 0.1rem 0.35rem;
-      font-size: 0.55rem;
+      padding: 0.05rem 0.28rem;
+      font-size: 0.46rem;
       font-weight: 400;
       color: #71717a;
       background: rgba(255,255,255,0.03);
@@ -416,8 +416,8 @@
   <div class="sidebar">
     <div class="sidebar-header">
       <div class="header-add">
-        <button type="button" class="add-btn" id="addBtn" title="Add a Claude agent">+ Claude</button>
-        <a class="add-btn" href="/tasks/" target="_blank" title="Task board — shared progress across all agents" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">📋 Tasks</a>
+        <button type="button" class="add-btn" id="addBtn" title="Add a Claude agent">+</button>
+        <a class="add-btn" href="/tasks/" target="_blank" title="Task board — shared progress across all agents" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">📋</a>
       </div>
       <div class="sys-stats" id="sysStats" onclick="this.classList.toggle('hidden');localStorage.setItem('stats-hidden',this.classList.contains('hidden'))">
         <span class="stat" id="cpuStat">CPU <span class="val" id="cpuVal">—</span></span>
