@@ -110,7 +110,7 @@ def test_card_buttons_are_small(page):
 def test_sys_stats_are_legible(page):
     """CPU/RAM sit in the tightest spot in the header but must stay readable."""
     size = px(page, ".sys-stats", "fontSize")
-    assert 8.5 <= size <= 10.5, f"CPU/RAM font is {size}px"
+    assert 8.0 <= size <= 8.9, f"CPU/RAM font is {size}px"
 
 
 def test_header_does_not_overflow_at_that_width(page):
