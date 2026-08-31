@@ -21,3 +21,6 @@ agents.json
 launch-claude-9.sh
 launch-claude-10.sh
 launch-orchestra.sh
+idle_reaper.log
+.idle_reaper_state.json
+.idle_reaper_state.json.tmp
