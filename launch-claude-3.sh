@@ -31,6 +31,16 @@ else
   CLAUDE_CMD="$CLAUDE_BIN --session-id $AGENT_SESSION_ID --dangerously-skip-permissions"
 fi
 
+# Stable auth for all terminals. Source a per-user 0600 file that exports
+# CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) INSIDE the pane command,
+# so every claude uses a static token instead of racing on the shared
+# ~/.claude/.credentials.json — whose refresh token rotates on refresh and was
+# logging sibling terminals out. Sourced in the pane (not the launcher) so it
+# works regardless of the tmux server's environment, and a 0600 source keeps
+# the token out of the scrollback. No-op — falls back to credentials.json — if
+# the file is absent, so this is safe to ship before the token exists.
+CLAUDE_CMD="[ -r $HOME/.claude/oauth.env ] && . $HOME/.claude/oauth.env; $CLAUDE_CMD"
+
 # DRY_RUN=1 prints the resolved claude command, then exits (used by tests).
 if [ "${DRY_RUN:-}" = "1" ]; then
   echo "$CLAUDE_CMD"
