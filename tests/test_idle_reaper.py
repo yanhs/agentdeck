@@ -65,3 +65,8 @@ def test_sessions_cover_terminals_1_through_8():
     assert reaper.SESSIONS[0] == "claude-terminal"
     assert "claude-terminal-8" in reaper.SESSIONS
     assert len(reaper.SESSIONS) == 8
+
+
+def test_default_idle_is_two_hours():
+    # A paused-mid-task terminal must survive well past a short break.
+    assert reaper.IDLE_SECONDS == 7200

@@ -13,7 +13,8 @@ Run once per minute from cron. Each run:
   * bumps a per-session "last active" timestamp whenever it is working OR
     attached,
   * unloads (tmux kill-session) any session that has been neither working nor
-    attached for IDLE_SECONDS.
+    attached for IDLE_SECONDS (default 2 hours — long enough that a terminal
+    with an ongoing task, merely paused, is not snatched away).
 
 It never touches agents.json (the id stays in the dashboard's order, so the
 card stays visible and reloadable) and never deletes a transcript. A session
@@ -26,7 +27,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-IDLE_SECONDS = int(os.getenv("REAPER_IDLE_SECONDS", "1200"))   # 20 minutes
+IDLE_SECONDS = int(os.getenv("REAPER_IDLE_SECONDS", "7200"))   # 2 hours
 SAMPLE_INTERVAL = float(os.getenv("REAPER_SAMPLE", "0.30"))
 CPU_TICK_THRESHOLD = int(os.getenv("REAPER_CPU_THRESHOLD", "2"))
 STATE_FILE = os.path.join(HERE, ".idle_reaper_state.json")
