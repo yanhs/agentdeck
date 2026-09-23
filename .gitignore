@@ -18,8 +18,6 @@ agents.json
 .sessions/
 
 # author-specific OpenOrchestra launchers (token-bearing, not part of AgentDeck)
-launch-claude-9.sh
-launch-claude-10.sh
 launch-orchestra.sh
 idle_reaper.log
 .idle_reaper_state.json
