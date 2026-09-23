@@ -32,7 +32,7 @@ SAMPLE_INTERVAL = float(os.getenv("REAPER_SAMPLE", "0.30"))
 CPU_TICK_THRESHOLD = int(os.getenv("REAPER_CPU_THRESHOLD", "2"))
 STATE_FILE = os.path.join(HERE, ".idle_reaper_state.json")
 
-SESSIONS = ["claude-terminal"] + [f"claude-terminal-{i}" for i in range(2, 9)]
+SESSIONS = ["claude-terminal"] + [f"claude-terminal-{i}" for i in range(2, 13)]
 
 
 # ── tmux / proc helpers (mirror status_server.py) ──────────────────────────

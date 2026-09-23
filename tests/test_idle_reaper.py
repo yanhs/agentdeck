@@ -61,10 +61,10 @@ def test_working_beats_a_stale_clock():
     assert unload is False
 
 
-def test_sessions_cover_terminals_1_through_8():
+def test_sessions_cover_terminals_1_through_12():
     assert reaper.SESSIONS[0] == "claude-terminal"
-    assert "claude-terminal-8" in reaper.SESSIONS
-    assert len(reaper.SESSIONS) == 8
+    assert "claude-terminal-12" in reaper.SESSIONS
+    assert len(reaper.SESSIONS) == 12
 
 
 def test_default_idle_is_two_hours():

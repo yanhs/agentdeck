@@ -53,8 +53,8 @@ sleep 1
 echo "[agentdeck] task board: tasks-dashboard/server.py"
 python3 tasks-dashboard/server.py & pids+=($!)
 
-declare -A PORT=( [1]=3005 [2]=3006 [3]=3008 [4]=3009 [5]=3012 [6]=3013 [7]=3015 [8]=3016 )
-for id in 1 2 3 4 5 6 7 8; do
+declare -A PORT=( [1]=3005 [2]=3006 [3]=3008 [4]=3009 [5]=3012 [6]=3013 [7]=3015 [8]=3016 [9]=3017 [10]=3018 [11]=3019 [12]=3020 )
+for id in 1 2 3 4 5 6 7 8 9 10 11 12; do
   script="launch-claude.sh"; [ "$id" != "1" ] && script="launch-claude-$id.sh"
   [ -f "$script" ] || continue
   base="/terminal"; [ "$id" != "1" ] && base="/terminal$id"

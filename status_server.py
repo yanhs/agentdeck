@@ -23,6 +23,10 @@ SESSIONS = [
     {"id": "6",  "session": "claude-terminal-6",   "path": "terminal6"},
     {"id": "7",  "session": "claude-terminal-7",   "path": "terminal7"},
     {"id": "8",  "session": "claude-terminal-8",   "path": "terminal8"},
+    {"id": "9",  "session": "claude-terminal-9",   "path": "terminal9"},
+    {"id": "10", "session": "claude-terminal-10",  "path": "terminal10"},
+    {"id": "11", "session": "claude-terminal-11",  "path": "terminal11"},
+    {"id": "12", "session": "claude-terminal-12",  "path": "terminal12"},
 ]
 
 AGENTS_FILE = os.path.join(os.path.dirname(__file__), "agents.json")
