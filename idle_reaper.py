@@ -21,6 +21,8 @@ A session is unloaded when ALL of these hold:
     restarts the clock, a glance counts as use;
   * it hasn't printed anything for IDLE_SECONDS (default 2 hours — long enough
     that a terminal with an ongoing task, merely paused, is not snatched away);
+  * it holds no unexpired hold marker (`.sessions/hold-<id>`, written when
+    Claude sets a timer — see library.set_hold); a held session is working;
   * it has no live background task (a shell writing into Claude's
     tasks/*.output — a pipeline run, a wake-up timer), unless it has been
     silent for BG_MAX_SECONDS (default 24 h): by then it is a stuck loop,
@@ -37,6 +39,8 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import library  # noqa: E402  (hold markers)
 IDLE_SECONDS = int(os.getenv("REAPER_IDLE_SECONDS", "7200"))        # 2 hours
 BG_MAX_SECONDS = int(os.getenv("REAPER_BG_MAX_SECONDS", "86400"))   # 24 hours
 STATE_FILE = os.path.join(HERE, ".idle_reaper_state.json")          # last seen attached
@@ -104,10 +108,14 @@ def session_activity(session):
 
 
 def get_pane_pid(session):
-    r = _tmux(["list-panes", "-t", session, "-F", "#{pane_pid}"])
-    if r.returncode != 0 or not r.stdout.strip():
-        return None
-    return int(r.stdout.strip().split("\n")[0])
+    """First pane's pid of exactly this session (no -t: a bare `-t name` would
+    prefix-match claude-terminal-5 when claude-terminal is gone)."""
+    r = _tmux(["list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}"])
+    for line in r.stdout.splitlines() if r.returncode == 0 else []:
+        name, _, pid = line.partition("\t")
+        if name == session and pid.isdigit():
+            return int(pid)
+    return None
 
 
 def get_child_pids(pid):
@@ -146,7 +154,13 @@ def session_has_bg_jobs(session):
 
 
 def unload(session):
-    return _tmux(["kill-session", "-t", session]).returncode == 0
+    return _tmux(["kill-session", "-t", "=" + session]).returncode == 0   # exact name
+
+
+def session_held(session, now):
+    """True while a library session (cs-<id>) has an unexpired hold marker."""
+    sid = library.id_from_tmux(session)
+    return bool(sid) and library.held(sid, now)
 
 
 # ── pure decision logic (unit-tested) ──────────────────────────────────────
@@ -202,6 +216,9 @@ def sweep(now=None, dry_run=False):
         attached = session_attached(s)
         if attached:
             state[s] = now              # a tab is open: remember when we last saw it
+            continue
+        if session_held(s, now):
+            state[s] = now              # a timer is pending: working; clock restarts after
             continue
         last = last_active_of(session_activity(s), state.get(s))
         # the process-tree walk only for sessions already past the idle window

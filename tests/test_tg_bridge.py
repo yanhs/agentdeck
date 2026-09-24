@@ -27,7 +27,7 @@ def test_session_for_known():
 
 def test_session_for_unknown():
     assert tb.session_for("99") is None
-    assert tb.session_for("9") is None      # orchestra agents excluded
+    assert tb.session_for("13") is None     # 1..12 are Claude terminals (9/10 since 08cd8c7)
 
 
 # --- send_text: literal text, PAUSE, then Enter (the submission fix) -------
@@ -42,10 +42,10 @@ def test_send_text_pauses_before_enter(monkeypatch):
 
     tb.send_text("sess", "hello")
     # order: clear the input line (C-u) -> literal text -> sleep (>0) -> Enter
-    assert calls[0] == ("send-keys", "-t", "sess", "C-u")
-    assert calls[2] == ("send-keys", "-t", "sess", "-l", "hello")
+    assert calls[0] == ("send-keys", "-t", "=sess:", "C-u")
+    assert calls[2] == ("send-keys", "-t", "=sess:", "-l", "--", "hello")
     assert calls[3][0] == "SLEEP" and calls[3][1] > 0
-    assert calls[4] == ("send-keys", "-t", "sess", "Enter")
+    assert calls[4] == ("send-keys", "-t", "=sess:", "Enter")
 
 
 def test_send_text_clears_input_before_typing(monkeypatch):
@@ -56,9 +56,9 @@ def test_send_text_clears_input_before_typing(monkeypatch):
     monkeypatch.setattr(tb, "time", type("T", (), {"sleep": lambda self, n: None})())
     tb.send_text("sess", "next message")
     keyseqs = [c for c in calls]
-    assert keyseqs[0] == ("send-keys", "-t", "sess", "C-u")            # clear first
-    assert keyseqs.index(("send-keys", "-t", "sess", "C-u")) < \
-        keyseqs.index(("send-keys", "-t", "sess", "-l", "next message"))
+    assert keyseqs[0] == ("send-keys", "-t", "=sess:", "C-u")            # clear first
+    assert keyseqs.index(("send-keys", "-t", "=sess:", "C-u")) < \
+        keyseqs.index(("send-keys", "-t", "=sess:", "-l", "--", "next message"))
 
 
 def test_send_text_handles_cyrillic(monkeypatch):
@@ -67,7 +67,31 @@ def test_send_text_handles_cyrillic(monkeypatch):
     monkeypatch.setattr(tb, "_tmux", lambda *a: calls.append(a))
     monkeypatch.setattr(tb, "time", type("T", (), {"sleep": lambda self, n: None})())
     tb.send_text("sess", "hello, world")
-    assert ("send-keys", "-t", "sess", "-l", "hello, world") in calls
+    assert ("send-keys", "-t", "=sess:", "-l", "--", "hello, world") in calls
+
+
+def test_send_text_starting_with_a_dash_is_text_not_an_option(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tb, "_tmux", lambda *a: calls.append(a))
+    monkeypatch.setattr(tb, "time", type("T", (), {"sleep": lambda self, n: None})())
+    tb.send_text("sess", "-t evil -- not flags")
+    assert ("send-keys", "-t", "=sess:", "-l", "--", "-t evil -- not flags") in calls
+
+
+def test_tmux_targets_are_exact_never_prefix(monkeypatch):
+    # "-t cs-aaaa1111" would also match cs-aaaa1111x (tmux prefix-matches names)
+    calls = []
+
+    def fake(*a):
+        calls.append(a)
+        return subprocess.CompletedProcess(a, 0, "", "")
+    monkeypatch.setattr(tb, "_tmux", fake)
+    tb.has_session("cs-aaaa1111")
+    tb.send_key("cs-aaaa1111", "Escape")
+    tb.capture("cs-aaaa1111")
+    tb.visible("cs-aaaa1111")
+    targets = [a[a.index("-t") + 1] if "-t" in a else a[a.index("-pt") + 1] for a in calls]
+    assert targets == ["=cs-aaaa1111", "=cs-aaaa1111:", "=cs-aaaa1111:", "=cs-aaaa1111:"]
 
 
 # --- is_working -----------------------------------------------------------
@@ -627,6 +651,7 @@ def test_on_text_releases_lock_before_streaming(monkeypatch):
     monkeypatch.setattr(tb, "parse_menu", lambda v: None)
     monkeypatch.setattr(tb, "baseline_uuids", lambda p: set())
     monkeypatch.setattr(tb, "transcript_path", lambda a: "/tmp/x.jsonl")
+    monkeypatch.setattr(tb, "legacy_pane_command", lambda s: "claude")
 
     def fake_send(s, t):
         seen["locked_during_send"] = tb.lock_for(session).locked()
@@ -916,3 +941,698 @@ def test_on_voice_handles_empty_transcript(monkeypatch):
     asyncio.run(tb.on_voice(Upd(), None))
     assert called["deliver"] is False                         # nothing sent to the terminal
     assert edits                                              # user told it was empty
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Session library (topics instead of numbered slots).
+#
+# The current selection is a topic id (8 hex, first chars of the Claude uuid);
+# its tmux session is cs-<id>. /use resolves a name fragment or id through
+# library.resolve (several hits → buttons), /list puts loaded topics first
+# (library_cli.py active + library.display_order), /new creates a topic. Before
+# text is typed, `library_cli.py ensure <id>` loads the topic (unloading an idle
+# one at the limit, refusing when all are busy). The old numeric `/use N` stays
+# only as the transition fallback for the legacy claude-terminal-N sessions.
+#
+# Unit tests fake library_cli (tb.run_library_cli); the last test runs the real
+# library_cli against a PRIVATE tmux server (-L agentdeck-test-tg-*) that it
+# kills at the end — the live sessions on the default socket are never touched.
+# ════════════════════════════════════════════════════════════════════════════
+
+import asyncio  # noqa: E402
+import subprocess  # noqa: E402
+import time as _time  # noqa: E402
+import uuid as _uuid_mod  # noqa: E402
+
+import pytest  # noqa: E402
+
+import library  # noqa: E402  (the same module tg_bridge uses)
+
+U1 = "aaaa1111-2222-4333-8444-555566667777"
+U2 = "bbbb2222-3333-4444-8555-666677778888"
+U3 = "c0ffee00-1111-4222-8333-444455556666"
+CHAT = 999
+
+
+class _Proc:
+    def __init__(self, code, out="", err=""):
+        self.returncode, self.stdout, self.stderr = code, out, err
+
+
+class World:
+    """Temp registry + temp bridge state + a fake library_cli."""
+
+    def __init__(self, tmp_path, monkeypatch):
+        self.lib = str(tmp_path / "reg" / "library.json")
+        monkeypatch.setenv("AGENTDECK_LIBRARY", self.lib)
+        # second line of defence: any real tmux call lands on a server that does not exist
+        monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", f"agentdeck-test-none-{os.getpid()}")
+        self.not_claude = set()   # ids whose pane runs something else (a shell)
+        self.threads = []         # (subcommand, thread id) of every library_cli call
+        monkeypatch.setattr(tb, "STATE_FILE", str(tmp_path / "state.json"))
+        monkeypatch.setattr(tb, "_fresh", {})
+        self.log = []          # every library_cli call and keystroke, in order
+        self.loaded = []       # ids that are "in tmux"
+        self.codes = {}        # id -> (exit code, stderr) for ensure
+        self.active_code = 0
+        monkeypatch.setattr(tb, "run_library_cli", self.cli)
+        monkeypatch.setattr(tb, "has_session",
+                            lambda s: s.startswith("cs-") and s[3:] in self.loaded)
+        monkeypatch.setattr(tb, "_agent_labels", lambda: {})
+
+    def cli(self, *args, **kw):
+        import threading
+        self.log.append(args)
+        self.threads.append((args[0], threading.get_ident()))
+        if args[0] == "pane-is-claude":
+            ok = args[1] in self.loaded and args[1] not in self.not_claude
+            return _Proc(0 if ok else 1, "", "" if ok else "pane runs bash")
+        if args[0] == "active":
+            if self.active_code:
+                return _Proc(self.active_code, "", "tmux: boom")
+            rows = [{"id": i, "attached": False, "working": False, "last_output": 0}
+                    for i in self.loaded]
+            return _Proc(0, json.dumps(rows))
+        if args[0] == "ensure":
+            sid = args[1]
+            code, err = self.codes.get(sid, (0, ""))
+            if code == 0 and library.find(library.load(self.lib), sid) is None:
+                code, err = 2, f"unknown session {sid}: такой темы нет в библиотеке"
+            if code == 0 and sid not in self.loaded:
+                self.loaded.append(sid)
+            return _Proc(code, f"cs-{sid}\n" if code == 0 else "", err)
+        return _Proc(1, "", "usage")
+
+    def add(self, name, uuid, last_used=None, archived=False, legacy_slot=None, cwd="/home/ubuntu/pr"):
+        with library.update(self.lib) as L:
+            e = library.create(L, name, cwd=cwd, now=100, uuid=uuid)
+            if last_used is not None:
+                e["last_used"] = last_used
+            e["archived"] = archived
+            if legacy_slot is not None:
+                e["legacy_slot"] = legacy_slot
+        return dict(e)
+
+    def ensured(self):
+        return [a[1] for a in self.log if a[0] == "ensure"]
+
+
+@pytest.fixture
+def world(tmp_path, monkeypatch):
+    return World(tmp_path, monkeypatch)
+
+
+class _Reply:
+    def __init__(self, sink):
+        self.sink = sink
+
+    async def edit_text(self, text, reply_markup=None, **k):
+        self.sink.append((text, reply_markup))
+
+
+class _CmdMsg:
+    def __init__(self, sink, text=""):
+        self.sink, self.text, self.caption, self.reply_to_message = sink, text, None, None
+        self.chat_id = CHAT
+
+    async def reply_text(self, text, reply_markup=None, **k):
+        self.sink.append((text, reply_markup))
+        return _Reply(self.sink)
+
+
+class _Upd:
+    def __init__(self, sink, text=""):
+        self.message = _CmdMsg(sink, text)
+        self.effective_chat = type("C", (), {"id": CHAT})()
+        self.effective_user = type("U", (), {"id": tb.OWNER_ID})()
+
+
+def run_cmd(handler, args):
+    sink = []
+    ctx = type("Ctx", (), {"args": list(args)})()
+    asyncio.run(handler(_Upd(sink), ctx))
+    return sink
+
+
+def run_cb(handler, data):
+    sink = []
+
+    class Q:
+        def __init__(self):
+            self.data = data
+            self.message = type("M", (), {"chat_id": CHAT})()
+
+        async def answer(self, *a, **k):
+            pass
+
+        async def edit_message_text(self, text, reply_markup=None, **k):
+            sink.append((text, reply_markup))
+
+    upd = type("U", (), {"callback_query": Q(),
+                         "effective_user": type("E", (), {"id": tb.OWNER_ID})()})()
+
+    class Bot:
+        async def send_message(self, chat_id, text, **k):
+            sink.append((text, None))
+            return _Reply(sink)
+    ctx = type("Ctx", (), {"bot": Bot(), "args": []})()
+    asyncio.run(handler(upd, ctx))
+    return sink
+
+
+def _callbacks(markup):
+    return [b.callback_data for row in markup.inline_keyboard for b in row]
+
+
+# --- identity: topic id → cs-<id>; transcript from the registry -------------
+
+def test_session_for_topic_id_is_its_cs_session():
+    assert tb.session_for("aaaa1111") == "cs-aaaa1111"
+
+
+def test_session_for_rejects_malformed_ids():
+    for bad in ["AAAA1111", "aaaa111", "aaaa11115", ";rm -rf /", "../x", "$(id)", ""]:
+        assert tb.session_for(bad) is None, bad
+
+
+def test_transcript_path_for_topic_uses_registry_uuid_and_cwd(world):
+    world.add("тема", uuid=U1, cwd="/home/ubuntu/pr")
+    assert tb.transcript_path("aaaa1111") == os.path.expanduser(
+        f"~/.claude/projects/-home-ubuntu-pr/{U1}.jsonl")
+
+
+def test_transcript_path_unknown_topic_is_none(world):
+    assert tb.transcript_path("deadbeef") is None
+
+
+# --- /use <name | id> ------------------------------------------------------
+
+def test_use_by_name_selects_topic_by_id_and_loads_it(world):
+    world.add("ImmAppeal деплой", uuid=U1)
+    world.add("Налоги 2026", uuid=U2)
+    replies = run_cmd(tb.cmd_use, ["НАЛОГИ"])
+    assert tb.get_current(CHAT) == "bbbb2222"            # stored by id, not by name
+    assert world.ensured() == ["bbbb2222"]                # loaded via library_cli ensure
+    text = replies[-1][0]
+    assert "Налоги 2026" in text and "bbbb2222" in text
+
+
+def test_use_multiword_name(world):
+    world.add("ImmAppeal деплой", uuid=U1)
+    world.add("Налоги 2026", uuid=U2)
+    run_cmd(tb.cmd_use, ["immappeal", "деплой"])
+    assert tb.get_current(CHAT) == "aaaa1111"
+
+
+def test_use_by_id_prefix(world):
+    world.add("ImmAppeal деплой", uuid=U1)
+    world.add("Налоги 2026", uuid=U2)
+    run_cmd(tb.cmd_use, ["aaaa"])
+    assert tb.get_current(CHAT) == "aaaa1111"
+
+
+def test_use_several_matches_offers_buttons_and_selects_nothing(world):
+    world.add("Налоги 2025", uuid=U1, last_used=10)
+    world.add("Налоги 2026", uuid=U2, last_used=20)
+    world.loaded.append("aaaa1111")                      # loaded → listed first
+    replies = run_cmd(tb.cmd_use, ["налоги"])
+    assert tb.get_current(CHAT) is None
+    assert world.ensured() == []                          # nothing loaded until a pick
+    text, markup = replies[-1]
+    assert markup is not None
+    assert _callbacks(markup) == ["use:aaaa1111", "use:bbbb2222"]
+
+
+def test_use_unknown_topic_says_so_and_points_to_new(world):
+    world.add("Налоги 2026", uuid=U2)
+    replies = run_cmd(tb.cmd_use, ["нет такой"])
+    assert tb.get_current(CHAT) is None and world.ensured() == []
+    assert "/new" in replies[-1][0] and "/list" in replies[-1][0]
+
+
+def test_use_archived_topic_is_not_selectable(world):
+    world.add("Старая тема", uuid=U1, archived=True)
+    run_cmd(tb.cmd_use, ["старая"])
+    assert tb.get_current(CHAT) is None and world.ensured() == []
+
+
+def test_use_reports_busy_but_keeps_selection(world):
+    world.add("тема", uuid=U1)
+    world.codes["aaaa1111"] = (3, "Все 12 загруженных тем сейчас заняты работой")
+    replies = run_cmd(tb.cmd_use, ["aaaa1111"])
+    assert tb.get_current(CHAT) == "aaaa1111"             # a later message retries ensure
+    assert "заняты" in replies[-1][0]
+
+
+def test_use_relays_the_unload_notice(world):
+    world.add("тема", uuid=U1)
+    world.codes["aaaa1111"] = (0, "выгружена тема cs-bbbb2222 «Налоги» — давно не использовалась")
+    replies = run_cmd(tb.cmd_use, ["тема"])
+    assert "выгружена тема cs-bbbb2222" in replies[-1][0]
+
+
+def test_use_callback_selects_topic(world):
+    world.add("тема", uuid=U1)
+    sink = run_cb(tb.on_use_cb, "use:aaaa1111")
+    assert tb.get_current(CHAT) == "aaaa1111" and world.ensured() == ["aaaa1111"]
+    assert "aaaa1111" in sink[-1][0]
+
+
+def test_use_callback_rejects_unknown_topic(world):
+    run_cb(tb.on_use_cb, "use:deadbeef")
+    assert tb.get_current(CHAT) is None and world.ensured() == []
+
+
+def test_use_without_args_lists_topics_then_running_legacy_terminals(world, monkeypatch):
+    world.add("Старая", uuid=U1, last_used=10)
+    world.add("Новая", uuid=U2, last_used=20)
+    world.loaded.append("aaaa1111")
+    monkeypatch.setattr(tb, "has_session",
+                        lambda s: s == "claude-terminal-6" or (s.startswith("cs-") and s[3:] in world.loaded))
+    replies = run_cmd(tb.cmd_use, [])
+    cbs = _callbacks(replies[-1][1])
+    assert cbs[:2] == ["use:aaaa1111", "use:bbbb2222"]    # loaded topic first
+    assert "use:6" in cbs                                 # running legacy terminal kept
+    assert "use:5" not in cbs                             # stopped legacy ones hidden
+
+
+# --- numeric /use N: transition fallback to the legacy terminals ------------
+
+def test_use_number_falls_back_to_legacy_terminal(world, monkeypatch):
+    world.add("Налоги 2026", uuid=U2)          # the name contains "6": must not steal /use 6
+    monkeypatch.setattr(tb, "has_session", lambda s: True)
+    run_cmd(tb.cmd_use, ["6"])
+    assert tb.get_current(CHAT) == "6" and world.ensured() == []
+
+
+def test_use_number_goes_to_the_migrated_topic(world):
+    world.add("app - PIPE", uuid=U1, legacy_slot=6)
+    run_cmd(tb.cmd_use, ["#6"])
+    assert tb.get_current(CHAT) == "aaaa1111" and world.ensured() == ["aaaa1111"]
+
+
+def test_legacy_callback_still_works(world, monkeypatch):
+    monkeypatch.setattr(tb, "has_session", lambda s: True)
+    run_cb(tb.on_use_cb, "use:6")
+    assert tb.get_current(CHAT) == "6"
+
+
+# --- /list -----------------------------------------------------------------
+
+def test_list_loaded_topics_first_and_marks_current(world):
+    world.add("Старая загруженная", uuid=U1, last_used=10)
+    world.add("Новая выгруженная", uuid=U2, last_used=20)
+    world.add("В архиве", uuid=U3, archived=True)
+    world.loaded.append("aaaa1111")
+    tb.set_current(CHAT, "bbbb2222")
+    text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
+    assert ("active",) in world.log                       # asks library_cli what is loaded
+    assert "Текущая: cs-bbbb2222 «Новая выгруженная»" in text     # header names the current one
+    rows = [l for l in text.splitlines() if l.startswith(("🟢", "⚪"))]
+    assert [("Старая" in l, "Новая" in l) for l in rows] == [(True, False), (False, True)]
+    loaded, cur = rows
+    assert "🟢" in loaded and "aaaa1111" in loaded
+    assert "⚪" in cur and "bbbb2222" in cur and "←" in cur
+    assert "В архиве" not in text
+
+
+def test_list_says_so_when_loaded_state_is_unknown(world):
+    world.add("тема", uuid=U1)
+    world.active_code = 1
+    text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
+    assert "тема" in text and "не удалось" in text
+
+
+# --- /new ------------------------------------------------------------------
+
+def test_new_creates_topic_selects_and_loads_it(world, monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTDECK_WORKDIR", str(tmp_path))
+    replies = run_cmd(tb.cmd_new, ["Разбор", "логов"])
+    rows = library.load(world.lib)["sessions"]
+    assert len(rows) == 1
+    e = rows[0]
+    assert e["name"] == "Разбор логов" and library.valid_id(e["id"])
+    assert e["cwd"] == str(tmp_path)
+    assert tb.get_current(CHAT) == e["id"]
+    assert world.ensured() == [e["id"]]
+    assert e["id"] in replies[-1][0] and "Разбор логов" in replies[-1][0]
+
+
+def test_new_without_name_gets_a_dated_default(world):
+    run_cmd(tb.cmd_new, [])
+    e = library.load(world.lib)["sessions"][0]
+    assert e["name"].startswith("Тема ")
+
+
+def test_new_strips_control_chars_and_caps_the_name(world):
+    run_cmd(tb.cmd_new, ["a\x1b[31mb" + "x" * 300])
+    e = library.load(world.lib)["sessions"][0]
+    assert "\x1b" not in e["name"] and len(e["name"]) <= 100
+
+
+# --- typing text into a topic ------------------------------------------------
+
+def _deliver(world, monkeypatch, text="привет", screens=None):
+    """Run on_text with keystrokes/stream faked; returns (sink, streamed)."""
+    streamed = {}
+    seq = list(screens or ["❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)"])
+
+    def fake_visible(s):
+        world.log.append(("visible", s))
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+    monkeypatch.setattr(tb, "visible", fake_visible)
+    monkeypatch.setattr(tb, "parse_menu", lambda v: None)
+    monkeypatch.setattr(tb, "baseline_uuids", lambda p: set())
+    monkeypatch.setattr(tb, "send_text", lambda s, t: world.log.append(("send", s, t)))
+
+    async def no_sleep(*a, **k):
+        pass
+    monkeypatch.setattr(tb, "_ready_sleep", no_sleep)
+
+    async def fake_stream(message, s, path, baseline, aid, user_text):
+        streamed.update(session=s, path=path, aid=aid, user_text=user_text)
+    monkeypatch.setattr(tb, "stream_live", fake_stream)
+    sink = []
+    upd = _Upd(sink, text)
+    asyncio.run(tb.on_text(upd, None))
+    return sink, streamed
+
+
+def test_text_to_topic_ensures_then_types_into_cs_session(world, monkeypatch):
+    world.add("тема", uuid=U1)
+    world.loaded.append("aaaa1111")
+    tb.set_current(CHAT, "aaaa1111")
+    sink, streamed = _deliver(world, monkeypatch, "привет")
+    ens = world.log.index(("ensure", "aaaa1111"))
+    send = world.log.index(("send", "cs-aaaa1111", "привет"))
+    assert ens < send                                     # ensure BEFORE the keystrokes
+    assert streamed["session"] == "cs-aaaa1111" and streamed["aid"] == "aaaa1111"
+    assert streamed["path"].endswith(f"{U1}.jsonl")
+
+
+def test_text_to_topic_not_typed_when_all_busy(world, monkeypatch):
+    world.add("тема", uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")
+    world.codes["aaaa1111"] = (3, "Все 12 загруженных тем сейчас заняты работой")
+    sink, streamed = _deliver(world, monkeypatch)
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert "заняты" in sink[-1][0]
+
+
+def test_text_to_vanished_topic_not_typed(world, monkeypatch):
+    tb.set_current(CHAT, "deadbeef")                      # archived/removed meanwhile
+    sink, streamed = _deliver(world, monkeypatch)
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert sink
+
+
+def test_text_to_freshly_loaded_topic_waits_for_claude(world, monkeypatch):
+    world.add("тема", uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")                      # not loaded: ensure starts it
+    shell = "ubuntu@vps:~/pr$ claude --session-id x --dangerously-skip-permissions"
+    ready = "❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+    _deliver(world, monkeypatch, "привет", screens=[shell, shell, ready])
+    looks = [i for i, e in enumerate(world.log) if e[0] == "visible"]
+    send = world.log.index(("send", "cs-aaaa1111", "привет"))
+    assert len([i for i in looks if i < send]) >= 3       # polled until Claude was up
+
+
+def test_text_without_selection_points_to_use(world, monkeypatch):
+    sink, streamed = _deliver(world, monkeypatch)
+    assert "/use" in sink[-1][0] and not streamed
+
+
+def test_tui_ready():
+    assert tb.tui_ready("❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)")
+    assert tb.tui_ready(MENU_PANE)                        # a pending question = Claude is up
+    assert not tb.tui_ready("ubuntu@vps:~/pr$ claude --resume x --dangerously-skip-permissions")
+    assert not tb.tui_ready("")
+
+
+# --- AskUserQuestion buttons work on a topic too -----------------------------
+
+def test_menu_select_on_topic_drives_the_cs_session(world, monkeypatch):
+    world.add("тема", uuid=U1)
+    world.loaded.append("aaaa1111")
+    keys = []
+    screens = [MENU_PANE, MENU_PANE, ""]
+    monkeypatch.setattr(tb, "visible", lambda s: screens.pop(0) if len(screens) > 1 else screens[0])
+    monkeypatch.setattr(tb, "send_key", lambda s, k: keys.append((s, k)))
+    monkeypatch.setattr(tb, "baseline_uuids", lambda p: set())
+
+    async def no_sleep(*a, **k):
+        pass
+    monkeypatch.setattr(tb.asyncio, "sleep", no_sleep)
+    seen = {}
+
+    async def fake_stream(message, s, path, baseline, aid, user_text):
+        seen.update(session=s, aid=aid)
+    monkeypatch.setattr(tb, "stream_live", fake_stream)
+    run_cb(tb.on_menu_select_cb, "msel:aaaa1111:2")
+    assert ("cs-aaaa1111", "Down") in keys and ("cs-aaaa1111", "Enter") in keys
+    assert seen == {"session": "cs-aaaa1111", "aid": "aaaa1111"}
+
+
+# --- the real thing: library_cli + a private tmux server ---------------------
+
+FAKE_CLAUDE_TUI = r"""#!/bin/bash
+# stands in for claude: records how it was started, shows the TUI status bar,
+# then logs every line typed into it
+echo "$AGENTDECK_SESSION|$*" >> "$HOME/claude-calls.log"
+printf '\n  \xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on (shift+tab to cycle)\n'
+while IFS= read -r line; do printf '%s\n' "$line" >> "$HOME/typed.log"; done
+"""
+
+
+def test_text_reaches_a_real_topic_on_a_private_tmux(tmp_path, monkeypatch):
+    home, work, binp = tmp_path / "home", tmp_path / "work", tmp_path / "bin"
+    for d in (home, work, binp):
+        d.mkdir()
+    fake = tmp_path / "fake-claude"
+    fake.write_text(FAKE_CLAUDE_TUI)
+    fake.chmod(0o755)
+    (binp / "claude").symlink_to(fake)
+    sock = f"agentdeck-test-tg-{os.getpid()}-{_uuid_mod.uuid4().hex[:6]}"
+    lib = str(tmp_path / "reg" / "library.json")
+    for k in ("TMUX", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in dict(HOME=str(home), AGENTDECK_LIBRARY=lib, AGENTDECK_TMUX_SOCKET=sock,
+                     CLAUDE_BIN=str(fake), AGENTDECK_WORKDIR=str(work),
+                     PATH=f"{binp}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+                     LANG="C.UTF-8", LC_ALL="C.UTF-8", TERM="xterm-256color").items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(tb, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(tb, "_fresh", {})
+    with library.update(lib) as L:
+        library.create(L, "Живая тема", cwd=str(work), now=int(_time.time()), uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")
+    streamed = {}
+
+    async def fake_stream(message, s, path, baseline, aid, user_text):
+        streamed.update(session=s, aid=aid)
+    monkeypatch.setattr(tb, "stream_live", fake_stream)
+
+    def tm(*a):
+        return subprocess.run(["tmux", "-L", sock, *a], capture_output=True, text=True, timeout=10)
+
+    # `library_cli.py pane-is-claude` is being added in parallel; the stand-in
+    # claude here is a bash script, so answer it from the private server instead
+    real_cli = tb.run_library_cli
+
+    def cli(*args, **kw):
+        if args[0] == "pane-is-claude":
+            ok = tm("has-session", "-t", f"=cs-{args[1]}").returncode == 0
+            return subprocess.CompletedProcess(args, 0 if ok else 1, "", "")
+        return real_cli(*args, **kw)
+    monkeypatch.setattr(tb, "run_library_cli", cli)
+    assert tb._tmux("list-sessions").args[:3] == ["tmux", "-L", sock]   # the bridge uses OUR socket
+    try:
+        sink = []
+        asyncio.run(tb.on_text(_Upd(sink, "привет из телеграма"), None))
+        typed = home / "typed.log"
+        end = _time.time() + 10
+        while _time.time() < end and not (typed.exists() and "привет" in typed.read_text()):
+            _time.sleep(0.1)
+        assert typed.exists() and "привет из телеграма" in typed.read_text(), sink
+        calls = (home / "claude-calls.log").read_text()
+        assert f"aaaa1111|--session-id {U1} --dangerously-skip-permissions" in calls
+        assert tm("has-session", "-t", "=cs-aaaa1111").returncode == 0
+        assert streamed == {"session": "cs-aaaa1111", "aid": "aaaa1111"}
+        e = library.find(library.load(lib), "aaaa1111")
+        assert e["last_used"] > 100                         # ensure touched it
+    finally:
+        tm("kill-server")
+        try:
+            os.unlink(f"/tmp/tmux-{os.getuid()}/{sock}")
+        except OSError:
+            pass
+
+
+def test_saved_legacy_selection_follows_its_migrated_topic(world, monkeypatch):
+    # the chat picked "/use 6" before the migration renamed claude-terminal-6 to
+    # cs-<id>: the next message must land in that topic, not "isn't running"
+    world.add("app - PIPE", uuid=U1, legacy_slot=6)
+    world.loaded.append("aaaa1111")
+    tb.set_current(CHAT, "6")
+    sink, streamed = _deliver(world, monkeypatch, "дальше")
+    assert ("send", "cs-aaaa1111", "дальше") in world.log
+    assert tb.get_current(CHAT) == "aaaa1111"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Review fixes (2026-09-24): never a second Claude on one conversation, never
+# type into something that is not Claude, never block the event loop.
+# ════════════════════════════════════════════════════════════════════════════
+
+@pytest.fixture(autouse=True)
+def _private_tmux_socket(monkeypatch):
+    # every test in this file: a stray real tmux call reaches a server that does not
+    # exist, never the default socket with the live terminals
+    if not os.environ.get("AGENTDECK_TMUX_SOCKET", "").startswith("agentdeck-test-"):
+        monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", f"agentdeck-test-none-{os.getpid()}")
+
+
+def test_the_bridge_honours_the_private_socket():
+    assert tb._tmux("list-sessions").args[:3] == ["tmux", "-L", f"agentdeck-test-none-{os.getpid()}"]
+
+
+def _no_legacy_start(monkeypatch):
+    started = []
+    monkeypatch.setattr(tb, "start_session", lambda aid: started.append(aid) or (True, "started"))
+    return started
+
+
+def test_use_number_with_archived_migrated_topic_never_starts_the_old_slot(world, monkeypatch):
+    world.add("app - PIPE", uuid=U1, legacy_slot=6, archived=True)
+    started = _no_legacy_start(monkeypatch)
+    replies = run_cmd(tb.cmd_use, ["6"])
+    assert started == []                                   # no 2nd Claude on the same uuid
+    assert tb.get_current(CHAT) != "6"
+    assert "архив" in replies[-1][0]
+
+
+def test_use_number_callback_with_archived_migrated_topic(world, monkeypatch):
+    world.add("app - PIPE", uuid=U1, legacy_slot=6, archived=True)
+    started = _no_legacy_start(monkeypatch)
+    sink = run_cb(tb.on_use_cb, "use:6")
+    assert started == [] and tb.get_current(CHAT) != "6"
+    assert "архив" in sink[-1][0]
+
+
+def test_start_session_refuses_a_migrated_slot(world, monkeypatch):
+    world.add("app - PIPE", uuid=U1, legacy_slot=6, archived=True)
+    monkeypatch.setattr(tb, "has_session", lambda s: False)
+    ran = []
+    monkeypatch.setattr(tb.subprocess, "run", lambda *a, **k: ran.append(a))
+    ok, msg = tb.start_session("6")
+    assert ok is False and ran == [] and "aaaa1111" in msg
+
+
+def test_saved_legacy_selection_with_archived_topic_is_not_sent(world, monkeypatch):
+    world.add("app - PIPE", uuid=U1, legacy_slot=6, archived=True)
+    world.codes["aaaa1111"] = (2, "тема в архиве")
+    started = _no_legacy_start(monkeypatch)
+    tb.set_current(CHAT, "6")
+    sink, streamed = _deliver(world, monkeypatch, "дальше")
+    assert started == [] and not streamed
+    assert not [e for e in world.log if e[0] == "send"]
+
+
+def test_ensure_exit_4_already_running_elsewhere(world, monkeypatch):
+    world.add("тема", uuid=U1)
+    world.codes["aaaa1111"] = (4, "conversation already running in claude-terminal-6")
+    tb.set_current(CHAT, "aaaa1111")
+    sink, streamed = _deliver(world, monkeypatch)
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert "уже открыта" in sink[-1][0]
+    replies = run_cmd(tb.cmd_use, ["тема"])
+    assert "уже открыта" in replies[-1][0]
+
+
+def test_text_not_typed_when_the_topic_pane_is_not_claude(world, monkeypatch):
+    world.add("тема", uuid=U1)
+    world.loaded.append("aaaa1111")
+    world.not_claude.add("aaaa1111")                       # Claude exited: a bare shell
+    tb.set_current(CHAT, "aaaa1111")
+    sink, streamed = _deliver(world, monkeypatch, "rm -rf ~")
+    assert ("pane-is-claude", "aaaa1111") in world.log
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert "не Claude" in sink[-1][0]
+
+
+def test_pane_check_runs_off_the_event_loop(world, monkeypatch):
+    import threading
+    world.add("тема", uuid=U1)
+    world.loaded.append("aaaa1111")
+    tb.set_current(CHAT, "aaaa1111")
+    _deliver(world, monkeypatch)
+    main = threading.get_ident()
+    assert [t for c, t in world.threads if c == "pane-is-claude"]
+    assert all(t != main for c, t in world.threads if c == "pane-is-claude")
+
+
+def test_text_not_typed_when_the_legacy_pane_is_not_claude(world, monkeypatch):
+    tb.set_current(CHAT, "6")
+    monkeypatch.setattr(tb, "has_session", lambda s: True)
+    monkeypatch.setattr(tb, "legacy_pane_command", lambda s: "bash")
+    sink, streamed = _deliver(world, monkeypatch, "привет")
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert "не Claude" in sink[-1][0]
+
+
+def test_legacy_pane_command_reads_list_panes_exactly(monkeypatch):
+    out = ("claude-terminal-60\tbash\n"
+           "claude-terminal-6\tclaude\n"
+           "claude-terminal-6\tbash\n")               # 2nd pane of the same session
+    calls = []
+
+    def fake(*a):
+        calls.append(a)
+        return subprocess.CompletedProcess(a, 0, out, "")
+    monkeypatch.setattr(tb, "_tmux", fake)
+    assert tb.legacy_pane_command("claude-terminal-6") == "claude"
+    assert tb.legacy_pane_command("claude-terminal") is None
+    assert all("display-message" not in a for a in calls)
+    assert calls[0][:3] == ("list-panes", "-a", "-F")
+    assert tb.is_claude_command("claude") and tb.is_claude_command("2.1.87")
+    assert not tb.is_claude_command("bash") and not tb.is_claude_command(None)
+
+
+def test_ready_timeout_refuses_instead_of_sending(world, monkeypatch):
+    world.add("тема", uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")                      # not loaded: ensure starts it
+    monkeypatch.setattr(tb, "READY_TIMEOUT", 0)
+    shell = "ubuntu@vps:~/pr$ claude --session-id x"
+    sink, streamed = _deliver(world, monkeypatch, "привет", screens=[shell])
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert any("не отправлено" in t for t, _ in sink)
+
+
+def test_library_cli_active_runs_off_the_event_loop(world):
+    import threading
+    world.add("тема", uuid=U1)
+    run_cmd(tb.cmd_list, [])
+    run_cmd(tb.cmd_use, [])
+    world.add("тема два", uuid=U2)
+    run_cmd(tb.cmd_use, ["тема"])                         # several hits → buttons
+    main = threading.get_ident()
+    act = [t for c, t in world.threads if c == "active"]
+    assert len(act) >= 3 and all(t != main for t in act)
+
+
+def test_library_cli_calls_have_a_timeout(monkeypatch):
+    seen = []
+    monkeypatch.setattr(tb.subprocess, "run",
+                        lambda cmd, **kw: seen.append(kw) or subprocess.CompletedProcess(cmd, 0, "[]", ""))
+    tb.loaded_topics()
+    tb.ensure_topic("aaaa1111")
+    tb.pane_is_claude("aaaa1111", "cs-aaaa1111")
+    assert len(seen) == 3 and all(0 < kw.get("timeout", 0) <= 60 for kw in seen)
+
+
+def test_loaded_topics_timeout_is_unknown_not_a_crash(monkeypatch):
+    def slow(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+    monkeypatch.setattr(tb.subprocess, "run", slow)
+    assert tb.loaded_topics() is None
+    assert tb.pane_is_claude("aaaa1111", "cs-aaaa1111") is False

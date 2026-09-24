@@ -20,6 +20,7 @@ import fcntl
 import json
 import os
 import re
+import shutil
 import time
 import uuid as _uuid
 
@@ -56,13 +57,24 @@ def empty():
     return {"sessions": []}
 
 
+class CorruptRegistry(RuntimeError):
+    """The registry file exists but is not a valid library. Never papered over
+    with an empty one: the next update() would save that and lose every topic."""
+
+
 def load(path=LIB_FILE):
+    """The registry. Empty ONLY when the file does not exist yet."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except (FileNotFoundError, ValueError):
+    except FileNotFoundError:
         return empty()
-    data.setdefault("sessions", [])
+    except ValueError as ex:
+        raise CorruptRegistry(f"session registry {path} is not valid JSON ({ex}); "
+                              f"fix it or restore {path}.bak") from None
+    if not isinstance(data, dict) or not isinstance(data.setdefault("sessions", []), list):
+        raise CorruptRegistry(f"session registry {path} has no session list; "
+                              f"fix it or restore {path}.bak")
     return data
 
 
@@ -80,8 +92,11 @@ def update(path=LIB_FILE):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     with open(path + ".lock", "w") as lk:
         fcntl.flock(lk, fcntl.LOCK_EX)
-        lib = load(path)
+        lib = load(path)                           # raises on a corrupt file
         yield lib
+        if os.path.exists(path):                   # previous version, one step back
+            shutil.copyfile(path, path + ".bak.tmp")
+            os.replace(path + ".bak.tmp", path + ".bak")
         save(path, lib)
 
 
@@ -174,12 +189,60 @@ def needs_eviction(active_count, limit=MAX_ACTIVE):
     return active_count >= limit
 
 
+def last_touched(s):
+    """The later of last use (opened / typed to) and last screen output."""
+    return max(s.get("last_used") or 0, s.get("last_output") or 0)
+
+
 def pick_victim(live):
-    """live: [{id, last_used, attached, working}] -> id to unload, or None."""
+    """live: [{id, last_used, last_output, attached, working}] -> id to unload,
+    or None. Candidates: no tab open and not working (a held session counts as
+    working — the caller folds held() into `working`)."""
     idle = [s for s in live if not s["attached"] and not s["working"]]
     if not idle:
         return None
-    return min(idle, key=lambda s: s.get("last_used", 0))["id"]
+    return min(idle, key=last_touched)["id"]
+
+
+# ── hold markers ────────────────────────────────────────────────────────────
+# `.sessions/hold-<id>` holds a unix time: until then the session counts as
+# working (LRU eviction and idle_reaper both keep it). Written when Claude sets
+# a timer (hooks/hold_on_timer.py -> `library_cli.py hold`), so unloading does
+# not kill a pending ScheduleWakeup / CronCreate / Monitor.
+def hold_path(sid, lib_file=None):
+    if not valid_id(sid):
+        raise ValueError(f"bad session id {sid!r}")
+    reg = lib_file or LIB_FILE
+    return os.path.join(os.path.dirname(os.path.abspath(reg)), f"hold-{sid}")
+
+
+def hold_until(sid, lib_file=None):
+    """Expiry of the session's hold (unix time), or None."""
+    try:
+        with open(hold_path(sid, lib_file)) as f:
+            return int(float(f.read().strip()))
+    except (ValueError, OSError):
+        return None
+
+
+def held(sid, now, lib_file=None):
+    u = hold_until(sid, lib_file)
+    return u is not None and now < u
+
+
+def set_hold(sid, until, lib_file=None):
+    """Hold the session until `until`; an existing later hold is kept."""
+    path = hold_path(sid, lib_file)
+    until = int(until)
+    cur = hold_until(sid, lib_file)
+    if cur is not None and cur >= until:
+        return cur
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
+        f.write(f"{until}\n")
+    os.replace(tmp, path)
+    return until
 
 
 # ── migration from numbered slots ───────────────────────────────────────────

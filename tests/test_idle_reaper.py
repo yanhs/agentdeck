@@ -119,7 +119,7 @@ def test_dry_run_kills_nothing(monkeypatch, tmp_path):
 # ── background-task detection on real processes ────────────────────────────
 def test_task_output_path_pattern():
     assert reaper.is_task_output(
-        "/tmp/claude-1000/-home-ubuntu-pr/bef2d270-188b/tasks/be0n7egae.output")
+        "/tmp/claude-1000/-home-ubuntu-pr/bbbbbbbb-188b/tasks/be0n7egae.output")
     assert not reaper.is_task_output("/tmp/claude-1000/x/tasks/notes.txt")
     assert not reaper.is_task_output("/home/ubuntu/pr/run.output")
     assert not reaper.is_task_output("pipe:[123]")
@@ -148,6 +148,13 @@ def test_plain_tree_has_no_background_task():
         p.kill()
 
 
+def _drop_socket(sock):
+    try:
+        os.unlink(f"/tmp/tmux-{os.getuid()}/{sock}")
+    except OSError:
+        pass
+
+
 # ── last output on a REAL tmux (private socket) ─────────────────────────────
 def test_activity_follows_output_of_a_detached_session(monkeypatch):
     # tmux 3.2a: #{session_activity} is client activity — it does NOT move when a
@@ -163,15 +170,16 @@ def test_activity_follows_output_of_a_detached_session(monkeypatch):
         assert last is not None and time.time() - last <= 2.5, (time.time(), last)
     finally:
         subprocess.run(["tmux", "-L", sock, "kill-server"])
+        _drop_socket(sock)
 
 
 # ── which sessions it watches ───────────────────────────────────────────────
 def test_watches_library_sessions_and_legacy_slots(monkeypatch):
     # library sessions are tmux `cs-<8 hex>`; anything else (a shell, a test) is not ours
     monkeypatch.setattr(reaper, "_tmux_session_names",
-                        lambda: ["claude-terminal-3", "cs-3beb2a44", "cs-nothex!", "work", "cs-bef2d270"])
+                        lambda: ["claude-terminal-3", "cs-aaaaaaaa", "cs-nothex!", "work", "cs-bbbbbbbb"])
     watched = reaper.watched_sessions()
-    assert "cs-3beb2a44" in watched and "cs-bef2d270" in watched
+    assert "cs-aaaaaaaa" in watched and "cs-bbbbbbbb" in watched
     assert "claude-terminal-3" in watched and "claude-terminal-12" in watched   # legacy, until migration
     assert "work" not in watched and "cs-nothex!" not in watched
     assert len(watched) == len(set(watched))
@@ -179,10 +187,10 @@ def test_watches_library_sessions_and_legacy_slots(monkeypatch):
 
 def test_sweep_uses_the_discovered_list(monkeypatch, tmp_path):
     now = 100_000
-    t = FakeTmux({"cs-3beb2a44": dict(activity=now - IDLE * 2, attached=False, bg=False)})
+    t = FakeTmux({"cs-aaaaaaaa": dict(activity=now - IDLE * 2, attached=False, bg=False)})
     t.install(monkeypatch, tmp_path)
-    monkeypatch.setattr(reaper, "watched_sessions", lambda: ["cs-3beb2a44"])
-    assert reaper.sweep(now=now) == ["cs-3beb2a44"]
+    monkeypatch.setattr(reaper, "watched_sessions", lambda: ["cs-aaaaaaaa"])
+    assert reaper.sweep(now=now) == ["cs-aaaaaaaa"]
 
 
 # ── config ──────────────────────────────────────────────────────────────────
@@ -216,3 +224,46 @@ def test_socket_env_is_honoured(monkeypatch):
                         lambda args, **k: seen.setdefault("a", args) and subprocess.CompletedProcess(args, 1, "", ""))
     reaper._tmux(["list-sessions"])
     assert seen["a"][:3] == ["tmux", "-L", "agentdeck-test-x"]
+
+
+# ── exact tmux targets on a REAL private server ────────────────────────────
+def test_targets_are_exact_never_prefix(monkeypatch):
+    # `-t claude-terminal` prefix-matches claude-terminal-5 in tmux; the reaper
+    # must neither read nor kill the neighbour when "claude-terminal" is gone.
+    sock = f"agentdeck-test-reaper-x-{os.getpid()}"
+    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", sock)
+    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", "claude-terminal-5",
+                    "sleep 600"], check=True)
+    try:
+        assert reaper.get_pane_pid("claude-terminal") is None
+        assert isinstance(reaper.get_pane_pid("claude-terminal-5"), int)
+        assert reaper.unload("claude-terminal") is False
+        alive = subprocess.run(["tmux", "-L", sock, "has-session", "-t", "=claude-terminal-5"])
+        assert alive.returncode == 0
+        assert reaper.unload("claude-terminal-5") is True
+    finally:
+        subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
+        _drop_socket(sock)
+
+
+# ── hold marker: a pending timer (ScheduleWakeup / CronCreate) is work ─────
+def test_held_library_session_is_kept_until_the_hold_expires(monkeypatch, tmp_path):
+    now = 100_000
+    reg = str(tmp_path / "reg" / "library.json")
+    monkeypatch.setattr(reaper.library, "LIB_FILE", reg)
+    t = FakeTmux({"cs-aaaaaaaa": dict(activity=now - IDLE * 3, attached=False, bg=False),
+                  "cs-bbbbbbbb": dict(activity=now - IDLE * 3, attached=False, bg=False)})
+    t.install(monkeypatch, tmp_path)
+    reaper.library.set_hold("aaaaaaaa", now + 600, lib_file=reg)
+    assert reaper.sweep(now=now) == ["cs-bbbbbbbb"]
+    del t.sessions["cs-bbbbbbbb"]                  # the fake's unload doesn't remove it
+    assert reaper.sweep(now=now + 600 + IDLE) == ["cs-aaaaaaaa"]
+
+
+def test_session_held_only_for_library_names(monkeypatch, tmp_path):
+    reg = str(tmp_path / "library.json")
+    monkeypatch.setattr(reaper.library, "LIB_FILE", reg)
+    reaper.library.set_hold("aaaaaaaa", 10**10, lib_file=reg)
+    assert reaper.session_held("cs-aaaaaaaa", now=1) is True
+    assert reaper.session_held("cs-bbbbbbbb", now=1) is False
+    assert reaper.session_held("claude-terminal-3", now=1) is False

@@ -12,7 +12,10 @@ import os
 import re
 import hmac
 import hashlib
+import unicodedata
 from urllib.parse import urlparse, parse_qs
+
+import library   # session registry (library.py next to this file)
 
 SESSIONS = [
     {"id": "1",  "session": "claude-terminal",    "path": "terminal"},
@@ -178,12 +181,42 @@ def read_cpu_ticks(pid):
         return 0
 
 
+def tree_cpu_ticks(pane_pid):
+    """CPU ticks of a pane's process, its children and grandchildren — the
+    quantity whose growth over SAMPLE_INTERVAL makes a terminal "working"."""
+    ticks = read_cpu_ticks(pane_pid)
+    for cpid in get_child_pids(pane_pid):
+        ticks += read_cpu_ticks(cpid)
+        for gpid in get_child_pids(cpid):
+            ticks += read_cpu_ticks(gpid)
+    return ticks
+
+
+def is_working(ticks1, ticks2):
+    return ticks2 - ticks1 > CPU_TICK_THRESHOLD
+
+
+def sample_working(pane_pids):
+    """{key: pane_pid} -> {key: working}, one shared SAMPLE_INTERVAL sleep —
+    the same measure the terminal cards use (GET /)."""
+    first = {k: tree_cpu_ticks(p) for k, p in pane_pids.items() if p}
+    if first:
+        time.sleep(SAMPLE_INTERVAL)
+    return {k: is_working(t1, tree_cpu_ticks(pane_pids[k])) for k, t1 in first.items()}
+
+
 def get_cwd(session):
+    # list-panes, not display-message: in tmux 3.2a `display-message -p` on a
+    # target that has just vanished segfaults the whole server (2026-09-24).
     r = subprocess.run(
-        ["tmux", "display-message", "-t", session, "-p", "#{pane_current_path}"],
+        ["tmux", "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}"],
         capture_output=True, text=True,
     )
-    return r.stdout.strip() if r.returncode == 0 else ""
+    for line in r.stdout.splitlines() if r.returncode == 0 else []:
+        name, _, path = line.partition("\t")
+        if name == session:
+            return path
+    return ""
 
 
 def detect_project_from_cwd(cwd):
@@ -358,8 +391,238 @@ def tg_render(msg=""):
             .replace("__MSG__", f'<p class="ok">{msg}</p>' if msg else ''))
 
 
+# ── Session library API: /api/library (see library.py) ──────────────────────
+# Topics live in the registry; the loaded ones are tmux sessions cs-<id>. All tmux
+# calls here go to AGENTDECK_TMUX_SOCKET when set (`tmux -L <name>` — tests use a
+# private socket), and /close targets exactly "=cs-<id>" after the id is validated
+# and found in the registry, so nothing else can ever be killed from here.
+LIB_ROUTE = "/api/library"
+LIB_NAME_MAX = 200
+LIB_BODY_MAX = 64 * 1024
+# /close unloads only a topic nobody is using: not attached and no screen output
+# for this long — anything else needs {"force": true}
+CLOSE_QUIET_SECONDS = 30 * 60
+# CSRF: POSTs must be JSON (a cross-site <form> cannot send that without a CORS
+# preflight, and we answer no preflight) and, when the browser says where the
+# request comes from, come from the dashboard itself.
+DEFAULT_ORIGIN = "https://agents.reimake.com"
+
+
+def lib_allowed_origin():
+    return os.environ.get("AGENTDECK_ORIGIN") or DEFAULT_ORIGIN
+_LIB_ROW_KEYS = ("id", "name", "cwd", "created", "last_used", "archived")
+
+
+class LibError(Exception):
+    def __init__(self, code, msg):
+        super().__init__(msg)
+        self.code = code
+
+
+def lib_path():
+    return os.environ.get("AGENTDECK_LIBRARY") or library.LIB_FILE
+
+
+def lib_workdir():
+    """Where a new topic starts: $AGENTDECK_WORKDIR, else the folder above this
+    repo — the same default the launch-claude*.sh scripts use."""
+    return os.environ.get("AGENTDECK_WORKDIR") or os.path.dirname(_HERE)
+
+
+def lib_tmux(*args):
+    sock = os.environ.get("AGENTDECK_TMUX_SOCKET")
+    return subprocess.run(["tmux", *(["-L", sock] if sock else []), *args],
+                          capture_output=True, text=True)
+
+
+def lib_live():
+    """{id: {"attached": bool, "pane_pid": int|None}} for every cs-<id> session.
+    One tmux call; no running tmux server simply means nothing is loaded."""
+    r = lib_tmux("list-panes", "-a", "-F",
+                 "#{session_name}\t#{session_attached}\t#{pane_pid}")
+    live = {}
+    if r.returncode != 0:
+        return live
+    for line in r.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        sid = library.id_from_tmux(parts[0])
+        if sid is None or sid in live:          # not a library session / 2nd pane
+            continue
+        live[sid] = {"attached": parts[1] not in ("", "0"),
+                     "pane_pid": int(parts[2]) if parts[2].isdigit() else None}
+    return live
+
+
+def lib_last_output(name):
+    """Latest #{window_activity} (moves on pane output) of session `name`, by
+    exact name; None when unknown. list-windows + filtering, never
+    display-message (segfaults tmux 3.2a)."""
+    r = lib_tmux("list-windows", "-a", "-F", "#{session_name}\t#{window_activity}")
+    last = None
+    for line in r.stdout.splitlines() if r.returncode == 0 else []:
+        n, _, act = line.rpartition("\t")
+        if n == name and act.isdigit():
+            last = max(last or 0, int(act))
+    return last
+
+
+def lib_status(active, working):
+    """Same words as the terminal cards: off / idle / working."""
+    return "off" if not active else ("working" if working else "idle")
+
+
+def lib_rows(entries, live=None):
+    """Registry entries -> API rows with tmux state (samples CPU once for all)."""
+    live = lib_live() if live is None else live
+    working = sample_working({e["id"]: live[e["id"]]["pane_pid"]
+                              for e in entries if e["id"] in live})
+    rows = []
+    for e in entries:
+        row = {k: e.get(k) for k in _LIB_ROW_KEYS}
+        row["archived"] = bool(e.get("archived"))
+        info = live.get(e["id"])
+        row["active"] = info is not None
+        row["attached"] = bool(info and info["attached"])
+        row["status"] = lib_status(info is not None, working.get(e["id"], False))
+        rows.append(row)
+    return rows
+
+
+def lib_listing(include_archived=False):
+    lib = library.load(lib_path())
+    live = lib_live()
+    entries = library.display_order(lib, set(live), include_archived=include_archived)
+    return {"max_active": library.MAX_ACTIVE, "sessions": lib_rows(entries, live),
+            "_system": get_system_stats()}      # CPU/RAM for the top bar, same as GET /
+
+
+def lib_clean_name(v, required=False):
+    """Display name: whitespace runs (newlines too) -> one space, control chars
+    dropped (a name ends up in tmux/Telegram/logs), at most LIB_NAME_MAX chars."""
+    if v is None:
+        v = ""
+    if not isinstance(v, str):
+        raise LibError(400, "name must be a string")
+    v = "".join(ch for ch in " ".join(v.split()) if unicodedata.category(ch) != "Cc")
+    if len(v) > LIB_NAME_MAX:
+        raise LibError(400, f"name longer than {LIB_NAME_MAX} characters")
+    if required and not v:
+        raise LibError(400, "name is empty")
+    return v
+
+
+def lib_id(body):
+    sid = body.get("id")
+    if not library.valid_id(sid):
+        raise LibError(400, "invalid id")
+    return sid
+
+
+def lib_edit(sid, fn):
+    """Locked read-modify-write of one entry; unknown id -> 404, nothing saved."""
+    try:
+        with library.update(lib_path()) as lib:
+            e = fn(lib)
+    except KeyError:
+        raise LibError(404, "unknown id")
+    return lib_rows([e])[0]
+
+
+def lib_post(route, body):
+    if route == "new":
+        name = lib_clean_name(body.get("name"))
+        with library.update(lib_path()) as lib:
+            e = library.create(lib, name, cwd=lib_workdir(), now=int(time.time()))
+        return lib_rows([e], live={})[0]          # not started: nothing to ask tmux
+
+    sid = lib_id(body)
+    if route == "rename":
+        name = lib_clean_name(body.get("name"), required=True)
+        return lib_edit(sid, lambda lib: library.rename(lib, sid, name))
+    if route == "archive":
+        archived = body.get("archived", True)
+        if not isinstance(archived, bool):
+            raise LibError(400, "archived must be true or false")
+        return lib_edit(sid, lambda lib: library.archive(lib, sid, archived))
+    if route == "close":
+        force = body.get("force", False)
+        if not isinstance(force, bool):
+            raise LibError(400, "force must be true or false")
+        e = library.find(library.load(lib_path()), sid)
+        if e is None:
+            raise LibError(404, "unknown id")
+        name = library.tmux_name(sid)
+        info = lib_live().get(sid)
+        if info is not None and not force:
+            if info["attached"]:
+                raise LibError(409, "the topic is open in a browser/terminal right now; "
+                                    "send force=true to unload it anyway")
+            last = lib_last_output(name)
+            if last is None or time.time() - last < CLOSE_QUIET_SECONDS:
+                raise LibError(409, f"the topic printed output in the last "
+                                    f"{CLOSE_QUIET_SECONDS // 60} min (it may be working); "
+                                    "send force=true to unload it anyway")
+        killed = lib_tmux("kill-session", "-t", "=" + name).returncode == 0
+        row = lib_rows([e])[0]
+        row["killed"] = killed
+        return row
+    raise LibError(404, "not found")
+
+
 class Handler(BaseHTTPRequestHandler):
+    def _route(self):
+        return urlparse(getattr(self, "path", "/")).path.rstrip("/") or "/"
+
+    def _lib_json(self, code, data):
+        # same-origin only: no Access-Control-Allow-Origin on library responses
+        self._json_response(code, data, cors=False)
+
+    def _library_get(self):
+        if self._route() != LIB_ROUTE:
+            return self._lib_json(404, {"error": "not found"})
+        qs = parse_qs(urlparse(self.path).query)
+        include = qs.get("archived", [""])[0].lower() in ("1", "true", "yes")
+        try:
+            self._lib_json(200, lib_listing(include_archived=include))
+        except Exception as e:
+            self._lib_json(500, {"error": str(e)[:200]})
+
+    def _library_post(self):
+        route = self._route()
+        if not route.startswith(LIB_ROUTE + "/"):
+            return self._lib_json(404, {"error": "not found"})
+        try:
+            ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+            if ctype != "application/json":
+                raise LibError(415, "Content-Type must be application/json")
+            origin = self.headers.get("Origin")
+            if origin is not None and origin != lib_allowed_origin():
+                raise LibError(403, "cross-origin request refused")
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            if length > LIB_BODY_MAX:
+                raise LibError(413, "body too large")
+            raw = self.rfile.read(length) if length > 0 else b""
+            try:
+                body = json.loads(raw) if raw.strip() else {}
+            except ValueError:
+                raise LibError(400, "body is not JSON")
+            if not isinstance(body, dict):
+                raise LibError(400, "body must be a JSON object")
+            self._lib_json(200, lib_post(route[len(LIB_ROUTE) + 1:], body))
+        except LibError as e:
+            self._lib_json(e.code, {"error": str(e)})
+        except Exception as e:
+            self._lib_json(500, {"error": str(e)[:200]})
+
+    def _is_library(self):
+        r = self._route()
+        return r == LIB_ROUTE or r.startswith(LIB_ROUTE + "/")
+
     def do_GET(self):
+        if self._is_library():
+            return self._library_get()
         if (urlparse(getattr(self, "path", "/")).path.rstrip("/") or "/") == "/telegram":
             body = tg_render().encode("utf-8")
             self.send_response(200)
@@ -401,16 +664,10 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 continue
 
-            children = get_child_pids(pane_pid)
-            ticks = read_cpu_ticks(pane_pid)
-            for cpid in children:
-                ticks += read_cpu_ticks(cpid)
-                for gpid in get_child_pids(cpid):
-                    ticks += read_cpu_ticks(gpid)
             session_data[sid] = {
                 "active": True,
                 "pane_pid": pane_pid,
-                "ticks1": ticks,
+                "ticks1": tree_cpu_ticks(pane_pid),
                 "auto_project": auto_project,
                 "auto_task": auto_task,
             }
@@ -428,14 +685,7 @@ class Handler(BaseHTTPRequestHandler):
             working = False
 
             if "pane_pid" in data:
-                ticks2 = read_cpu_ticks(data["pane_pid"])
-                children = get_child_pids(data["pane_pid"])
-                for cpid in children:
-                    ticks2 += read_cpu_ticks(cpid)
-                    for gpid in get_child_pids(cpid):
-                        ticks2 += read_cpu_ticks(gpid)
-                cpu_delta = ticks2 - data["ticks1"]
-                working = cpu_delta > CPU_TICK_THRESHOLD
+                working = is_working(data["ticks1"], tree_cpu_ticks(data["pane_pid"]))
 
             auto_proj = data.get("auto_project", "")
             auto_task = data.get("auto_task", "")
@@ -508,6 +758,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(out)
 
     def do_POST(self):
+        if self._is_library():
+            return self._library_post()
         if (urlparse(getattr(self, "path", "/")).path.rstrip("/") or "/") == "/telegram":
             return self._telegram_post()
         length = int(self.headers.get("Content-Length", 0))
@@ -613,16 +865,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
+        if self._is_library():        # no CORS preflight for the library API
+            self.end_headers()
+            return
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
-    def _json_response(self, code, data):
+    def _json_response(self, code, data, cors=True):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        if cors:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
 
@@ -662,14 +918,25 @@ class BufferHandler(BaseHTTPRequestHandler):
 
 # the actually-served dashboard file (the old ../agents/index.html was archived,
 # so page-version was stuck at "0" and live-reload never fired)
-WATCH_FILE = os.path.join(os.path.dirname(__file__), "web", "index.html")
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+WATCH_FILE = os.path.join(WEB_DIR, "index.html")   # kept for callers of the old name
+# pages that poll /api/page-version, by the file name the browser shows in Referer;
+# anything else (/, unknown names) watches index.html
+WATCHED_PAGES = ("index.html", "index-lib.html")
+
+
+def watch_file_for(referer):
+    """The page file whose mtime is this page's version: the library page is
+    served from web/index-lib.html, so edits to it must reload it too."""
+    page = os.path.basename(urlparse(referer or "").path)
+    return os.path.join(WEB_DIR, page if page in WATCHED_PAGES else "index.html")
 
 
 class LiveHandler(BaseHTTPRequestHandler):
-    """Returns mtime of agents page for live-reload."""
+    """Returns mtime of the page that asks (Referer) for live-reload."""
     def do_GET(self):
         try:
-            mtime = os.path.getmtime(WATCH_FILE)
+            mtime = os.path.getmtime(watch_file_for(self.headers.get("Referer")))
         except OSError:
             mtime = 0
         self.send_response(200)

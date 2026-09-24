@@ -1,16 +1,31 @@
 #!/usr/bin/env python3
 """Telegram ↔ tmux terminal bridge.
 
-Relays between a Telegram chat (owner only) and the agent tmux sessions
-(claude-terminal[-N]):
+Relays between a Telegram chat (owner only) and the agent tmux sessions — the
+session library's topics (tmux cs-<id>, see library.py) and, during the move to
+the library, the old numbered claude-terminal[-N] slots:
 
-  - a plain text message is typed into the *current* terminal (tmux send-keys),
-    then the bot streams progress and posts the agent's reply;
-  - /use [N]      — pick the current terminal (1-8); no N → button menu
+  - a plain text message is typed into the *current* topic (tmux send-keys),
+    then the bot streams progress and posts the agent's reply; before typing,
+    `library_cli.py ensure <id>` loads the topic if it was unloaded;
+  - /use <text>   — pick the current topic by a part of its name or its id
+                    (library.resolve; several matches → buttons); no text →
+                    button menu. `/use N` (a legacy slot number) still works as
+                    the transition fallback: the topic migrated from slot N
+                    (even an archived one — then it refuses), else the old
+                    claude-terminal-N. A migrated slot's old launch script is
+                    never run again (it would be a 2nd Claude on one uuid).
+  - owner text is typed only when the pane runs Claude
+    (`library_cli.py pane-is-claude`, or pane_current_command for a legacy
+    terminal), with exact tmux targets (=name / =name:) and `send-keys -l --`.
+  - /new <name>   — create a topic, select it and load it
+  - /list         — topics, loaded ones first, + which is current
   - /read         — re-read the current terminal screen now
   - /esc          — interrupt the agent (Escape ×2)
   - /enter        — send a bare Enter
-  - /list         — show agents + which is current
+
+The current selection is stored per chat as the topic id (8 hex), or as the
+slot number for a legacy terminal.
 
 Design (see plan reflective-sauteeing-anchor):
   - the agent's REPLY TEXT (live + final) is read from the session transcript
@@ -29,11 +44,14 @@ import mimetypes
 import os
 import re
 import subprocess
+import sys
 import time
 import urllib.request
 import uuid as _uuid
 
 import status_server as ss  # same dir: SESSIONS, strip_ansi, is_junk
+import library              # topic registry (.sessions/library.json)
+import library_cli          # tmux socket choice, transcript path of a topic
 
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
@@ -79,15 +97,33 @@ WHISPER_SCRIPT = os.path.join(GATE_DIR, "whisper_transcribe.py")
 # ── tmux helpers ──────────────────────────────────────────────────────────
 
 def _tmux(*args) -> subprocess.CompletedProcess:
-    return subprocess.run(["tmux", *args], capture_output=True, text=True)
+    # AGENTDECK_TMUX_SOCKET → `tmux -L <name>`, the same server library_cli uses
+    # (tests run on their own server and never reach the live one)
+    return subprocess.run(library_cli.tmux_argv(*args), capture_output=True, text=True)
 
 
 def session_for(agent_id) -> str | None:
-    return SESSIONS.get(str(agent_id))
+    """tmux session of a selection: a topic id → cs-<id>; a slot number → the
+    legacy claude-terminal-N; anything else → None."""
+    key = str(agent_id)
+    if library.valid_id(key):
+        return library.tmux_name(key)
+    return SESSIONS.get(key)
+
+
+# Exact targets: a bare "-t cs-aaaa1111" also matches cs-aaaa1111x (tmux falls
+# back to a prefix match), which once typed a message into the wrong terminal.
+# "=name" pins the session; pane commands need "=name:" (session:window).
+def _exact(session: str) -> str:
+    return "=" + session
+
+
+def _pane(session: str) -> str:
+    return "=" + session + ":"
 
 
 def has_session(session: str) -> bool:
-    return _tmux("has-session", "-t", session).returncode == 0
+    return _tmux("has-session", "-t", _exact(session)).returncode == 0
 
 
 def _enable_in_dashboard(aid: str) -> None:
@@ -118,6 +154,11 @@ def start_session(aid: str) -> tuple[bool, str]:
     session = SESSIONS.get(aid)
     if not session:
         return False, f"no terminal #{aid}"
+    e = migrated_topic(aid)
+    if e is not None:
+        # its conversation now lives in the library: the old launch script would
+        # start a SECOND Claude on the same uuid
+        return False, f"слот #{aid} переехал в тему {topic_label(e)} — старый терминал не запускаю"
     if has_session(session):
         return True, "already running"
     script = "launch-claude.sh" if str(aid) == "1" else f"launch-claude-{aid}.sh"
@@ -134,11 +175,11 @@ def start_session(aid: str) -> tuple[bool, str]:
         return False, f"could not resolve the launch command for #{aid}"
     _tmux("new-session", "-d", "-s", session, "-c",
           os.environ.get("TG_AGENT_CWD", "/home/ubuntu/pr"))
-    _tmux("set", "-t", session, "mouse", "on")
+    _tmux("set", "-t", _exact(session), "mouse", "on")
     time.sleep(0.3)
-    _tmux("send-keys", "-t", session, "-l", cmd)
+    _tmux("send-keys", "-t", _pane(session), "-l", "--", cmd)
     time.sleep(0.3)
-    _tmux("send-keys", "-t", session, "Enter")
+    _tmux("send-keys", "-t", _pane(session), "Enter")
     return True, f"started #{aid}"
 
 
@@ -146,30 +187,248 @@ def send_text(session: str, text: str) -> None:
     # Ctrl+U clears the input line first: after an Esc-cancel the TUI can restore
     # the previous command into the box, and without this the new text sticks to
     # it ("…old commandnew message"). C-u on an empty box is a harmless no-op.
-    _tmux("send-keys", "-t", session, "C-u")
+    _tmux("send-keys", "-t", _pane(session), "C-u")
     time.sleep(0.1)
     # -l = literal (don't interpret as key names). The TUI debounces pasted
     # input, so a brief pause before Enter is REQUIRED or the Enter is swallowed
     # and the text just sits in the input box, never submitted.
-    _tmux("send-keys", "-t", session, "-l", text)
+    # "--" ends the options: a message starting with "-" is text, not a flag.
+    _tmux("send-keys", "-t", _pane(session), "-l", "--", text)
     time.sleep(0.4)
-    _tmux("send-keys", "-t", session, "Enter")
+    _tmux("send-keys", "-t", _pane(session), "Enter")
 
 
 def send_key(session: str, key: str) -> None:
-    _tmux("send-keys", "-t", session, key)
+    _tmux("send-keys", "-t", _pane(session), key)
 
 
 def capture(session: str, lines: int = 200) -> str:
-    r = _tmux("capture-pane", "-pt", session, "-S", f"-{lines}")
+    r = _tmux("capture-pane", "-pt", _pane(session), "-S", f"-{lines}")
     return r.stdout if r.returncode == 0 else ""
 
 
 def visible(session: str) -> str:
     """Only the currently visible screen (no scrollback) — an ACTIVE menu and the
     'working' spinner always live here, so detection never matches stale history."""
-    r = _tmux("capture-pane", "-pt", session)
+    r = _tmux("capture-pane", "-pt", _pane(session))
     return r.stdout if r.returncode == 0 else ""
+
+
+# the foreground command of a pane running Claude Code: "claude" (the process
+# name), or its version when Claude sets the process title to it ("2.1.87")
+_CLAUDE_CMD = re.compile(r"claude|\d+\.\d+\.\d+")
+
+
+def is_claude_command(cmd) -> bool:
+    return isinstance(cmd, str) and bool(_CLAUDE_CMD.fullmatch(cmd.strip()))
+
+
+def legacy_pane_command(session: str) -> str | None:
+    """#{pane_current_command} of a session's first pane, by exact name.
+    list-panes -a + filtering here, never display-message (it segfaults tmux
+    3.2a on a target that has just vanished)."""
+    r = _tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}")
+    if r.returncode != 0:
+        return None
+    for line in r.stdout.splitlines():
+        name, _, cmd = line.partition("\t")
+        if name == session:
+            return cmd
+    return None
+
+
+# ── session library: topics instead of numbered slots ─────────────────────────
+#
+# A topic is one Claude conversation, known by its id (8 hex = the start of the
+# Claude uuid); it runs in tmux as cs-<id> when loaded. Loading/unloading is
+# library_cli.py's job (it keeps at most library.MAX_ACTIVE loaded and never
+# unloads a working or watched one) — the bridge only asks it.
+
+LIBRARY_CLI = os.path.join(GATE_DIR, "library_cli.py")
+NEED_PICK = "Сначала выберите тему: /use <часть имени или код> · /list · /new <имя>"
+TOPIC_NAME_MAX = 100       # a topic name typed in /new
+TOPIC_BUTTONS_MAX = 24     # topic buttons in one /use picker
+READY_TIMEOUT = 45         # s to wait for a just-loaded Claude to draw its screen
+_fresh: dict[str, float] = {}   # cs-<id> → monotonic time the bridge loaded it
+
+_CTRL_NL = re.compile(r"[\x00-\x09\x0b-\x1f\x7f-\x9f]")   # control chars except \n
+_TUI_MARKERS = ("bypass permissions", "shift+tab", "esc to interrupt", "? for shortcuts")
+
+
+def _lib_file() -> str:
+    return os.environ.get("AGENTDECK_LIBRARY") or library.LIB_FILE
+
+
+def _load_lib() -> dict:
+    return library.load(_lib_file())
+
+
+def _clip(text: str, n: int = 600) -> str:
+    return _CTRL_NL.sub("", str(text or "")).strip()[:n]
+
+
+def is_topic(key) -> bool:
+    return library.valid_id(str(key or ""))
+
+
+def topic_entry(sid: str, include_archived: bool = False) -> dict | None:
+    if not is_topic(sid):
+        return None
+    e = library.find(_load_lib(), sid)
+    if e is None or (e.get("archived") and not include_archived):
+        return None
+    return e
+
+
+def topic_label(e: dict) -> str:
+    """cs-<id> «name» — the form used in logs and library_cli's messages."""
+    name = _clip(e.get("name", ""), 60).replace("\n", " ")
+    return f"{library.tmux_name(e['id'])} «{name}»"
+
+
+def target_label(key) -> str:
+    key = str(key or "")
+    if is_topic(key):
+        e = topic_entry(key, include_archived=True)
+        return topic_label(e) if e else library.tmux_name(key)
+    return f"#{key}"
+
+
+def migrated_topic(slot: str) -> dict | None:
+    """The topic migrated from legacy slot N (library.migrate_from_slots sets
+    `legacy_slot`), archived ones included: once a slot has moved into the
+    library, its old launch script must never run again (a second Claude on the
+    same conversation), so `/use N` goes to the topic or refuses."""
+    try:
+        rows = _load_lib()["sessions"]
+    except (OSError, ValueError, KeyError):
+        return None
+    for e in rows:
+        if str(e.get("legacy_slot", "")) == str(slot) and is_topic(e.get("id")):
+            return e
+    return None
+
+
+def topic_transcript(sid: str) -> str | None:
+    e = topic_entry(sid, include_archived=True)
+    if e is None:
+        return None
+    try:
+        _, u = library_cli.checked_entry(e)
+    except ValueError:
+        return None
+    return library_cli.transcript_path(os.path.expanduser("~"), library_cli.effective_cwd(e), u)
+
+
+def run_library_cli(*args, timeout: int = 60) -> subprocess.CompletedProcess:
+    # always called off the event loop (asyncio.to_thread) and always bounded
+    return subprocess.run([sys.executable, LIBRARY_CLI, *args],
+                          capture_output=True, text=True, timeout=timeout)
+
+
+ENSURE_ELSEWHERE = 4
+
+
+def ensure_topic(sid: str) -> tuple[int, str]:
+    """`library_cli.py ensure <id>` → (exit code, its message). 0 = running now
+    (the message may say which idle topic was unloaded to make room); 2 = no such
+    topic / archived; 3 = every loaded topic is busy, nothing could be unloaded;
+    4 = this conversation already runs elsewhere (refused: never two Claudes on
+    one conversation)."""
+    try:
+        r = run_library_cli("ensure", sid, timeout=60)
+    except (OSError, subprocess.SubprocessError) as ex:
+        return 1, f"library_cli не отработал: {ex}"
+    msg = _clip(r.stderr)
+    if r.returncode == ENSURE_ELSEWHERE:
+        msg = ("эта переписка уже открыта в другом месте (другой терминал) — второй "
+               "Claude на ней не запускаю, сообщение не отправлено. Закройте её там "
+               "или пишите туда." + (f"\n({msg})" if msg else ""))
+    return r.returncode, msg
+
+
+def pane_is_claude(sid, session: str) -> bool:
+    """Is Claude the program in the pane right now? Owner text is typed only
+    then — into a shell it would run as commands. A topic asks
+    `library_cli.py pane-is-claude <id>` (exit 0 = yes); a legacy terminal is
+    checked by its pane_current_command. Anything unclear = no."""
+    if is_topic(sid):
+        try:
+            return run_library_cli("pane-is-claude", str(sid), timeout=15).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+    try:
+        return is_claude_command(legacy_pane_command(session))
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def loaded_topics() -> dict | None:
+    """id → {attached, working, last_output} of the loaded topics, from
+    `library_cli.py active`; None when that could not be found out."""
+    try:
+        r = run_library_cli("active", timeout=15)
+        if r.returncode != 0:
+            return None
+        rows = json.loads(r.stdout or "[]")
+        return {x["id"]: x for x in rows if isinstance(x, dict) and is_topic(x.get("id"))}
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return None
+
+
+def tui_ready(pane: str) -> bool:
+    """True once Claude's TUI is on screen (status bar, spinner or a question) —
+    not while the shell is still echoing the launch command."""
+    low = ss.strip_ansi(pane or "").lower()
+    return any(m in low for m in _TUI_MARKERS + _MENU_MARKERS)
+
+
+async def _ready_sleep(s: float) -> None:
+    await asyncio.sleep(s)
+
+
+async def _wait_ready(session: str, timeout: float | None = None) -> bool:
+    """A topic the bridge just loaded needs a few seconds before keystrokes
+    reach Claude (typed earlier, they land in the shell). No-op otherwise.
+    False = Claude never came up: the caller must NOT send."""
+    timeout = READY_TIMEOUT if timeout is None else timeout
+    t0 = _fresh.get(session)
+    if t0 is None:
+        return True
+    while True:
+        if tui_ready(await asyncio.to_thread(visible, session)):
+            _fresh.pop(session, None)
+            return True
+        if time.monotonic() - t0 >= timeout:
+            _fresh.pop(session, None)
+            log.info("READY-TIMEOUT %s — not sending", session)
+            return False
+        await _ready_sleep(0.5)
+
+
+async def _load_topic(sid: str) -> tuple[str | None, str]:
+    """Make sure the topic runs: (cs-<id>, notice) or (None, why not)."""
+    name = library.tmux_name(sid)
+    was = await asyncio.to_thread(has_session, name)
+    code, msg = await asyncio.to_thread(ensure_topic, sid)
+    if code != 0:
+        log.info("ENSURE %s -> exit %s: %s", name, code, msg[:200])
+        return None, msg or f"library_cli ensure: код {code}"
+    if not was:
+        _fresh[name] = time.monotonic()
+    return name, msg
+
+
+def resolve_current(chat_id: int) -> str | None:
+    """The chat's selection; a legacy slot that has since been migrated into a
+    topic is switched to that topic (and saved)."""
+    cur = get_current(chat_id)
+    if cur and not is_topic(cur):
+        e = migrated_topic(cur)     # archived too: ensure then refuses, never the old slot
+        if e is not None:
+            set_current(chat_id, e["id"])
+            return e["id"]
+    return cur
 
 
 # ── conversation logging (so the exact bytes the user sees are recorded) ─────
@@ -344,7 +603,10 @@ _SID_RE = re.compile(r'AGENT_SESSION_ID="([^"]+)"')
 
 
 def transcript_path(aid: str) -> str | None:
-    """The session transcript .jsonl for an agent (uuid from its launch script)."""
+    """The session transcript .jsonl: a topic's from the registry (uuid + cwd),
+    a legacy agent's from its launch script."""
+    if is_topic(aid):
+        return topic_transcript(str(aid))
     script = "launch-claude.sh" if str(aid) == "1" else f"launch-claude-{aid}.sh"
     try:
         text = open(os.path.join(GATE_DIR, script)).read()
@@ -934,20 +1196,45 @@ async def stream_live(message, session: str, path: str | None, baseline: set[str
 
 # ── Telegram handlers ─────────────────────────────────────────────────────
 
+def _running_legacy() -> list[str]:
+    """Legacy slot numbers whose claude-terminal-N still runs (until migration)."""
+    return [aid for aid in sorted(SESSIONS, key=int) if has_session(SESSIONS[aid])]
+
+
 def _agents_overview(chat_id: int) -> str:
-    cur = get_current(chat_id)
-    rows = []
-    for aid in sorted(SESSIONS, key=int):
-        s = SESSIONS[aid]
-        alive = "🟢" if has_session(s) else "⚪️"
-        mark = " ← current" if aid == cur else ""
-        rows.append(f"{alive} #{aid} ({s}){mark}")
-    head = f"Current terminal: #{cur}" if cur else "No terminal selected — /use N"
-    return head + "\n\n" + "\n".join(rows)
+    """/list: topics (loaded first, each group most recent first), then the
+    legacy terminals that still run."""
+    cur = resolve_current(chat_id)
+    live = loaded_topics()
+    act = live or {}
+    rows = library.display_order(_load_lib(), set(act))
+    lines = [f"Текущая: {target_label(cur)}" if cur else NEED_PICK, ""]
+    if live is None:
+        lines.append("⚠️ не удалось узнать, какие темы загружены (library_cli active) — "
+                     "все показаны как выгруженные")
+    if rows:
+        lines.append("Темы (🟢 загружена · ⚪️ выгружена · ⚙️ работает):")
+        for e in rows:
+            s = act.get(e["id"])
+            name = _clip(e.get("name", ""), 60).replace("\n", " ")
+            lines.append(f"{'🟢' if s else '⚪️'} «{name}» · {e['id']}"
+                         f"{' ⚙️' if s and s.get('working') else ''}"
+                         f"{' ← текущая' if e['id'] == cur else ''}")
+    else:
+        lines.append("Тем пока нет — /new <имя>")
+    legacy = _running_legacy()
+    if legacy:
+        lines += ["", "Старые терминалы (до переезда, /use N):"]
+        lines += [f"🟢 #{aid} ({SESSIONS[aid]}){' ← текущий' if aid == cur else ''}"
+                  for aid in legacy]
+    return "\n".join(lines)
 
 
 async def cmd_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(_agents_overview(update.effective_chat.id))
+    # library_cli active + tmux queries: off the event loop
+    text = await asyncio.to_thread(_agents_overview, update.effective_chat.id)
+    for part in chunk(text):
+        await update.message.reply_text(part)
 
 
 def _agent_labels() -> dict:
@@ -966,17 +1253,34 @@ def _button_text(aid: str, alive: bool, label: str) -> str:
     return f"{dot} #{aid}" + (f" · {label}" if label else "")
 
 
-def _use_keyboard() -> InlineKeyboardMarkup:
-    labels = _agent_labels()
-    rows, row = [], []
-    for aid in sorted(SESSIONS, key=int):
-        text = _button_text(aid, has_session(SESSIONS[aid]), labels.get(aid, ""))
-        row.append(InlineKeyboardButton(text, callback_data=f"use:{aid}"))
-        if len(row) == 2:
-            rows.append(row); row = []
-    if row:
-        rows.append(row)
+def _topic_button(e: dict, state: dict | None) -> InlineKeyboardButton:
+    dot = "🟢" if state else "⚪️"
+    name = _clip(e.get("name", ""), 28).replace("\n", " ")
+    return InlineKeyboardButton(f"{dot} {name} · {e['id']}", callback_data=f"use:{e['id']}")
+
+
+def _topics_keyboard(entries: list[dict], with_legacy: bool = False) -> InlineKeyboardMarkup:
+    """One button per topic (loaded first, then most recent), then — for the
+    plain /use picker — the legacy terminals that still run, two per row."""
+    act = loaded_topics() or {}
+    order = library.display_order({"sessions": entries}, set(act))[:TOPIC_BUTTONS_MAX]
+    rows = [[_topic_button(e, act.get(e["id"]))] for e in order]
+    if with_legacy:
+        legacy = _running_legacy()
+        labels = _agent_labels() if legacy else {}
+        row = []
+        for aid in legacy:
+            row.append(InlineKeyboardButton(_button_text(aid, True, labels.get(aid, "")),
+                                            callback_data=f"use:{aid}"))
+            if len(row) == 2:
+                rows.append(row); row = []
+        if row:
+            rows.append(row)
     return InlineKeyboardMarkup(rows)
+
+
+def _use_keyboard() -> InlineKeyboardMarkup:
+    return _topics_keyboard(_load_lib()["sessions"], with_legacy=True)
 
 
 async def _apply_use(chat_id: int, aid: str) -> str:
@@ -990,17 +1294,76 @@ async def _apply_use(chat_id: int, aid: str) -> str:
                    else f"\n⚠️ couldn't start: {msg}")
 
 
+async def _apply_topic(chat_id: int, e: dict) -> str:
+    """Select a topic (stored by id) and load it now, so Claude is up by the
+    time the first message arrives. A refusal keeps the selection: the next
+    message asks library_cli again."""
+    sid = e["id"]
+    set_current(chat_id, sid)
+    head = f"✅ Текущая тема: {topic_label(e)}"
+    name, msg = await _load_topic(sid)
+    if name is None:
+        return head + f"\n⚠️ не загрузилась: {msg}\nСледующее сообщение попробует снова."
+    out = head + ("\n▶️ была выгружена — загружаю…" if name in _fresh else "")
+    return out + (f"\nℹ️ {msg}" if msg else "")
+
+
+async def _use_number(chat_id: int, aid: str) -> str:
+    """`/use N` during the transition: the topic migrated from slot N if there
+    is one, else the old claude-terminal-N."""
+    e = migrated_topic(aid)
+    if e is not None:
+        if e.get("archived"):
+            # never fall back to the old launch script: it would start a second
+            # Claude on this very conversation
+            return (f"Слот #{aid} переехал в тему {topic_label(e)}, а она в архиве — "
+                    "верните её из архива на странице библиотеки. Старый терминал "
+                    "не запускаю (это был бы второй Claude на той же переписке).")
+        return await _apply_topic(chat_id, e)
+    return await _apply_use(chat_id, aid)
+
+
 async def cmd_use(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if ctx.args:
-        aid = ctx.args[0].lstrip("#")
-        if aid not in SESSIONS:
-            await update.message.reply_text(f"No terminal #{aid}. Available: {', '.join(sorted(SESSIONS, key=int))}")
-            return
-        await update.message.reply_text(await _apply_use(update.effective_chat.id, aid))
+    chat_id = update.effective_chat.id
+    query = " ".join(ctx.args or []).strip()
+    if not query:
+        cur = resolve_current(chat_id)
+        head = f"Сейчас: {target_label(cur)}. Выберите тему:" if cur else "Выберите тему:"
+        kb = await asyncio.to_thread(_use_keyboard)
+        await update.message.reply_text(head, reply_markup=kb)
         return
-    cur = get_current(update.effective_chat.id)
-    head = (f"Current: #{cur}. Pick a terminal:" if cur else "Pick a terminal:")
-    await update.message.reply_text(head, reply_markup=_use_keyboard())
+    # a bare legacy slot number is the old form: numbers are too common in topic
+    # names ("Налоги 2026") for name search to be the first reading of "/use 6"
+    num = query.lstrip("#")
+    if num in SESSIONS:
+        await update.message.reply_text(await _use_number(chat_id, num))
+        return
+    hits = library.resolve(_load_lib(), query)
+    if not hits:
+        await update.message.reply_text(
+            f"Темы «{_clip(query, 60)}» нет (или она в архиве). "
+            "Все темы: /list · новая: /new <имя>")
+        return
+    if len(hits) == 1:
+        await update.message.reply_text(await _apply_topic(chat_id, hits[0]))
+        return
+    kb = await asyncio.to_thread(_topics_keyboard, hits)
+    await update.message.reply_text(f"Нашлось тем: {len(hits)}. Какую?", reply_markup=kb)
+
+
+async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/new <name> — create a topic (name optional: a dated default), select it
+    and load it. It starts where the dashboard's «＋ Новая тема» starts one."""
+    name = _CTRL_NL.sub("", " ".join(ctx.args or [])).replace("\n", " ").strip()[:TOPIC_NAME_MAX]
+    cwd = os.environ.get("AGENTDECK_WORKDIR") or os.path.dirname(GATE_DIR)
+    try:
+        with library.update(_lib_file()) as lib:
+            e = dict(library.create(lib, name, cwd=cwd, now=int(time.time())))
+    except (OSError, ValueError) as ex:
+        await update.message.reply_text(f"⚠️ не удалось создать тему: {_clip(ex, 200)}")
+        return
+    log.info("NEW %s", topic_label(e))
+    await update.message.reply_text("🆕 " + await _apply_topic(update.effective_chat.id, e))
 
 
 async def on_use_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1008,10 +1371,16 @@ async def on_use_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await q.answer("no access"); return
     await q.answer()
-    aid = q.data.split(":", 1)[1]
-    if aid not in SESSIONS:
+    key = q.data.split(":", 1)[1]
+    if is_topic(key):
+        e = topic_entry(key)
+        if e is None:
+            await q.edit_message_text("Такой темы нет (или она в архиве) — /list"); return
+        await q.edit_message_text(await _apply_topic(q.message.chat_id, e))
+        return
+    if key not in SESSIONS:
         await q.edit_message_text("No such terminal"); return
-    await q.edit_message_text(await _apply_use(q.message.chat_id, aid))
+    await q.edit_message_text(await _use_number(q.message.chat_id, key))
 
 
 async def on_menu_select_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1021,7 +1390,7 @@ async def on_menu_select_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.answer("no access"); return
     _, aid, num = q.data.split(":")
     target = int(num)
-    session = SESSIONS.get(aid)
+    session = session_for(aid)
     if not session or not has_session(session):
         await q.answer("terminal unavailable"); return
     menu = parse_menu(visible(session))      # re-parse NOW (state may have changed)
@@ -1047,7 +1416,7 @@ async def on_menu_select_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.4)
             if not parse_menu(visible(session)):
                 break
-        msg = await ctx.bot.send_message(q.message.chat_id, f"➡️ #{aid}: …")
+        msg = await ctx.bot.send_message(q.message.chat_id, f"➡️ {target_label(aid)}: …")
         await stream_live(msg, session, path, baseline, aid=aid,
                           user_text="answered Claude's questions")
 
@@ -1060,7 +1429,7 @@ async def on_menu_chat_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await q.answer("no access"); return
     aid = q.data.split(":", 1)[1]
-    session = SESSIONS.get(aid)
+    session = session_for(aid)
     if not session or not has_session(session):
         await q.answer("terminal unavailable"); return
     if not parse_menu(visible(session)):
@@ -1079,7 +1448,7 @@ async def on_menu_chat_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await asyncio.sleep(0.4)
             if not parse_menu(visible(session)):
                 break
-        msg = await ctx.bot.send_message(q.message.chat_id, f"➡️ #{aid}: …")
+        msg = await ctx.bot.send_message(q.message.chat_id, f"➡️ {target_label(aid)}: …")
         await stream_live(msg, session, path, baseline, aid=aid,
                           user_text="declined the question to chat")
 
@@ -1087,7 +1456,10 @@ async def on_menu_chat_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_read(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = _require_session(update)
     if not s:
-        await update.message.reply_text("Pick a terminal first: /use N"); return
+        await update.message.reply_text(NEED_PICK); return
+    if not has_session(s):
+        await update.message.reply_text(
+            f"⚪️ {s} не загружен — пришлите сообщение (или /use), и тема загрузится"); return
     text = clean_pane(capture(s)) or "(empty)"
     for part in chunk(text):
         await update.message.reply_text(part)
@@ -1096,7 +1468,7 @@ async def cmd_read(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_esc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = _require_session(update)
     if not s:
-        await update.message.reply_text("Pick a terminal first: /use N"); return
+        await update.message.reply_text(NEED_PICK); return
     log.info("ESC ×2 -> %s", s)
     for _ in range(2):
         send_key(s, "Escape")
@@ -1109,7 +1481,7 @@ async def cmd_esc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = _require_session(update)
     if not s:
-        await update.message.reply_text("Pick a terminal first: /use N"); return
+        await update.message.reply_text(NEED_PICK); return
     send_key(s, "Enter")
     await update.message.reply_text("⏎ Enter sent")
 
@@ -1117,19 +1489,27 @@ async def cmd_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cmd_compact(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = _require_session(update)
     if not s:
-        await update.message.reply_text("Pick a terminal first: /use N"); return
+        await update.message.reply_text(NEED_PICK); return
     if not has_session(s):
         await update.message.reply_text("⚠️ terminal isn't running"); return
+    cur = resolve_current(update.effective_chat.id)
+    if not await asyncio.to_thread(pane_is_claude, cur, s):
+        await update.message.reply_text(_not_claude_text(target_label(cur))); return
     log.info("COMPACT -> %s", s)
     await asyncio.to_thread(send_text, s, "/compact")
     await update.message.reply_text("🗜 /compact sent")
 
 
+def _not_claude_text(label: str) -> str:
+    return (f"⚠️ {label}: в терминале сейчас не Claude (например, голая оболочка) — "
+            "текст НЕ отправлен, иначе он выполнился бы как команды. Посмотрите /read.")
+
+
 def _require_session(update: Update) -> str | None:
-    cur = get_current(update.effective_chat.id)
+    cur = resolve_current(update.effective_chat.id)
     if not cur:
         return None
-    return SESSIONS.get(cur)
+    return session_for(cur)
 
 
 async def _answer_freeform(session: str, menu: dict, text: str) -> bool:
@@ -1223,16 +1603,40 @@ async def _deliver_to_terminal(reply_to, chat_id: int, text: str) -> None:
     sent while the agent is still working reaches the terminal right away."""
     if not text:
         return
-    cur = get_current(chat_id)
+    cur = resolve_current(chat_id)
     if not cur:
-        await reply_to.reply_text("Pick a terminal first: /use N"); return
-    session = SESSIONS[cur]
-    if not has_session(session):
-        await reply_to.reply_text(f"⚠️ Terminal #{cur} isn't running (no tmux session)."); return
-    _convo("IN", text, f"chat={chat_id} #{cur}")
-    placeholder = await reply_to.reply_text(f"➡️ #{cur}: …")
+        await reply_to.reply_text(NEED_PICK); return
+    label = target_label(cur)
+    if is_topic(cur):
+        # a topic: library_cli loads it if it was unloaded (or refuses when every
+        # loaded topic is busy) — keystrokes go to cs-<id> only after that
+        session, note = await _load_topic(cur)
+        if session is None:
+            await reply_to.reply_text(f"⚠️ {label}: {note}"); return
+        if note:
+            await reply_to.reply_text(f"ℹ️ {note}")
+    else:
+        session = SESSIONS.get(cur)
+        if not session:
+            await reply_to.reply_text(NEED_PICK); return
+        if not has_session(session):
+            await reply_to.reply_text(f"⚠️ Terminal #{cur} isn't running (no tmux session)."); return
+    _convo("IN", text, f"chat={chat_id} {label}")
+    starting = time.monotonic() - _fresh.get(session, float("-inf")) < READY_TIMEOUT
+    placeholder = await reply_to.reply_text(f"➡️ {label}: …" + ("\n▶️ загружаю тему…" if starting else ""))
+    if not await _wait_ready(session):    # no-op unless the bridge just loaded it
+        await _safe_edit(placeholder,
+                         f"⚠️ {label}: Claude не поднялся за {READY_TIMEOUT} с — сообщение "
+                         "не отправлено (иначе оно ушло бы в оболочку). Посмотрите /read "
+                         "и пришлите ещё раз.")
+        return
     path = transcript_path(cur)
     async with lock_for(session):
+        # the last look before typing: only into Claude, never into a shell
+        if not await asyncio.to_thread(pane_is_claude, cur, session):
+            log.info("NOT-CLAUDE %s — not sending", session)
+            await _safe_edit(placeholder, _not_claude_text(label))
+            return
         menu = parse_menu(visible(session))
         if menu:
             # a question (AskUserQuestion) is open → submit the text as the answer
@@ -1322,12 +1726,13 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 BOT_COMMANDS = [
-    BotCommand("use", "pick a terminal"),
+    BotCommand("use", "выбрать тему: /use <часть имени или код>"),
+    BotCommand("list", "темы: загруженные сверху, текущая отмечена"),
+    BotCommand("new", "новая тема: /new <имя>"),
     BotCommand("read", "re-read the current terminal screen"),
     BotCommand("esc", "interrupt the agent (Escape)"),
     BotCommand("enter", "send Enter"),
     BotCommand("compact", "compact the agent's conversation (/compact)"),
-    BotCommand("list", "list agents + which is current"),
 ]
 
 
@@ -1355,6 +1760,7 @@ def main() -> None:
     owner = filters.User(user_id=OWNER_ID)
     app.add_handler(CommandHandler("list", cmd_list, filters=owner))
     app.add_handler(CommandHandler("use", cmd_use, filters=owner))
+    app.add_handler(CommandHandler("new", cmd_new, filters=owner))
     app.add_handler(CommandHandler("read", cmd_read, filters=owner))
     app.add_handler(CommandHandler("esc", cmd_esc, filters=owner))
     app.add_handler(CommandHandler("enter", cmd_enter, filters=owner))
