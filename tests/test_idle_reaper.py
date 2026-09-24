@@ -75,6 +75,7 @@ class FakeTmux:
     def install(self, monkeypatch, tmp_path):
         monkeypatch.setattr(reaper, "STATE_FILE", str(tmp_path / "state.json"))
         monkeypatch.setattr(reaper, "SESSIONS", list(self.sessions))
+        monkeypatch.setattr(reaper, "watched_sessions", lambda: list(self.sessions))
         monkeypatch.setattr(reaper, "session_exists", lambda s: s in self.sessions)
         monkeypatch.setattr(reaper, "session_attached", lambda s: self.sessions[s]["attached"])
         monkeypatch.setattr(reaper, "session_activity", lambda s: self.sessions[s]["activity"])
@@ -145,6 +146,26 @@ def test_plain_tree_has_no_background_task():
         assert reaper.tree_has_task_output(p.pid) is False
     finally:
         p.kill()
+
+
+# ── which sessions it watches ───────────────────────────────────────────────
+def test_watches_library_sessions_and_legacy_slots(monkeypatch):
+    # library sessions are tmux `cs-<8 hex>`; anything else (a shell, a test) is not ours
+    monkeypatch.setattr(reaper, "_tmux_session_names",
+                        lambda: ["claude-terminal-3", "cs-3beb2a44", "cs-nothex!", "work", "cs-bef2d270"])
+    watched = reaper.watched_sessions()
+    assert "cs-3beb2a44" in watched and "cs-bef2d270" in watched
+    assert "claude-terminal-3" in watched and "claude-terminal-12" in watched   # legacy, until migration
+    assert "work" not in watched and "cs-nothex!" not in watched
+    assert len(watched) == len(set(watched))
+
+
+def test_sweep_uses_the_discovered_list(monkeypatch, tmp_path):
+    now = 100_000
+    t = FakeTmux({"cs-3beb2a44": dict(activity=now - IDLE * 2, attached=False, bg=False)})
+    t.install(monkeypatch, tmp_path)
+    monkeypatch.setattr(reaper, "watched_sessions", lambda: ["cs-3beb2a44"])
+    assert reaper.sweep(now=now) == ["cs-3beb2a44"]
 
 
 # ── config ──────────────────────────────────────────────────────────────────

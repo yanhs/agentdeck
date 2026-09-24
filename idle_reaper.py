@@ -41,7 +41,10 @@ IDLE_SECONDS = int(os.getenv("REAPER_IDLE_SECONDS", "7200"))        # 2 hours
 BG_MAX_SECONDS = int(os.getenv("REAPER_BG_MAX_SECONDS", "86400"))   # 24 hours
 STATE_FILE = os.path.join(HERE, ".idle_reaper_state.json")          # last seen attached
 
+# Legacy numbered terminals (until the session-library migration) ...
 SESSIONS = ["claude-terminal"] + [f"claude-terminal-{i}" for i in range(2, 13)]
+# ... plus every library session, tmux `cs-<8 hex>` (see library.py).
+_LIBRARY_SESSION = re.compile(r"cs-[0-9a-f]{8}")
 
 # Claude Code sends a background task's stdout to
 # /tmp/claude-<uid>/<project>/<session>/tasks/<task-id>.output
@@ -56,6 +59,17 @@ def _tmux(args):
 def _tmux_format(session, fmt):
     r = _tmux(["display-message", "-t", session, "-p", fmt])
     return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _tmux_session_names():
+    r = _tmux(["list-sessions", "-F", "#{session_name}"])
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def watched_sessions():
+    """Legacy terminals + library sessions currently in tmux; nothing else."""
+    lib = [s for s in _tmux_session_names() if _LIBRARY_SESSION.fullmatch(s)]
+    return SESSIONS + [s for s in lib if s not in SESSIONS]
 
 
 def session_exists(session):
@@ -164,7 +178,7 @@ def sweep(now=None, dry_run=False):
     now = now if now is not None else time.time()
     state = load_state()
     actions = []
-    for s in SESSIONS:
+    for s in watched_sessions():
         if not session_exists(s):
             state.pop(s, None)          # forget dead sessions
             continue
