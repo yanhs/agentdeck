@@ -53,12 +53,23 @@ _TASK_OUTPUT = re.compile(r"/tasks/[A-Za-z0-9_-]+\.output$")
 
 # ── tmux / proc helpers ─────────────────────────────────────────────────────
 def _tmux(args):
-    return subprocess.run(["tmux", *args], capture_output=True, text=True)
+    # AGENTDECK_TMUX_SOCKET points tests at a private tmux server (tmux -L).
+    sock = os.getenv("AGENTDECK_TMUX_SOCKET")
+    base = ["tmux", "-L", sock] if sock else ["tmux"]
+    return subprocess.run([*base, *args], capture_output=True, text=True)
 
 
-def _tmux_format(session, fmt):
-    r = _tmux(["display-message", "-t", session, "-p", fmt])
-    return r.stdout.strip() if r.returncode == 0 else ""
+# Everything below asks tmux through list-sessions / list-windows, never
+# `display-message`: in tmux 3.2a `display-message -p` on a target that has just
+# vanished segfaults the WHOLE server and takes every live terminal with it
+# (happened 2026-09-24 10:38).
+def _session_fields(fmt):
+    r = _tmux(["list-sessions", "-F", "#{session_name}\t" + fmt])
+    out = {}
+    for line in r.stdout.splitlines() if r.returncode == 0 else []:
+        name, _, val = line.partition("\t")
+        out[name] = val
+    return out
 
 
 def _tmux_session_names():
@@ -73,17 +84,23 @@ def watched_sessions():
 
 
 def session_exists(session):
-    return _tmux(["has-session", "-t", session]).returncode == 0
+    return session in _session_fields("#{session_attached}")
 
 
 def session_attached(session):
-    return _tmux_format(session, "#{session_attached}") not in ("", "0")
+    return _session_fields("#{session_attached}").get(session, "0") not in ("", "0")
 
 
 def session_activity(session):
-    """Unix time of the session's last screen output, or None."""
-    v = _tmux_format(session, "#{session_activity}")
-    return int(v) if v.isdigit() else None
+    """Unix time of the session's last screen output, or None.
+
+    #{window_activity}, not #{session_activity}: the latter is CLIENT activity and
+    stays frozen while a detached session prints (measured 2026-09-24).
+    """
+    r = _tmux(["list-windows", "-a", "-F", "#{session_name}\t#{window_activity}"])
+    times = [int(v) for n, _, v in (l.partition("\t") for l in r.stdout.splitlines())
+             if n == session and v.isdigit()] if r.returncode == 0 else []
+    return max(times) if times else None
 
 
 def get_pane_pid(session):

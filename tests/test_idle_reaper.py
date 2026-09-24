@@ -148,6 +148,23 @@ def test_plain_tree_has_no_background_task():
         p.kill()
 
 
+# ── last output on a REAL tmux (private socket) ─────────────────────────────
+def test_activity_follows_output_of_a_detached_session(monkeypatch):
+    # tmux 3.2a: #{session_activity} is client activity — it does NOT move when a
+    # detached session prints (measured 2026-09-24: 6 s of output, value frozen).
+    # A Claude working with no tab open must not look idle.
+    sock = f"agentdeck-test-reaper-{os.getpid()}"
+    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", sock)
+    subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", "probe",
+                    "while true; do date; sleep 1; done"], check=True)
+    try:
+        time.sleep(4)
+        last = reaper.session_activity("probe")
+        assert last is not None and time.time() - last <= 2.5, (time.time(), last)
+    finally:
+        subprocess.run(["tmux", "-L", sock, "kill-server"])
+
+
 # ── which sessions it watches ───────────────────────────────────────────────
 def test_watches_library_sessions_and_legacy_slots(monkeypatch):
     # library sessions are tmux `cs-<8 hex>`; anything else (a shell, a test) is not ours
@@ -178,3 +195,24 @@ def test_sessions_cover_terminals_1_through_12():
 def test_defaults_two_hours_and_one_day():
     assert reaper.IDLE_SECONDS == 7200
     assert reaper.BG_MAX_SECONDS == 86400
+
+
+# ── never crash the live tmux server ────────────────────────────────────────
+def test_no_display_message_anywhere():
+    # tmux 3.2a segfaults the WHOLE server on `display-message -p` when the target
+    # is missing (reproduced 2026-09-24; it took down every live terminal at 10:38).
+    # A session can vanish between two calls, so this command must not be used.
+    root = os.path.join(os.path.dirname(__file__), "..")
+    for name in ("idle_reaper.py", "status_server.py", "library_cli.py", "tg_bridge.py"):
+        src = open(os.path.join(root, name)).read()
+        code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+        assert '"display-message"' not in code and "'display-message'" not in code, name
+
+
+def test_socket_env_is_honoured(monkeypatch):
+    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", "agentdeck-test-x")
+    seen = {}
+    monkeypatch.setattr(reaper.subprocess, "run",
+                        lambda args, **k: seen.setdefault("a", args) and subprocess.CompletedProcess(args, 1, "", ""))
+    reaper._tmux(["list-sessions"])
+    assert seen["a"][:3] == ["tmux", "-L", "agentdeck-test-x"]
