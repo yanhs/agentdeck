@@ -279,3 +279,10 @@ def test_nginx_dashboard_html_is_revalidated():
 def test_compose_does_not_pin_a_container_name():
     """A fixed container_name clashes between two installs even with -p."""
     assert "container_name" not in "\n".join(code_lines(ROOT / "docker-compose.yml"))
+
+
+def test_nginx_example_has_no_numbered_slot_terminals():
+    """The numbered /terminalN ttyds are gone (session library: one ttyd on /sess/)."""
+    src = (ROOT / "nginx" / "agents-subdomain.conf").read_text()
+    assert not re.search(r"location /terminal\d* \{", src)
+    assert "location /sess/" in src or "location ^~ /sess/" in src
