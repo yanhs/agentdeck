@@ -44,6 +44,21 @@ SCRIPTS = {1: "launch-claude.sh", 2: "launch-claude-2.sh", 3: "launch-claude-3.s
            4: "launch-claude-4.sh", 10: "launch-claude-10.sh"}
 
 
+def legacy_launch_script(path, n):
+    """A numbered-slot launch script as the pre-library releases shipped it."""
+    session = "claude-terminal" if n == 1 else f"claude-terminal-{n}"
+    path.write_text(f"""#!/bin/bash
+SESSION="{session}"
+AGENT_ID="{n}"
+if ! python3 "$(dirname "${{BASH_SOURCE[0]:-$0}}")/_order_gate.py" "$AGENT_ID" >/dev/null 2>&1; then
+  echo "not in order"; exit 0
+fi
+tmux has-session -t "=$SESSION" 2>/dev/null || tmux new-session -d -s "$SESSION" claude
+exec tmux attach-session -t "=$SESSION"
+""")
+    path.chmod(0o755)
+
+
 class Mig(Deck):
     """Deck + a temp copy of the repo with slots 1,2,3 (real transcripts),
     4 (tiny transcript) and 10 (no transcript)."""
@@ -53,8 +68,11 @@ class Mig(Deck):
         self.repo = tmp_path / "repo"
         (self.repo / ".sessions").mkdir(parents=True)
         (self.repo / "web").mkdir()
-        for f in MODULES + list(SCRIPTS.values()):
+        for f in MODULES:
             shutil.copy2(os.path.join(REPO, f), self.repo / f)
+        # an old install's numbered launch scripts (no longer shipped in the repo)
+        for n, f in SCRIPTS.items():
+            legacy_launch_script(self.repo / f, n)
         (self.repo / "web" / "index.html").write_text("<html>LEGACY</html>")
         (self.repo / "web" / "index-lib.html").write_text("<html>LIBRARY</html>")
         (self.repo / "agents.json").write_text(json.dumps(AGENTS))

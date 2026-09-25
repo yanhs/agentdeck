@@ -355,7 +355,6 @@ status_server.py         login gate + library/status/buffer/paste APIs + Telegra
 web/index.html           dashboard front-end
 tg_bridge.py             Telegram ⇄ tmux bridge
 whisper_transcribe.py    voice-note transcription helper
-launch-claude*.sh        old numbered-slot launchers (after migration: open the library)
 nginx/                   reverse-proxy + auth vhost
 tasks-dashboard/         shared live task board
 tests/                   pytest suite

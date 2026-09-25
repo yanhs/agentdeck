@@ -22,3 +22,13 @@ launch-orchestra.sh
 idle_reaper.log
 .idle_reaper_state.json
 .idle_reaper_state.json.tmp
+
+# numbered-slot terminals (before the session library): this server still runs a few
+# of them, but they are machine-specific and not part of AgentDeck any more
+launch-claude*.sh
+launch-claude*.sh.pre-library
+launch-test.sh
+test-launch-claude.sh
+_order_gate.py
+tests/test_order_gate.py
+tests/test_launch_script_gate.py
