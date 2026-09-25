@@ -541,12 +541,27 @@ def test_delete_refuses_a_topic_that_is_not_archived(api, projects):
     assert (projects / f"{U1}.jsonl").exists()
 
 
-def test_delete_refuses_a_topic_loaded_in_tmux(api, projects):
+def test_delete_unloads_an_idle_loaded_topic_then_deletes(api, projects, monkeypatch):
+    # owner 2026-09-25: archived terminals that were still loaded could not be
+    # deleted ("close it first") and the page has no close button. An idle one
+    # (no tab, no output lately) is unloaded and deleted in one click.
     _seed(api, (U1, "old", 10, True))
     (projects / f"{U1}.jsonl").write_text("talk")
     _start(api, "cs-aaaa1111")
+    monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 3600)
+    code, body = post(api, "delete", {"id": "aaaa1111"})
+    assert code == 200 and body["ok"] is True
+    assert not _alive(api, "cs-aaaa1111")
+    assert library.find(library.load(api.lib), "aaaa1111") is None
+
+
+def test_delete_refuses_a_loaded_topic_that_is_working(api, projects, monkeypatch):
+    _seed(api, (U1, "old", 10, True))
+    (projects / f"{U1}.jsonl").write_text("talk")
+    _start(api, "cs-aaaa1111")
+    monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 5)
     code, err = post(api, "delete", {"id": "aaaa1111"})
-    assert code == 409 and "error" in err
+    assert code == 409 and "working" in err["error"]
     assert _alive(api, "cs-aaaa1111")
     assert library.find(library.load(api.lib), "aaaa1111") is not None
     assert (projects / f"{U1}.jsonl").exists()

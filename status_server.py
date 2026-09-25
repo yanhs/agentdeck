@@ -641,6 +641,7 @@ def lib_post(route, body):
 
 
 LIB_REORDER_MAX = 10000
+DELETE_QUIET_SECONDS = 120     # no output for 2 min = idle enough to unload for delete
 
 
 def lib_reorder(ids):
@@ -669,8 +670,17 @@ def lib_delete(sid):
             raise LibError(409, "only archived topics can be deleted; archive it first")
 
     check(library.find(library.load(lib_path()), sid))
-    if sid in lib_live():
-        raise LibError(409, "the topic is loaded right now; close it first")
+    info = lib_live().get(sid)
+    if info is not None:
+        # an archived terminal still loaded in tmux: unload it first when it is
+        # idle (no tab open, no output lately); refuse only if it is in use
+        name = library.tmux_name(sid)
+        if info["attached"]:
+            raise LibError(409, "it is open in a tab right now; close the tab first")
+        last = lib_last_output(name)
+        if last is None or time.time() - last < DELETE_QUIET_SECONDS:
+            raise LibError(409, "it is working right now; try again when it is idle")
+        lib_tmux("kill-session", "-t", "=" + name)
     e = library.find(library.load(lib_path()), sid)
     legacy = lib_legacy().get(e.get("uuid"))
     if legacy:
