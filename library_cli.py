@@ -229,7 +229,7 @@ def checked_entry(e):
 
 
 def pane_command(e, home=None, claude_bin=None):
-    """The line typed into the new pane. Built only from checked pieces:
+    """The command the new pane runs. Built only from checked pieces:
     the 8-hex id, a strict uuid, and quoted paths — never the topic name."""
     sid, u = checked_entry(e)
     home = home or os.path.expanduser("~")
@@ -300,15 +300,17 @@ def _make_room(limit):
 
 
 def _start(e, cmd):
+    """Start cs-<id> with claude's command as the pane's own command — not typed into a
+    shell with send-keys (that showed the long `for v in … exec claude …` line, echoed
+    twice, before Claude drew). A login + interactive bash runs it, i.e. the same
+    rc-loaded environment the shell tmux used to start had; `exec` still makes claude
+    the pane's process, so the pane closes when claude exits."""
     name = library.tmux_name(e["id"])
-    r = _tmux("new-session", "-d", "-s", name, "-c", effective_cwd(e))
+    r = _tmux("new-session", "-d", "-s", name, "-c", effective_cwd(e), "bash", "-lic", cmd)
     if r.returncode != 0:
         if _has(name):                             # someone else just started it
             return
         raise RuntimeError(r.stderr.strip() or "tmux new-session failed")
-    target = f"={name}:"                           # pane target needs the colon
-    _tmux("send-keys", "-t", target, "-l", cmd)
-    _tmux("send-keys", "-t", target, "Enter")
 
 
 def ensure(sid, now=None):

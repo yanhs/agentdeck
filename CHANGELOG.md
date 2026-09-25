@@ -2,6 +2,45 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## Unreleased — fixes from a fresh-user Docker install test
+
+### Docker
+- **Server tab works in Docker.** Both Caddyfiles now route `/api/server` to the backend
+  (it was only in the nginx config, so the tab showed 404). A test derives every backend path
+  from `nginx/agents-subdomain.conf` and checks both Caddyfiles route it, so they can't drift.
+- **HTTPS certificates persist.** The image sets `XDG_DATA_HOME=/data` and
+  `XDG_CONFIG_HOME=/data/config`, so Caddy keeps its Let's Encrypt certificates in the
+  `caddy-data` volume (it used to stay empty and certificates were lost on re-create).
+- **Agents' work persists.** `/work` is a named volume (`agentdeck-work`); replace it with
+  `./my-project:/work` to work on your own files.
+- **Pasted images and Telegram files** no longer point at the author's server: defaults are
+  `.sessions/paste` and `.sessions/tgfiles` inside the repo (the persisted volume in Docker),
+  no public URL (the path is handed back instead), whisper runs with the bridge's own Python,
+  and a bot-started agent runs in `$AGENTDECK_WORKDIR` (or `~`). Override with
+  `AGENTDECK_PASTE_DIR` / `AGENTDECK_PASTE_URL` and `TG_FILES_DIR` / `TG_FILES_URL` /
+  `TG_WHISPER_PY` / `TG_AGENT_CWD`.
+- **ttyd for ARM too.** The Dockerfile downloads the ttyd build for the machine's CPU
+  (x86_64 or aarch64).
+- **Claude Code version pinned** with a build argument (`CLAUDE_CODE_VERSION`, default
+  `2.1.282`); `--build-arg CLAUDE_CODE_VERSION=latest` takes the newest.
+
+### Dashboard
+- **No typed command line when a terminal opens.** The Claude pane starts with its command
+  directly, instead of showing the long `for v in … exec claude …` line (twice) first.
+- **Login page** says 🛰 AgentDeck and asks only for the password when the dashboard has its
+  own password (Docker / `start.sh`). The Username field stays where it's checked (htpasswd).
+- **The ⋯ menu** (Telegram, Password, Theme, Logout) is available on the empty dashboard,
+  not only while a terminal is open.
+
+### Docs
+- README: the Docker quick start needs one free TCP port (8765) open in the firewall — and
+  Docker-published ports bypass `ufw`; `AGENTDECK_PORT=9000 docker compose up -d`; the working
+  self-signed HTTPS command (`AGENTDECK_SITE=https://:8765`); for a real domain edit `ports:`
+  to `80:80` + `443:443` (both free); the first terminal asks for a colour theme, then how to
+  log in; voice messages don't work in the Docker image (no faster-whisper / ffmpeg).
+- `.env.example`: the dashboard login lines are commented out ("Docker: leave unset") —
+  compose loads `.env` automatically, and the old example set a fixed password and domain.
+
 ## v1.5.0 — server page, light theme, guard hooks
 
 - **Server page.** A live view of the machine (`web/server.html`, `GET /api/server`, collected

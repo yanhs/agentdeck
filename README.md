@@ -142,7 +142,9 @@ The dashboard works on a phone too:
 
 ## 🐳 Quick start (Docker — one command)
 
-Runs on any VPS — **no spare ports, domain, or pre-config needed**. You just need **Docker**.
+Runs on any VPS — **no domain or pre-config needed**. You need **Docker** and **one free TCP port**
+(`8765` by default) open in your firewall / cloud security group. Note: Docker-published ports
+bypass `ufw`, so a port published by Docker is reachable even if `ufw` doesn't list it.
 
 ```bash
 git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
@@ -151,16 +153,35 @@ docker compose up -d                            # → http://<your-vps-ip>:8765
 
 Open `http://<your-vps-ip>:8765`:
 1. the **first visit asks you to set a dashboard password** (it exposes live terminals);
-2. create a terminal (**＋ New terminal**) and **sign in to your Claude account once** — it's saved in a volume and reused;
-3. change the password later with **⋯ → Password**.
+2. create a terminal (**＋ New terminal**) and **sign in to your Claude account once** — it's saved in a volume and reused.
+   The first terminal's Claude asks two things before it's ready: first a **colour theme**, then
+   **how to log in** (pick your Claude subscription or an API key and follow the link it shows);
+3. change the password later with **⋯ → Password** (the ⋯ menu is in the top-right corner).
 
-Use a different port with `AGENTDECK_PORT`.
+The agents work in `/work`, a named volume (`agentdeck-work`) that survives `docker compose down`
+and a rebuild. To let them work on your own project instead, replace that volume line in
+`docker-compose.yml` with a bind mount such as `./my-project:/work`.
+
+Use a different port:
+
+```bash
+AGENTDECK_PORT=9000 docker compose up -d        # → http://<your-vps-ip>:9000
+```
+
+(or put `AGENTDECK_PORT=9000` in a `.env` file next to `docker-compose.yml` — compose reads it
+automatically).
 
 > **Want HTTPS?**
 > - **Trusted, no warning** — set `AGENTDECK_SITE` to a domain (or `<your-ip>.sslip.io`, a free
->   name that resolves to your IP) and map `80:80` + `443:443`. Caddy fetches a real Let's Encrypt
->   certificate automatically.
-> - **Self-signed, no domain** — set `AGENTDECK_SITE=https://:8443` and map `8443:8443`. A
+>   name that resolves to your IP) and edit the `ports:` in `docker-compose.yml` to
+>   `"80:80"` and `"443:443"` (instead of the `8765` line). Both ports must be free on the host
+>   (no other web server on them) and open in the firewall. Caddy fetches a real Let's Encrypt
+>   certificate automatically and keeps it in the `caddy-data` volume.
+> - **Self-signed, no domain** — run
+>   ```bash
+>   AGENTDECK_SITE=https://:8765 docker compose up -d
+>   ```
+>   and open `https://<your-vps-ip>:8765` (`AGENTDECK_PORT` still changes the outside port). A
 >   certificate is generated on first run (kept in the volume); the browser shows a one-time
 >   "not trusted" warning you click through. (Needed if you want clipboard copy, which browsers
 >   only allow over HTTPS or localhost.)
@@ -268,6 +289,7 @@ For production, run `status_server.py` and `tg_bridge.py` as systemd services �
 | Reverse proxy / TLS | `nginx/agents-subdomain.conf` | swap the domain for your own |
 | Pretty project names | `PROJECT_MAP` in `status_server.py` | optional, cosmetic |
 | Working directory | `$AGENTDECK_WORKDIR` env | where agents start; defaults to the directory above the repo |
+| Pasted images (📎 Image / Ctrl+V) | `AGENTDECK_PASTE_DIR`, `AGENTDECK_PASTE_URL` env | default `.sessions/paste`, no public URL; the terminal gets the file's path either way |
 
 ## 🤖 Create & connect a Telegram bot
 
@@ -286,6 +308,11 @@ numeric Telegram user id.
 >
 > If the bridge already runs as the systemd service (step 5), the **Telegram** page shows it
 > as running and never starts a second copy.
+>
+> **Voice messages don't work in the Docker image:** it has no `faster-whisper` or `ffmpeg`.
+> Text and files work; a voice note gets an error reply. For voice, use the manual setup below.
+> Files you send are saved in `/work/tg-uploads` and the reply gives that path (there's no
+> public web link for them in Docker).
 
 ### 1. Create a bot and copy the token
 
@@ -309,9 +336,10 @@ TG_BRIDGE_TOKEN=123456:ABC-DEF...your-token   # required — the bridge won't st
 TG_BRIDGE_OWNER=123456789                     # your numeric user id (default 0 = nobody allowed)
 
 # optional — all have working defaults:
-# TG_FILES_DIR=/path/to/uploads               # where uploaded files / voice notes are saved
-# TG_FILES_URL=https://example.com/files      # public base URL those files are served at
-# TG_WHISPER_PY=/path/to/venv/bin/python      # a Python that has faster-whisper (voice only)
+# TG_FILES_DIR=/path/to/uploads               # where uploaded files are saved (default .sessions/tgfiles)
+# TG_FILES_URL=https://example.com/files      # public base URL of that folder (default: none — the reply gives the local path)
+# TG_WHISPER_PY=/path/to/venv/bin/python      # a Python that has faster-whisper (default: the bridge's own python)
+# TG_AGENT_CWD=/path/to/projects              # where an agent started from the bot runs (default $AGENTDECK_WORKDIR or ~)
 ```
 
 > `TG_BRIDGE_TOKEN` has no default — the bridge exits at startup if it's missing.

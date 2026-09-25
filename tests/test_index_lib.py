@@ -1972,3 +1972,29 @@ def test_open_param_with_garbage_or_unknown_id_does_nothing(browser, site):
             assert "open=" not in pg.url, q
         finally:
             ctx.close()
+
+
+# ── the ⋯ account menu is reachable with no terminal open (fresh-user test) ──
+def test_account_menu_on_the_empty_dashboard(page):
+    # nothing picked yet: Password / Theme / Telegram / Logout must still be reachable
+    assert page.is_visible("#ph")
+    assert page.is_visible("#tMenu")
+    for bid in ("tEsc", "tPasteImg", "tOpen"):              # terminal-only buttons stay hidden
+        assert not page.is_visible("#" + bid), bid
+    page.click("#tMenu")
+    assert _menu_open(page)
+    for bid in ("tTg", "tChpw", "tTheme", "tLogout"):
+        assert page.is_visible("#" + bid), bid
+    shot(page, "index-lib-empty-account-menu.png")
+    page.keyboard.press("Escape")
+    assert not _menu_open(page)
+
+
+def test_account_menu_stays_after_a_terminal_is_closed(page):
+    page.click(row("dddd0004") + " .proj")
+    page.wait_for_selector("#tEsc:visible")
+    page.evaluate("showPlaceholder()")
+    assert page.is_visible("#tMenu") and not page.is_visible("#tEsc")
+    page.click(row("dddd0004") + " .proj")                 # and the terminal buttons come back
+    page.wait_for_selector("#tEsc:visible")
+    assert _topbar_order(page) == ["tEsc", "tPasteImg", "tOpen", "tMenu"]

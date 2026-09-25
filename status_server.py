@@ -1342,7 +1342,7 @@ def _check_password(user, pw):
 
 
 LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Agents — login</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentDeck — login</title>
 <style>
 *{box-sizing:border-box} html,body{height:100%}
 body{margin:0;display:flex;align-items:center;justify-content:center;background:#0d1117;
@@ -1360,14 +1360,32 @@ button:hover{background:#2ea043}
 .err{margin:14px 0 0;color:#ff7b72;font-size:13px;text-align:center}
 </style></head><body>
 <form class="card" method="POST" action="/login">
-  <h1>🖥 Agents</h1><p class="sub">Sign in to open the panel</p>
-  <label for="u">Username</label>
-  <input id="u" name="user" autocomplete="username" autofocus>
-  <label for="p">Password</label>
-  <input id="p" name="pass" type="password" autocomplete="current-password">
+  <h1>🛰 AgentDeck</h1><p class="sub">Sign in to open the panel</p>
+  __USER__<label for="p">Password</label>
+  <input id="p" name="pass" type="password" autocomplete="current-password"__PFOCUS__>
   <button type="submit">Sign in</button>
   __ERR__
 </form></body></html>"""
+
+
+_LOGIN_USER_FIELD = ('<label for="u">Username</label>\n'
+                     '  <input id="u" name="user" autocomplete="username" autofocus>\n  ')
+
+
+def _login_needs_user():
+    """The username matters only where htpasswd checks it: no passfile (htpasswd mode),
+    or the passfile-still-empty migration state. A set passfile ignores it."""
+    return not PASSFILE or _pw_seedable()
+
+
+def login_html(error=False):
+    """The sign-in page; Username field only where it is checked."""
+    need_user = _login_needs_user()
+    err = ("Invalid username or password" if need_user else "Invalid password")
+    return (LOGIN_HTML
+            .replace("__USER__", _LOGIN_USER_FIELD if need_user else "")
+            .replace("__PFOCUS__", "" if need_user else " autofocus")
+            .replace("__ERR__", f'<p class="err">{err}</p>' if error else ""))
 
 
 _AUTH_HEAD = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -1441,8 +1459,7 @@ class AuthHandler(BaseHTTPRequestHandler):
         if PASSFILE and not _pw_is_set() and not _pw_seedable():
             return self._html(_setup_form("Passwords must match (6+ chars)" if error else ""),
                               401 if error else 200)
-        html = LOGIN_HTML.replace("__ERR__", '<p class="err">Invalid username or password</p>' if error else '')
-        self._html(html, 401 if error else 200)
+        self._html(login_html(error), 401 if error else 200)
 
     def _login_cookie(self, user):
         tok = _sign_token(user or "admin", int(time.time()) + AUTH_TTL)

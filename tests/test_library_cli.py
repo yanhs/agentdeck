@@ -609,3 +609,29 @@ def test_deck_close_leaves_no_fake_claude_behind(tmp_path):
         d.close()
     wait_for(lambda: not _procs_with_home(d.home), timeout=3)
     assert _procs_with_home(d.home) == []
+
+
+# ── the pane starts WITH claude's command (no typed line) ────────────────────
+def test_start_passes_the_command_to_new_session_and_types_nothing(monkeypatch):
+    m = _mod()
+    calls = []
+
+    class R:
+        returncode = 0; stdout = ""; stderr = ""
+    monkeypatch.setattr(m, "_tmux", lambda *a: calls.append(a) or R())
+    e = {"id": "aaaaaaaa", "uuid": U1, "cwd": "/tmp"}
+    m._start(e, "exec claude --session-id x")
+    assert not [c for c in calls if c and c[0] == "send-keys"], calls   # the long line isn't typed
+    new = [c for c in calls if c and c[0] == "new-session"]
+    assert len(new) == 1
+    # a login + interactive bash runs it: the same rc-loaded environment the typed line had
+    assert new[0][-3:] == ("bash", "-lic", "exec claude --session-id x"), new[0]
+
+
+def test_ensure_pane_start_command_is_claudes(deck):
+    e = deck.add("A", uuid=U1)
+    assert deck.cli("ensure", e["id"]).returncode == 0
+    wait_for(deck.calls)
+    r = deck.tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_start_command}")
+    line = [l for l in r.stdout.splitlines() if l.startswith("cs-aaaaaaaa\t")]
+    assert line and U1 in line[0], r.stdout

@@ -486,6 +486,10 @@
     .acct-menu .btn { display: block; text-align: left; padding: 0.3rem 0.5rem; }
     .acct-menu button.btn { width: 100%; font-family: inherit; }
     .acct-menu .btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; }
+    /* no terminal open: the bar keeps only ⋯ (Password / Theme / Telegram / Logout must be
+       reachable on the empty dashboard too); the terminal buttons come back on pick */
+    .topbar.no-term > :not(.acct) { display: none; }
+    .topbar.no-term .acct { margin-left: auto; }
 
     .btn-logout { color: var(--red-fg); border-color: rgba(239,68,68,0.28); }
     .btn-logout:hover { color: var(--red-fg-hi); border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.12); }
@@ -706,7 +710,7 @@
     <div class="agent-list" id="list"><button type="button" class="arch-toggle" id="showArchived" title="Show archived terminals (greyed) so you can restore them">Show archived</button></div>
   </div>
   <div class="main">
-    <div class="topbar" id="topbar" style="display:none">
+    <div class="topbar no-term" id="topbar">
       <span class="topbar-lbl" id="tNum"></span>
       <div class="topbar-info" id="tInfo"></div>
       <button class="btn" id="tEsc">Esc</button>
@@ -1282,7 +1286,7 @@
     function pick(id) {
       if (!ID_RE.test(id)) return;
       sel = id;
-      document.getElementById('topbar').style.display = 'flex';
+      document.getElementById('topbar').classList.remove('no-term');
       setLabel(id, true);
       syncSel();
       // a topic still running in an old numbered terminal opens there (the
@@ -1307,7 +1311,7 @@
         ph.className = 'ph'; ph.id = 'ph'; ph.textContent = 'Pick a terminal on the left';
         wrap.appendChild(ph);
       }
-      document.getElementById('topbar').style.display = 'none';
+      document.getElementById('topbar').classList.add('no-term');
       _frameFocus = null;
       syncSel();
     }
@@ -1315,7 +1319,7 @@
     function pickShell() {
       sel = SHELL;
       _shellSeenUp = !!(shellState && shellState.active);
-      document.getElementById('topbar').style.display = 'flex';
+      document.getElementById('topbar').classList.remove('no-term');
       setLabel('cmd');
       syncSel();
       openFrame(SHELL_PATH);
@@ -1327,7 +1331,7 @@
       tasksOpen = true;
       saveTasksOpen();
       sel = TASKS;
-      document.getElementById('topbar').style.display = 'flex';
+      document.getElementById('topbar').classList.remove('no-term');
       setLabel('tasks');
       render();
       syncSel();
@@ -1399,7 +1403,7 @@
       serverOpen = true;
       saveServerOpen();
       sel = SERVER;
-      document.getElementById('topbar').style.display = 'flex';
+      document.getElementById('topbar').classList.remove('no-term');
       setLabel('server');
       render();
       syncSel();
