@@ -855,7 +855,7 @@ def test_topbar_tasks_and_stats_are_kept(page):
     assert page.get_attribute('.sidebar a[href="/tasks/"]', "title")
     page.wait_for_function(
         "() => document.getElementById('cpuVal').textContent === '12%'", timeout=6000)
-    assert page.inner_text("#ramVal") == "6400/16000M"
+    assert page.inner_text("#ramVal") == "6.4/16.0G"          # GB, one decimal (owner, 2026-09-25)
     page.click(row("dddd0004") + " .proj")
     for bid in ("tPasteImg", "tOpen", "tEsc", "tMenu"):
         assert page.is_visible("#" + bid), bid

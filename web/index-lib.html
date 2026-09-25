@@ -1843,7 +1843,8 @@
 
     function setSystem(s) {
       document.getElementById('cpuVal').textContent = s.cpu_pct + '%';
-      document.getElementById('ramVal').textContent = s.ram_used_mb + '/' + s.ram_total_mb + 'M';
+      const gb = mb => (mb / 1000).toFixed(1);       // 13829/23460 MB -> 13.8/23.5G
+      document.getElementById('ramVal').textContent = gb(s.ram_used_mb) + '/' + gb(s.ram_total_mb) + 'G';
       document.getElementById('cpuStat').className = 'stat' + (s.cpu_pct > 90 ? ' crit' : s.cpu_pct > 70 ? ' warn' : '');
       document.getElementById('ramStat').className = 'stat' + (s.ram_pct > 90 ? ' crit' : s.ram_pct > 70 ? ' warn' : '');
     }
