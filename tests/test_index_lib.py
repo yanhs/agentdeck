@@ -1290,6 +1290,29 @@ def test_T_opens_the_board_in_the_viewer_not_a_new_window(browser, site):
         ctx.close()
 
 
+def test_tasks_row_has_the_green_dot_like_the_other_rows(browser, site):
+    """Owner, 2026-09-25: the Tasks row gets the same green "loaded" dot as every
+    loaded terminal, in the same place (after the close button)."""
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open_tasks_ctx(browser, site, api)
+    try:
+        pg.click(TASKS_LINK)
+        pg.wait_for_selector("#list .tasks-row .card-btns .dot")
+        assert pg.get_attribute("#list .tasks-row .dot", "class") == "dot idle"
+        order = pg.evaluate("() => [...document.querySelector('#list .tasks-row .card-btns')"
+                            ".children].map(e => e.className)")
+        assert order == ["tasks-close", "dot idle"]
+        # same look as the command line's loaded dot
+        css = "e => getComputedStyle(e).backgroundColor"
+        assert pg.eval_on_selector("#list .tasks-row .dot", css) == "rgb(74, 222, 128)"
+        pg.wait_for_selector("#list .shell-row .dot.idle")
+        assert (pg.eval_on_selector("#list .tasks-row .dot", "e => e.getBoundingClientRect().width")
+                == pg.eval_on_selector("#list .shell-row .dot", "e => e.getBoundingClientRect().width"))
+    finally:
+        ctx.close()
+
+
 def test_tasks_row_stays_while_a_terminal_is_open_and_reshows_the_board(browser, site):
     api = FakeAPI()
     ctx, pg = _open_tasks_ctx(browser, site, api)
