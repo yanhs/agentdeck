@@ -108,7 +108,7 @@ def test_all_busy_prints_a_clear_message_and_exits_3(deck):
         assert deck.cli("ensure", x["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
     r = run(deck, c["id"], AGENTDECK_MAX_ACTIVE="2", AGENTDECK_WORKING_SECONDS="3600")
     assert r.returncode == 3
-    assert "заняты" in (r.stdout + r.stderr)
+    assert "busy" in (r.stdout + r.stderr)
     assert not deck.has("cs-c0ffee00")
 
 

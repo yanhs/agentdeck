@@ -472,11 +472,28 @@ CLOSE_QUIET_SECONDS = 30 * 60
 # CSRF: POSTs must be JSON (a cross-site <form> cannot send that without a CORS
 # preflight, and we answer no preflight) and, when the browser says where the
 # request comes from, come from the dashboard itself.
-DEFAULT_ORIGIN = "https://agents.reimake.com"
+# The dashboard's origin: $AGENTDECK_ORIGIN when set (e.g. https://agents.example.com —
+# needed behind a proxy that rewrites Host or doesn't pass X-Forwarded-Proto, like the
+# nginx config in nginx/); otherwise the request's own scheme + Host, as the proxy
+# forwards them (Caddy keeps Host and sets X-Forwarded-Proto). No Host -> refused.
 
 
-def lib_allowed_origin():
-    return os.environ.get("AGENTDECK_ORIGIN") or DEFAULT_ORIGIN
+def lib_allowed_origin(headers=None):
+    """The one Origin library writes are accepted from ('' = none acceptable)."""
+    configured = os.environ.get("AGENTDECK_ORIGIN")
+    if configured:
+        return configured
+    headers = headers or {}
+    host = (headers.get("Host") or "").strip()
+    proto = (headers.get("X-Forwarded-Proto") or "http").strip().lower()
+    if not host or proto not in ("http", "https") or not re.fullmatch(r"[A-Za-z0-9.:\[\]-]+", host):
+        return ""
+    return f"{proto}://{host}"
+
+
+def lib_origin_ok(origin, headers):
+    allowed = lib_allowed_origin(headers)
+    return bool(allowed) and origin == allowed
 _LIB_ROW_KEYS = ("id", "name", "cwd", "created", "last_used", "archived", "pos")
 
 
@@ -828,7 +845,7 @@ class Handler(BaseHTTPRequestHandler):
             if ctype != "application/json":
                 raise LibError(415, "Content-Type must be application/json")
             origin = self.headers.get("Origin")
-            if origin is not None and origin != lib_allowed_origin():
+            if origin is not None and not lib_origin_ok(origin, self.headers):
                 raise LibError(403, "cross-origin request refused")
             length = int(self.headers.get("Content-Length", 0) or 0)
             if length > LIB_BODY_MAX:

@@ -378,15 +378,47 @@ def test_post_requires_json_content_type(api):
 def test_post_rejects_a_foreign_origin(api, monkeypatch):
     monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
     body = json.dumps({"name": "x"}).encode()
-    for origin in ("https://evil.example", "null", "http://agents.reimake.com",
-                   "https://agents.reimake.com.evil.example"):
+    own = api.base                                   # http://127.0.0.1:<port> = own scheme+Host
+    for origin in ("https://evil.example", "null", "", own.replace("http://", "https://"),
+                   own + ".evil.example", own + "/", "https://agents.reimake.com"):
         code, _, err = _raw_req(api, "POST", "/api/library/new", body,
                                 {"Content-Type": "application/json", "Origin": origin})
         assert code == 403 and "error" in err, origin
     assert library.load(api.lib)["sessions"] == []
     code, _, _ = _raw_req(api, "POST", "/api/library/new", body,
-                          {"Content-Type": "application/json", "Origin": "https://agents.reimake.com"})
+                          {"Content-Type": "application/json", "Origin": own})
     assert code == 200
+
+
+def test_default_origin_is_the_requests_own_scheme_and_host(api, monkeypatch):
+    """No AGENTDECK_ORIGIN (a fresh install, e.g. docker behind Caddy): the only accepted
+    Origin is the request's own scheme (X-Forwarded-Proto from the proxy, else http) + Host."""
+    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    body = json.dumps({"name": "x"}).encode()
+
+    def req(origin, host, proto=None):
+        h = {"Content-Type": "application/json", "Origin": origin, "Host": host}
+        if proto:
+            h["X-Forwarded-Proto"] = proto
+        return _raw_req(api, "POST", "/api/library/new", body, h)[0]
+
+    assert req("https://deck.example:8443", "deck.example:8443", "https") == 200
+    assert req("http://deck.example:8443", "deck.example:8443", "https") == 403
+    assert req("https://deck.example:8443", "deck.example:8443") == 403     # no proto -> http
+    assert req("http://10.0.0.5:8765", "10.0.0.5:8765") == 200
+    assert req("http://10.0.0.5:8765", "10.0.0.5:8766") == 403
+    assert req("https://other.example", "deck.example", "https") == 403
+    assert req("https://deck.example", "deck.example", "https,http") == 403  # odd proto -> refuse
+    assert len(library.load(api.lib)["sessions"]) == 2
+
+
+def test_default_origin_refuses_without_a_host(api, monkeypatch):
+    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    ss = api.ss
+    assert ss.lib_origin_ok("http://x", {"Host": ""}) is False
+    assert ss.lib_origin_ok("http://x", {}) is False
+    assert ss.lib_origin_ok("http://x", {"Host": "x"}) is True
+    assert "agents.reimake.com" not in repr(getattr(ss, "DEFAULT_ORIGIN", ""))
 
 
 def test_allowed_origin_is_configurable(api, monkeypatch):

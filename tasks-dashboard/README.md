@@ -8,7 +8,11 @@ every open tab over SSE (plus a 5s baseline poll, robust behind a CDN).
   `tasks-tracker.service` (`~/.config/systemd/user/`), `Restart=always`, linger on.
 - **nginx:** `location /tasks/` in `/etc/nginx/sites-available/agents-subdomain`
   → `proxy_pass http://127.0.0.1:9308/` with `proxy_buffering off` for SSE.
-- **UI:** `static/index.html` (dark, auto-updating).
+- **UI:** `static/index.html` (auto-updating; follows the system light/dark theme). Search
+  across tasks, steps and notes; status filters (All / Active / Blocked / Pending / Done);
+  an agent filter; sort by recently updated, recently created or title; created/updated
+  dates and times. The dashboard's **T** button opens it as a tab. The previous page is kept
+  as `static/index-old.html`.
 
 ## Move the board (any agent)
 
@@ -19,6 +23,11 @@ every open tab over SSE (plus a 5s baseline poll, robust behind a CDN).
     python3 tracker.py show
 
 Writes are atomic (temp file + rename) so the SSE server never reads a half-written state.
+
+Run inside Claude Code, every command that changes a task also records the agent's **session code** on the task
+(the first 8 characters of `CLAUDE_CODE_SESSION_ID` — the same code the dashboard's terminal
+list shows). `add-task` takes the task over with the new code; later commands only fill a
+missing one.
 
 ## Auto-sync a long/background job to the board
 

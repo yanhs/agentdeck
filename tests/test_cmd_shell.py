@@ -235,7 +235,7 @@ def test_shell_close_has_the_same_csrf_checks(api, monkeypatch):  # noqa: F811
     assert _alive(api, SHELL)
     code, _, out = _raw_req(api, "POST", "/api/library/shell-close", b"{}",
                             {"Content-Type": "application/json",
-                             "Origin": "https://agents.reimake.com"})
+                             "Origin": api.base})     # own scheme+Host = the default
     assert code == 200 and out["killed"] is True and not _alive(api, SHELL)
 
 

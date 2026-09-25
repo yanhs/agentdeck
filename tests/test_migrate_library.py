@@ -377,3 +377,12 @@ def test_nothing_is_ever_deleted(mig):
     assert mig.migrate("--apply", "--swap-dashboard").returncode == 0
     assert mig.migrate("--apply", "--rollback-dashboard").returncode == 0
     assert before <= set(mig.snapshot())
+
+
+def test_shim_does_not_carry_the_topic_name():
+    """The shims are committed to a public repo: the topic's name (private) must not
+    end up in them — the 8-hex id is enough to find the topic."""
+    import migrate_library as ml
+    txt = ml.shim_text(3, "claude-terminal-3", "f91c3981", "Private client name")
+    assert "Private client name" not in txt
+    assert "f91c3981" in txt

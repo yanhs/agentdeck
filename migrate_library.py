@@ -132,9 +132,10 @@ def plan(repo, home, cwd, now=None):
 
 # ── shim ────────────────────────────────────────────────────────────────────
 def shim_text(slot, legacy, sid, name):
-    safe_name = re.sub(r"[^\w .,:+()-]", "", name, flags=re.UNICODE)[:60]
+    # no topic name here: the shims are committed to a public repo and the name is
+    # private; the 8-hex id is enough to find the topic
     return f"""#!/bin/bash
-{SHIM_MARK} — slot {slot} is now library topic {sid} «{safe_name}».
+{SHIM_MARK} — slot {slot} is now library topic {sid}.
 # The original script is kept next to this one as $(basename "$0").pre-library.
 # Legacy tmux session still running -> attach to it exactly as before (its claude
 # is not restarted). Otherwise -> the library opens the topic (open-session.sh

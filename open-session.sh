@@ -32,7 +32,7 @@ done_with() {                      # $1 = exit code; the message is already prin
 
 # Explicit character class: a locale's [a-f] range could admit other letters.
 if [ "$#" -ne 1 ] || ! [[ "$1" =~ ^[0123456789abcdef]{8}$ || "$1" == "shell" ]]; then
-  echo "unknown session: откройте тему из списка на дашборде (/sess/?arg=<8-значный код>)."
+  echo "unknown session: open a topic from the list on the dashboard (/sess/?arg=<8-character id>)."
   done_with 2
 fi
 ID="$1"
@@ -48,7 +48,7 @@ if [ "$ID" = "shell" ]; then
   NAME="$(python3 "$HERE/library_cli.py" shell-ensure)"
   rc=$?
   if [ "$rc" -ne 0 ] || [ "$NAME" != "cmd-shell" ]; then
-    echo "не удалось открыть командную строку (library_cli: ${NAME:0:40})"
+    echo "couldn't open the command line (library_cli: ${NAME:0:40})"
     done_with 1
   fi
   "${TMUX_CMD[@]}" attach-session -t "=cmd-shell"
@@ -73,11 +73,11 @@ fi
 NAME="$(python3 "$HERE/library_cli.py" ensure "$ID")"
 rc=$?
 if [ "$rc" -ne 0 ]; then
-  [ "$rc" -eq 3 ] && echo "Повторите позже: обновите страницу или нажмите Enter."
+  [ "$rc" -eq 3 ] && echo "Try again later: reload the page or press Enter."
   done_with "$rc"
 fi
 if [ "$NAME" != "cs-$ID" ]; then
-  echo "не удалось открыть тему $ID (library_cli ответил: ${NAME:0:40})"
+  echo "couldn't open topic $ID (library_cli said: ${NAME:0:40})"
   done_with 1
 fi
 

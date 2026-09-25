@@ -275,8 +275,8 @@ def _ensure_lock():
 
 def _unknown(sid):
     shown = f" {sid}" if library.valid_id(sid) else ""
-    _say(f"unknown session{shown}: такой темы нет в библиотеке (или она в архиве). "
-         "Откройте тему из списка на дашборде.")
+    _say(f"unknown session{shown}: no such topic in the library (or it is archived). "
+         "Open a topic from the list on the dashboard.")
     return EXIT_UNKNOWN
 
 
@@ -293,8 +293,8 @@ def _make_room(limit):
             return False
         _tmux("kill-session", "-t", "=" + library.tmux_name(victim))
         name = (library.find(lib, victim) or {}).get("name", "?")
-        _say(f"выгружена тема {library.tmux_name(victim)} «{_clean(name)}» — давно не "
-             "использовалась; переписка сохранена, откроется снова по клику.")
+        _say(f"unloaded topic {library.tmux_name(victim)} «{_clean(name)}» — unused for a "
+             "while; the conversation is saved and opens again on click.")
         live = [s for s in live if s["id"] != victim]
     return True
 
@@ -318,7 +318,7 @@ def ensure(sid, now=None):
     try:
         checked_entry(e)
     except ValueError:
-        _say(f"unknown session {sid}: запись в библиотеке повреждена (uuid).")
+        _say(f"unknown session {sid}: library entry is corrupt (uuid).")
         return EXIT_UNKNOWN
     name = library.tmux_name(sid)
     limit = library.MAX_ACTIVE
@@ -329,21 +329,20 @@ def ensure(sid, now=None):
         if not _has(name):
             other = claude_elsewhere(e["uuid"], name)
             if other:
-                where = ", ".join(f"pid {p} в tmux-сессии {w}" if w else f"pid {p} (вне tmux)"
+                where = ", ".join(f"pid {p} in tmux session {w}" if w else f"pid {p} (outside tmux)"
                                   for p, w in other)
-                _say(f"тема {name} уже открыта в другом Claude: {where}. Второй Claude на "
-                     "ту же переписку испортит её — закройте тот или откройте тему там. "
-                     f"(uuid already running elsewhere)")
+                _say(f"topic {name} is already open in another Claude: {where}. A second Claude "
+                     "on the same conversation would corrupt it — close that one or open "
+                     "the topic there. (uuid already running elsewhere)")
                 return EXIT_ELSEWHERE
             if not _make_room(limit):
-                _say(f"Все {limit} загруженных тем сейчас заняты работой или открыты во "
-                     "вкладках — новую загрузить некуда. Закройте вкладку или выгрузите "
-                     f"тему и попробуйте снова. (all {limit} loaded sessions are busy)")
+                _say(f"All {limit} loaded topics are busy working or open in tabs — no "
+                     "room to load another. Close a tab or unload a topic and try again.")
                 return EXIT_BUSY
             try:
                 _start(e, pane_command(e))
             except (RuntimeError, ValueError) as ex:
-                _say(f"не удалось запустить {name}: {_clean(ex)}")
+                _say(f"couldn't start {name}: {_clean(ex)}")
                 return EXIT_FAIL
         try:
             with library.update(library.LIB_FILE) as lib:
@@ -370,7 +369,7 @@ def shell_ensure():
         cwd = WORKDIR if os.path.isdir(WORKDIR) else os.path.expanduser("~")
         r = _tmux("new-session", "-d", "-s", name, "-c", cwd, *SHELL_CMD)
         if r.returncode != 0 and not _has(name):
-            _say(f"не удалось запустить командную строку: {_clean(r.stderr.strip())}")
+            _say(f"couldn't start the command line: {_clean(r.stderr.strip())}")
             return EXIT_FAIL
         # option commands need the `=name:` form (a bare `=name` is "no such session")
         _tmux("set-option", "-t", f"={name}:", "mouse", "on")
@@ -383,14 +382,14 @@ def hold(sid, seconds, now=None):
     if sid == "-":
         sid = os.getenv("AGENTDECK_SESSION", "")
     if not library.valid_id(sid):
-        _say("hold: нужен 8-значный код темы (или '-' с AGENTDECK_SESSION).")
+        _say("hold: needs an 8-character topic id (or '-' with AGENTDECK_SESSION).")
         return EXIT_UNKNOWN
     try:
         secs = int(seconds)
     except ValueError:
         secs = -1
     if secs <= 0:
-        _say(f"hold: число секунд > 0, а не {_clean(seconds)!r}")
+        _say(f"hold: seconds must be a number > 0, not {_clean(seconds)!r}")
         return EXIT_FAIL
     now = time.time() if now is None else now
     until = library.set_hold(sid, int(now) + min(secs, MAX_HOLD_SECONDS), library.LIB_FILE)
@@ -403,7 +402,7 @@ def main(argv):
     try:
         return _main(argv)
     except library.CorruptRegistry as ex:
-        _say(f"реестр тем повреждён, ничего не делаю: {ex}")
+        _say(f"topic registry is corrupt, doing nothing: {ex}")
         return EXIT_FAIL
 
 

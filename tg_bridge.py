@@ -161,7 +161,7 @@ def start_session(aid: str) -> tuple[bool, str]:
     if e is not None:
         # its conversation now lives in the library: the old launch script would
         # start a SECOND Claude on the same uuid
-        return False, f"слот #{aid} переехал в тему {topic_label(e)} — старый терминал не запускаю"
+        return False, f"slot #{aid} moved to topic {topic_label(e)} — not starting the old terminal"
     script = "launch-claude.sh" if str(aid) == "1" else f"launch-claude-{aid}.sh"
     spath = os.path.join(GATE_DIR, script)
     if not os.path.exists(spath):
@@ -246,7 +246,7 @@ def legacy_pane_command(session: str) -> str | None:
 # unloads a working or watched one) — the bridge only asks it.
 
 LIBRARY_CLI = os.path.join(GATE_DIR, "library_cli.py")
-NEED_PICK = "Сначала выберите тему: /use <часть имени или код> · /list · /new <имя>"
+NEED_PICK = "Pick a topic first: /use <part of the name or id> · /list · /new <name>"
 TOPIC_NAME_MAX = 100       # a topic name typed in /new
 TOPIC_BUTTONS_MAX = 24     # topic buttons in one /use picker
 READY_TIMEOUT = 45         # s to wait for a just-loaded Claude to draw its screen
@@ -346,12 +346,12 @@ def ensure_topic(sid: str) -> tuple[int, str]:
     try:
         r = run_library_cli("ensure", sid, timeout=60)
     except (OSError, subprocess.SubprocessError) as ex:
-        return 1, f"library_cli не отработал: {ex}"
+        return 1, f"library_cli failed: {ex}"
     msg = _clip(r.stderr)
     if r.returncode == ENSURE_ELSEWHERE:
-        msg = ("эта переписка уже открыта в другом месте (другой терминал) — второй "
-               "Claude на ней не запускаю, сообщение не отправлено. Закройте её там "
-               "или пишите туда." + (f"\n({msg})" if msg else ""))
+        msg = ("this conversation is already open elsewhere (another terminal) — not "
+               "starting a second Claude on it, message not sent. Close it there "
+               "or write there." + (f"\n({msg})" if msg else ""))
     return r.returncode, msg
 
 
@@ -421,7 +421,7 @@ async def _load_topic(sid: str) -> tuple[str | None, str]:
     code, msg = await asyncio.to_thread(ensure_topic, sid)
     if code != 0:
         log.info("ENSURE %s -> exit %s: %s", name, code, msg[:200])
-        return None, msg or f"library_cli ensure: код {code}"
+        return None, msg or f"library_cli ensure: exit code {code}"
     if not was:
         _fresh[name] = time.monotonic()
     return name, msg
@@ -1217,24 +1217,24 @@ def _agents_overview(chat_id: int) -> str:
     live = loaded_topics()
     act = live or {}
     rows = library.display_order(_load_lib(), set(act))
-    lines = [f"Текущая: {target_label(cur)}" if cur else NEED_PICK, ""]
+    lines = [f"Current: {target_label(cur)}" if cur else NEED_PICK, ""]
     if live is None:
-        lines.append("⚠️ не удалось узнать, какие темы загружены (library_cli active) — "
-                     "все показаны как выгруженные")
+        lines.append("⚠️ couldn't tell which topics are loaded (library_cli active) — "
+                     "all shown as unloaded")
     if rows:
-        lines.append("Темы (🟢 загружена · ⚪️ выгружена · ⚙️ работает):")
+        lines.append("Topics (🟢 loaded · ⚪️ unloaded · ⚙️ working):")
         for e in rows:
             s = act.get(e["id"])
             name = _clip(e.get("name", ""), 60).replace("\n", " ")
             lines.append(f"{'🟢' if s else '⚪️'} «{name}» · {e['id']}"
                          f"{' ⚙️' if s and s.get('working') else ''}"
-                         f"{' ← текущая' if e['id'] == cur else ''}")
+                         f"{' ← current' if e['id'] == cur else ''}")
     else:
-        lines.append("Тем пока нет — /new <имя>")
+        lines.append("No topics yet — /new <name>")
     legacy = _running_legacy()
     if legacy:
-        lines += ["", "Старые терминалы (до переезда, /use N):"]
-        lines += [f"🟢 #{aid} ({SESSIONS[aid]}){' ← текущий' if aid == cur else ''}"
+        lines += ["", "Old terminals (before the move, /use N):"]
+        lines += [f"🟢 #{aid} ({SESSIONS[aid]}){' ← current' if aid == cur else ''}"
                   for aid in legacy]
     return "\n".join(lines)
 
@@ -1309,11 +1309,11 @@ async def _apply_topic(chat_id: int, e: dict) -> str:
     message asks library_cli again."""
     sid = e["id"]
     set_current(chat_id, sid)
-    head = f"✅ Текущая тема: {topic_label(e)}"
+    head = f"✅ Current topic: {topic_label(e)}"
     name, msg = await _load_topic(sid)
     if name is None:
-        return head + f"\n⚠️ не загрузилась: {msg}\nСледующее сообщение попробует снова."
-    out = head + ("\n▶️ была выгружена — загружаю…" if name in _fresh else "")
+        return head + f"\n⚠️ couldn't load: {msg}\nThe next message will try again."
+    out = head + ("\n▶️ was unloaded — loading…" if name in _fresh else "")
     return out + (f"\nℹ️ {msg}" if msg else "")
 
 
@@ -1329,9 +1329,9 @@ async def _use_number(chat_id: int, aid: str) -> str:
         if e.get("archived"):
             # never fall back to the old launch script: it would start a second
             # Claude on this very conversation
-            return (f"Слот #{aid} переехал в тему {topic_label(e)}, а она в архиве — "
-                    "верните её из архива на странице библиотеки. Старый терминал "
-                    "не запускаю (это был бы второй Claude на той же переписке).")
+            return (f"Slot #{aid} moved to topic {topic_label(e)}, which is in the archive — "
+                    "restore it on the library page. Not starting the old terminal "
+                    "(that would be a second Claude on the same conversation).")
         return await _apply_topic(chat_id, e)
     return await _apply_use(chat_id, aid)
 
@@ -1341,7 +1341,7 @@ async def cmd_use(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = " ".join(ctx.args or []).strip()
     if not query:
         cur = resolve_current(chat_id)
-        head = f"Сейчас: {target_label(cur)}. Выберите тему:" if cur else "Выберите тему:"
+        head = f"Current: {target_label(cur)}. Pick a topic:" if cur else "Pick a topic:"
         kb = await asyncio.to_thread(_use_keyboard)
         await update.message.reply_text(head, reply_markup=kb)
         return
@@ -1354,14 +1354,14 @@ async def cmd_use(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     hits = library.resolve(_load_lib(), query)
     if not hits:
         await update.message.reply_text(
-            f"Темы «{_clip(query, 60)}» нет (или она в архиве). "
-            "Все темы: /list · новая: /new <имя>")
+            f"No topic «{_clip(query, 60)}» (or it is archived). "
+            "All topics: /list · new: /new <name>")
         return
     if len(hits) == 1:
         await update.message.reply_text(await _apply_topic(chat_id, hits[0]))
         return
     kb = await asyncio.to_thread(_topics_keyboard, hits)
-    await update.message.reply_text(f"Нашлось тем: {len(hits)}. Какую?", reply_markup=kb)
+    await update.message.reply_text(f"Found {len(hits)} topics. Which one?", reply_markup=kb)
 
 
 async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1373,7 +1373,7 @@ async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         with library.update(_lib_file()) as lib:
             e = dict(library.create(lib, name, cwd=cwd, now=int(time.time())))
     except (OSError, ValueError) as ex:
-        await update.message.reply_text(f"⚠️ не удалось создать тему: {_clip(ex, 200)}")
+        await update.message.reply_text(f"⚠️ couldn't create the topic: {_clip(ex, 200)}")
         return
     log.info("NEW %s", topic_label(e))
     await update.message.reply_text("🆕 " + await _apply_topic(update.effective_chat.id, e))
@@ -1388,7 +1388,7 @@ async def on_use_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_topic(key):
         e = topic_entry(key)
         if e is None:
-            await q.edit_message_text("Такой темы нет (или она в архиве) — /list"); return
+            await q.edit_message_text("No such topic (or it is archived) — /list"); return
         await q.edit_message_text(await _apply_topic(q.message.chat_id, e))
         return
     if key not in SESSIONS:
@@ -1472,7 +1472,7 @@ async def cmd_read(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(NEED_PICK); return
     if not has_session(s):
         await update.message.reply_text(
-            f"⚪️ {s} не загружен — пришлите сообщение (или /use), и тема загрузится"); return
+            f"⚪️ {s} is not loaded — send a message (or /use) and the topic will load"); return
     text = clean_pane(capture(s)) or "(empty)"
     for part in chunk(text):
         await update.message.reply_text(part)
@@ -1514,8 +1514,8 @@ async def cmd_compact(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def _not_claude_text(label: str) -> str:
-    return (f"⚠️ {label}: в терминале сейчас не Claude (например, голая оболочка) — "
-            "текст НЕ отправлен, иначе он выполнился бы как команды. Посмотрите /read.")
+    return (f"⚠️ {label}: the terminal is not Claude right now (e.g. a bare shell) — "
+            "text NOT sent, it would have run as commands. Check /read.")
 
 
 def _require_session(update: Update) -> str | None:
@@ -1636,12 +1636,12 @@ async def _deliver_to_terminal(reply_to, chat_id: int, text: str) -> None:
             await reply_to.reply_text(f"⚠️ Terminal #{cur} isn't running (no tmux session)."); return
     _convo("IN", text, f"chat={chat_id} {label}")
     starting = time.monotonic() - _fresh.get(session, float("-inf")) < READY_TIMEOUT
-    placeholder = await reply_to.reply_text(f"➡️ {label}: …" + ("\n▶️ загружаю тему…" if starting else ""))
+    placeholder = await reply_to.reply_text(f"➡️ {label}: …" + ("\n▶️ loading the topic…" if starting else ""))
     if not await _wait_ready(session):    # no-op unless the bridge just loaded it
         await _safe_edit(placeholder,
-                         f"⚠️ {label}: Claude не поднялся за {READY_TIMEOUT} с — сообщение "
-                         "не отправлено (иначе оно ушло бы в оболочку). Посмотрите /read "
-                         "и пришлите ещё раз.")
+                         f"⚠️ {label}: Claude didn't come up in {READY_TIMEOUT}s — message "
+                         "not sent (it would have gone to the shell). Check /read "
+                         "and send it again.")
         return
     path = transcript_path(cur)
     async with lock_for(session):
@@ -1739,9 +1739,9 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 BOT_COMMANDS = [
-    BotCommand("use", "выбрать тему: /use <часть имени или код>"),
-    BotCommand("list", "темы: загруженные сверху, текущая отмечена"),
-    BotCommand("new", "новая тема: /new <имя>"),
+    BotCommand("use", "pick a topic: /use <part of the name or id>"),
+    BotCommand("list", "topics: loaded first, current one marked"),
+    BotCommand("new", "new topic: /new <name>"),
     BotCommand("read", "re-read the current terminal screen"),
     BotCommand("esc", "interrupt the agent (Escape)"),
     BotCommand("enter", "send Enter"),

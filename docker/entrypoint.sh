@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Start the AgentDeck stack inside the container: backend (status_server, all API ports)
-# + a ttyd terminal per agent + Caddy (login gate + automatic HTTPS) in front.
+# Start the AgentDeck stack inside the container — the same layout as production
+# (nginx/agents-subdomain.conf): backend (status_server: all API ports + the session
+# library API) + the task board + ONE ttyd for the session library (/sess/) + the idle
+# reaper (once a minute) + Caddy (login gate + automatic HTTPS) in front.
 # The dashboard password is set on first visit (no env needed) and stored in the volume.
 set -uo pipefail
 cd /app
@@ -46,14 +48,16 @@ sleep 1
 echo "[agentdeck] task board: tasks-dashboard/server.py"
 python3 tasks-dashboard/server.py &
 
-declare -A PORT=( [1]=3005 [2]=3006 [3]=3008 [4]=3009 [5]=3012 [6]=3013 [7]=3015 [8]=3016 )
-for id in 1 2 3 4 5 6 7 8; do
-  script="launch-claude.sh"; [ "$id" != "1" ] && script="launch-claude-$id.sh"
-  [ -f "$script" ] || continue
-  base="/terminal"; [ "$id" != "1" ] && base="/terminal$id"
-  echo "[agentdeck] ttyd :${PORT[$id]} ($base) -> $script"
-  ttyd -W -i lo -p "${PORT[$id]}" --base-path "$base" bash "./$script" &
-done
+# Session library: ONE ttyd for every topic. The dashboard opens /sess/?arg=<8-hex id>
+# (or ?arg=shell); -a hands ?arg= to open-session.sh, which validates it and attaches the
+# tab to the topic's tmux session (loading it first). -O: the websocket's Origin must equal
+# its Host (Caddy passes Host through). Localhost only — Caddy fronts it behind the login.
+echo "[agentdeck] sessions ttyd :3031 (/sess) -> open-session.sh"
+ttyd -W -a -O -i lo -p 3031 --base-path /sess bash /app/open-session.sh &
+
+# idle reaper: unloads topics nobody uses (no cron in the container — a loop instead)
+echo "[agentdeck] idle reaper: idle_reaper.py once a minute"
+( while true; do python3 idle_reaper.py >> /app/.sessions/idle_reaper.log 2>&1; sleep 60; done ) &
 
 CADDYFILE=/app/docker/Caddyfile
 # AGENTDECK_SITE=https://... (a port or IP, no real domain) → self-signed HTTPS:

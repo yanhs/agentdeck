@@ -10,6 +10,7 @@
 	root * web
 
 	route {
+		# login / change-password pages + the auth probe — reachable without a session
 		handle /login* {
 			reverse_proxy 127.0.0.1:3046
 		}
@@ -20,6 +21,7 @@
 			reverse_proxy 127.0.0.1:3046
 		}
 
+		# gate everything else: valid session cookie required, else redirect to /login
 		forward_auth 127.0.0.1:3046 {
 			uri /check
 			@unauth status 401
@@ -27,6 +29,19 @@
 				header Location /login
 				respond 302
 			}
+		}
+
+		# Session library: ONE ttyd for every topic (/sess/?arg=<id> -> open-session.sh <id>,
+		# ?arg=shell -> the shared command line). ttyd runs with --base-path /sess, so the
+		# prefix is kept (handle, not handle_path). Caddy passes Host through unchanged,
+		# which ttyd -O compares with the websocket's Origin.
+		redir /sess /sess/?{query}
+		handle /sess/* {
+			reverse_proxy 127.0.0.1:3031
+		}
+		# the library's registry API (status_server) — full path kept: /api/library/...
+		handle /api/library* {
+			reverse_proxy 127.0.0.1:3011
 		}
 
 		# Telegram-bot setup page (status_server, behind the login gate)
@@ -51,32 +66,6 @@
 		}
 		handle_path /api/paste-image* {
 			reverse_proxy 127.0.0.1:3047
-		}
-		handle /terminal2* {
-			reverse_proxy 127.0.0.1:3006
-		}
-		handle /terminal3* {
-			reverse_proxy 127.0.0.1:3008
-		}
-		handle /terminal4* {
-			reverse_proxy 127.0.0.1:3009
-		}
-		handle /terminal5* {
-			reverse_proxy 127.0.0.1:3012
-		}
-		handle /terminal6* {
-			reverse_proxy 127.0.0.1:3013
-		}
-		handle /terminal7* {
-			reverse_proxy 127.0.0.1:3015
-		}
-		handle /terminal8* {
-			reverse_proxy 127.0.0.1:3016
-		}
-		# /terminal* must come LAST: its wildcard also matches /terminal2../terminal8,
-		# so the specific handles above win first and this catches only terminal 1.
-		handle /terminal* {
-			reverse_proxy 127.0.0.1:3005
 		}
 		file_server
 	}

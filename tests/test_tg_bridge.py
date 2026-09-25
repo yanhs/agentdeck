@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -1055,7 +1056,7 @@ class World:
             sid = args[1]
             code, err = self.codes.get(sid, (0, ""))
             if code == 0 and library.find(library.load(self.lib), sid) is None:
-                code, err = 2, f"unknown session {sid}: такой темы нет в библиотеке"
+                code, err = 2, f"unknown session {sid}: no such topic in the library"
             if code == 0 and sid not in self.loaded:
                 self.loaded.append(sid)
             return _Proc(code, f"cs-{sid}\n" if code == 0 else "", err)
@@ -1172,7 +1173,8 @@ def test_use_by_name_selects_topic_by_id_and_loads_it(world):
     assert tb.get_current(CHAT) == "bbbb2222"            # stored by id, not by name
     assert world.ensured() == ["bbbb2222"]                # loaded via library_cli ensure
     text = replies[-1][0]
-    assert "Налоги 2026" in text and "bbbb2222" in text
+    assert text.splitlines() == ["✅ Current topic: cs-bbbb2222 «Налоги 2026»",
+                                 "▶️ was unloaded — loading…"]
 
 
 def test_use_multiword_name(world):
@@ -1216,17 +1218,19 @@ def test_use_archived_topic_is_not_selectable(world):
 
 def test_use_reports_busy_but_keeps_selection(world):
     world.add("тема", uuid=U1)
-    world.codes["aaaa1111"] = (3, "Все 12 загруженных тем сейчас заняты работой")
+    world.codes["aaaa1111"] = (3, "All 12 loaded topics are busy")
     replies = run_cmd(tb.cmd_use, ["aaaa1111"])
     assert tb.get_current(CHAT) == "aaaa1111"             # a later message retries ensure
-    assert "заняты" in replies[-1][0]
+    assert "busy" in replies[-1][0]
+    assert "⚠️ couldn't load: All 12 loaded topics are busy" in replies[-1][0]
+    assert "The next message will try again." in replies[-1][0]
 
 
 def test_use_relays_the_unload_notice(world):
     world.add("тема", uuid=U1)
-    world.codes["aaaa1111"] = (0, "выгружена тема cs-bbbb2222 «Налоги» — давно не использовалась")
+    world.codes["aaaa1111"] = (0, "unloaded topic cs-bbbb2222 «Налоги» — unused for a while")
     replies = run_cmd(tb.cmd_use, ["тема"])
-    assert "выгружена тема cs-bbbb2222" in replies[-1][0]
+    assert "ℹ️ unloaded topic cs-bbbb2222" in replies[-1][0]
 
 
 def test_use_callback_selects_topic(world):
@@ -1285,12 +1289,13 @@ def test_list_loaded_topics_first_and_marks_current(world):
     tb.set_current(CHAT, "bbbb2222")
     text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
     assert ("active",) in world.log                       # asks library_cli what is loaded
-    assert "Текущая: cs-bbbb2222 «Новая выгруженная»" in text     # header names the current one
+    assert text.startswith("Current: cs-bbbb2222 «Новая выгруженная»\n\n")  # header names the current one
+    assert "Topics (🟢 loaded · ⚪️ unloaded · ⚙️ working):" in text
     rows = [l for l in text.splitlines() if l.startswith(("🟢", "⚪"))]
     assert [("Старая" in l, "Новая" in l) for l in rows] == [(True, False), (False, True)]
     loaded, cur = rows
     assert "🟢" in loaded and "aaaa1111" in loaded
-    assert "⚪" in cur and "bbbb2222" in cur and "←" in cur
+    assert "⚪" in cur and "bbbb2222" in cur and cur.endswith(" ← current")
     assert "В архиве" not in text
 
 
@@ -1298,7 +1303,7 @@ def test_list_says_so_when_loaded_state_is_unknown(world):
     world.add("тема", uuid=U1)
     world.active_code = 1
     text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
-    assert "тема" in text and "не удалось" in text
+    assert "тема" in text and "couldn't tell which topics are loaded" in text
 
 
 # --- /new ------------------------------------------------------------------
@@ -1313,7 +1318,8 @@ def test_new_creates_topic_selects_and_loads_it(world, monkeypatch, tmp_path):
     assert e["cwd"] == str(tmp_path)
     assert tb.get_current(CHAT) == e["id"]
     assert world.ensured() == [e["id"]]
-    assert e["id"] in replies[-1][0] and "Разбор логов" in replies[-1][0]
+    assert replies[-1][0] == (f"🆕 ✅ Current topic: cs-{e['id']} «Разбор логов»\n"
+                              "▶️ was unloaded — loading…")
 
 
 def test_new_without_name_gets_a_dated_default(world):
@@ -1371,10 +1377,10 @@ def test_text_to_topic_ensures_then_types_into_cs_session(world, monkeypatch):
 def test_text_to_topic_not_typed_when_all_busy(world, monkeypatch):
     world.add("тема", uuid=U1)
     tb.set_current(CHAT, "aaaa1111")
-    world.codes["aaaa1111"] = (3, "Все 12 загруженных тем сейчас заняты работой")
+    world.codes["aaaa1111"] = (3, "All 12 loaded topics are busy")
     sink, streamed = _deliver(world, monkeypatch)
     assert not [e for e in world.log if e[0] == "send"] and not streamed
-    assert "заняты" in sink[-1][0]
+    assert "busy" in sink[-1][0]
 
 
 def test_text_to_vanished_topic_not_typed(world, monkeypatch):
@@ -1546,7 +1552,7 @@ def test_use_number_with_archived_migrated_topic_never_starts_the_old_slot(world
     replies = run_cmd(tb.cmd_use, ["6"])
     assert started == []                                   # no 2nd Claude on the same uuid
     assert tb.get_current(CHAT) != "6"
-    assert "архив" in replies[-1][0]
+    assert "archive" in replies[-1][0]
 
 
 def test_use_number_callback_with_archived_migrated_topic(world, monkeypatch):
@@ -1554,7 +1560,7 @@ def test_use_number_callback_with_archived_migrated_topic(world, monkeypatch):
     started = _no_legacy_start(monkeypatch)
     sink = run_cb(tb.on_use_cb, "use:6")
     assert started == [] and tb.get_current(CHAT) != "6"
-    assert "архив" in sink[-1][0]
+    assert "archive" in sink[-1][0]
 
 
 def test_start_session_refuses_a_migrated_slot(world, monkeypatch):
@@ -1568,7 +1574,7 @@ def test_start_session_refuses_a_migrated_slot(world, monkeypatch):
 
 def test_saved_legacy_selection_with_archived_topic_is_not_sent(world, monkeypatch):
     world.add("app - PIPE", uuid=U1, legacy_slot=6, archived=True)
-    world.codes["aaaa1111"] = (2, "тема в архиве")
+    world.codes["aaaa1111"] = (2, "topic is archived")
     started = _no_legacy_start(monkeypatch)
     tb.set_current(CHAT, "6")
     sink, streamed = _deliver(world, monkeypatch, "дальше")
@@ -1582,9 +1588,9 @@ def test_ensure_exit_4_already_running_elsewhere(world, monkeypatch):
     tb.set_current(CHAT, "aaaa1111")
     sink, streamed = _deliver(world, monkeypatch)
     assert not [e for e in world.log if e[0] == "send"] and not streamed
-    assert "уже открыта" in sink[-1][0]
+    assert "already open" in sink[-1][0]
     replies = run_cmd(tb.cmd_use, ["тема"])
-    assert "уже открыта" in replies[-1][0]
+    assert "already open" in replies[-1][0]
 
 
 def test_text_not_typed_when_the_topic_pane_is_not_claude(world, monkeypatch):
@@ -1595,7 +1601,7 @@ def test_text_not_typed_when_the_topic_pane_is_not_claude(world, monkeypatch):
     sink, streamed = _deliver(world, monkeypatch, "rm -rf ~")
     assert ("pane-is-claude", "aaaa1111") in world.log
     assert not [e for e in world.log if e[0] == "send"] and not streamed
-    assert "не Claude" in sink[-1][0]
+    assert "not Claude" in sink[-1][0]
 
 
 def test_pane_check_runs_off_the_event_loop(world, monkeypatch):
@@ -1615,7 +1621,7 @@ def test_text_not_typed_when_the_legacy_pane_is_not_claude(world, monkeypatch):
     monkeypatch.setattr(tb, "legacy_pane_command", lambda s: "bash")
     sink, streamed = _deliver(world, monkeypatch, "привет")
     assert not [e for e in world.log if e[0] == "send"] and not streamed
-    assert "не Claude" in sink[-1][0]
+    assert "not Claude" in sink[-1][0]
 
 
 def test_legacy_pane_command_reads_list_panes_exactly(monkeypatch):
@@ -1643,7 +1649,7 @@ def test_ready_timeout_refuses_instead_of_sending(world, monkeypatch):
     shell = "ubuntu@vps:~/pr$ claude --session-id x"
     sink, streamed = _deliver(world, monkeypatch, "привет", screens=[shell])
     assert not [e for e in world.log if e[0] == "send"] and not streamed
-    assert any("не отправлено" in t for t, _ in sink)
+    assert any("not sent" in t for t, _ in sink)
 
 
 def test_library_cli_active_runs_off_the_event_loop(world):
@@ -1699,3 +1705,54 @@ def test_start_session_accepts_a_running_migrated_legacy_slot(world, monkeypatch
     monkeypatch.setattr(tb, "has_session", lambda s: s == "claude-terminal-6")
     ok, msg = tb.start_session("6")
     assert ok and msg == "already running"
+
+
+# --- English-only user-facing text -----------------------------------------
+
+_CYR = re.compile(r"[\u0400-\u04FF]")
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _cyrillic_literals(path):
+    """String literals (f-string parts included) with Cyrillic, docstrings excepted.
+    Comments are not string literals, so they never show up here."""
+    import ast
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            b = node.body
+            if b and isinstance(b[0], ast.Expr) and isinstance(b[0].value, ast.Constant):
+                docs.add(id(b[0].value))
+    return [(n.lineno, n.value) for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in docs and _CYR.search(n.value)]
+
+
+@pytest.mark.parametrize("name", ["tg_bridge.py", "library_cli.py"])
+def test_no_cyrillic_in_user_facing_strings(name):
+    assert _cyrillic_literals(os.path.join(_ROOT, name)) == []
+
+
+def test_open_session_prints_no_cyrillic():
+    bad = []
+    for i, line in enumerate(open(os.path.join(_ROOT, "open-session.sh"), encoding="utf-8"), 1):
+        code = line.strip()
+        if code.startswith("#"):
+            continue
+        code = re.sub(r"\s#\s.*$", "", code)            # trailing comment
+        if _CYR.search(code):
+            bad.append((i, code))
+    assert bad == []
+
+
+def test_bot_commands_are_english():
+    got = {c.command: c.description for c in tb.BOT_COMMANDS}
+    assert got["use"] == "pick a topic: /use <part of the name or id>"
+    assert got["list"] == "topics: loaded first, current one marked"
+    assert got["new"] == "new topic: /new <name>"
+    assert not [d for d in got.values() if _CYR.search(d)]
+
+
+def test_need_pick_is_english():
+    assert tb.NEED_PICK == "Pick a topic first: /use <part of the name or id> · /list · /new <name>"

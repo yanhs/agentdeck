@@ -13,6 +13,10 @@ services:
       # Default: plain http on :8765. Want a domain + automatic HTTPS? Set
       # AGENTDECK_SITE=your-domain AND change the port line above to "80:80" + "443:443".
       AGENTDECK_SITE: "${AGENTDECK_SITE:-:8765}"
+      # Library changes (new/rename/archive/...) are accepted only from the dashboard's own
+      # address — by default the scheme + Host the browser used. Behind another proxy that
+      # rewrites Host, set it explicitly, e.g. https://agents.example.com
+      AGENTDECK_ORIGIN: "${AGENTDECK_ORIGIN:-}"
     volumes:
       # the agents' Claude login — stored here; sign in once in a dashboard terminal (no
       # Claude needed on the host), and it's reused on every restart.

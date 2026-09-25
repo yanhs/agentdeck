@@ -1,5 +1,5 @@
 #!/bin/bash
-# MIGRATED-BY migrate_library.py — slot 5 is now library topic bb3dd421 «app - SECURE, UI, design, outreach, docker».
+# MIGRATED-BY migrate_library.py — slot 5 is now library topic bb3dd421.
 # The original script is kept next to this one as $(basename "$0").pre-library.
 # Legacy tmux session still running -> attach to it exactly as before (its claude
 # is not restarted). Otherwise -> the library opens the topic (open-session.sh

@@ -340,7 +340,7 @@ def test_ensure_refuses_with_exit_3_when_all_loaded_are_working(deck):
     r = deck.cli("ensure", c["id"], AGENTDECK_MAX_ACTIVE="2", AGENTDECK_WORKING_SECONDS="3600")
     assert r.returncode == 3
     assert r.stdout == ""
-    assert "2" in r.stderr and "заняты" in r.stderr
+    assert "2" in r.stderr and "busy" in r.stderr
     assert deck.has("cs-aaaaaaaa") and deck.has("cs-bbbbbbbb") and not deck.has("cs-c0ffee00")
 
 
@@ -567,3 +567,37 @@ def test_claude_inside_its_own_session_is_not_elsewhere(deck, monkeypatch):
     found = wait_for(lambda: m.claude_processes(U1))
     assert [s for _, s in found] == ["cs-aaaaaaaa"]
     assert m.claude_elsewhere(U1, "cs-aaaaaaaa") == []
+
+
+def _procs_with_home(home):
+    """pids whose environment has HOME=<home> (the deck's fake claudes and their children)."""
+    want = f"HOME={home}".encode()
+    out = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/environ", "rb") as f:
+                if want in f.read().split(b"\0"):
+                    out.append(int(d))
+        except OSError:
+            pass
+    return out
+
+
+def test_deck_close_leaves_no_fake_claude_behind(tmp_path):
+    """A leftover fake `claude --session-id <uuid>` from one test made the next test's
+    ensure answer 'already running elsewhere' (exit 4). close() must kill every
+    process the deck started, background tasks included."""
+    d = Deck(tmp_path)
+    try:
+        (d.home / "bg-aaaaaaaa").write_text("")
+        e = d.add("A", uuid=U1)
+        assert d.cli("ensure", e["id"]).returncode == 0
+        f = d.add("B", uuid=U3)
+        assert d.cli("ensure", f["id"]).returncode == 0
+        wait_for(lambda: len(_procs_with_home(d.home)) >= 3)
+    finally:
+        d.close()
+    wait_for(lambda: not _procs_with_home(d.home), timeout=3)
+    assert _procs_with_home(d.home) == []
