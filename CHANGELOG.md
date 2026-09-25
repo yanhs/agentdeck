@@ -2,8 +2,14 @@
 
 All notable changes to AgentDeck. Newest first.
 
-## Unreleased
+## v1.5.0 — server page, light theme, guard hooks
 
+- **Server page.** A live view of the machine (`web/server.html`, `GET /api/server`, collected
+  by `server_status.py` every 5 s for under 1% of one core): CPU, memory, disk and load gauges,
+  a 15-minute CPU chart by group, a "who uses the CPU right now" bar, and rows for every agent
+  (with the tests and builds it started), site, container, service and background job, each
+  with CPU and memory. Command lines are never shown in full; anything that looks like a
+  secret is masked. Opens as a closable **Server** tab next to Tasks.
 - **Light theme.** A Dark / Light switch in the dashboard's ⋯ menu (remembered in `localStorage` `agentdeck-theme`, applied before first paint); the embedded Tasks and Server pages follow it live. The terminal stays dark.
 - **Guard hooks.** `hooks/guard_task_board.py` blocks the first file edit of a session until
   the task is on the board (or the agent runs `NO_BOARD=1 true` for a trivial change).
@@ -11,6 +17,12 @@ All notable changes to AgentDeck. Newest first.
   active and no background command, timer, monitor or sub-agent will resume it. Both give way
   if they hit an error of their own. Settings are environment variables. Copy the wiring from
   `hooks/settings.example.json`. Tests: `tests/test_guard_hooks.py`.
+- **Terminal id → its tasks.** Clicking the 8-character code in the top bar opens the Tasks tab
+  filtered to that terminal (`/tasks/?session=<code>`, shown as a removable chip).
+- **Task board inside the dashboard** uses the dashboard's colours and a slightly smaller type.
+- **RAM readout** in GB with one decimal (`13.8/23.5G`).
+- **Leaner repo.** The numbered-slot launch scripts (`launch-claude*.sh`, `_order_gate.py`) are
+  no longer shipped; `migrate_library.py` still upgrades an old install that has them.
 
 ## v1.4.0 — named terminals instead of numbered slots
 
