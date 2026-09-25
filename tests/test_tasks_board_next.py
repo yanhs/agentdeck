@@ -47,6 +47,7 @@ def make_state(now: datetime) -> dict:
         {
             "id": "pipeline-quality", "title": "Improve brief pipeline quality",
             "agent": "claude · appeals", "status": "active", "activity": "working",
+            "session": "5e1f00ab",
             "created": ago(hours=3), "updated": ago(minutes=5),
             "items": [
                 {"title": "Read code", "status": "done", "note": "", "updated": ago(hours=2, minutes=50)},
@@ -223,6 +224,7 @@ def test_done_collapsed_and_paginated(page):
     ("zebrafish", {"pipeline-quality"}),             # step note
     ("oauth consent", {"gmail-sync"}),               # activity note
     ("number 007", {"done-007"}),                    # done tasks are searched too
+    ("5e1f00", {"pipeline-quality"}),                # agent's 8-hex session id
 ])
 def test_search_instant_with_highlight(page, query, expect):
     page.fill("#q", query)  # no Enter: instant
@@ -292,6 +294,21 @@ def test_row_shows_relative_time_with_exact_hover(page):
     assert t.get_attribute("title")  # exact local time on hover
     assert row.locator(".progress").get_attribute("aria-valuenow") == "50"
     assert "2/4" in row.inner_text()
+
+
+def test_session_id_shown_next_to_agent(page):
+    """Owner, 2026-09-25: the agent's 8-hex session id (the start of the Claude
+    session uuid, the same code the dashboard shows) sits next to the agent name."""
+    row = page.locator('.task[data-id="pipeline-quality"]')
+    sess = row.locator(".task-row .t-sess")
+    assert sess.inner_text().strip() == "5e1f00ab"
+    assert "session" in (sess.get_attribute("title") or "").lower()
+    # a task recorded before this change has no id: nothing, not "undefined"
+    assert page.locator('.task[data-id="svetlota-fonts"] .t-sess').count() == 0
+    row.locator(".task-row").click()
+    det = row.locator(".task-detail")
+    assert "5e1f00ab" in det.inner_text()
+    assert "session" in det.inner_text().lower()
 
 
 def test_expand_shows_steps_times_and_duration(page):

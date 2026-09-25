@@ -154,6 +154,7 @@
   .t-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin-top: 2px; color: var(--text-3); font-size: 12px; min-width: 0; }
   .t-meta > * { min-width: 0; overflow-wrap: anywhere; }
   .t-agent { color: var(--text-2); }
+  .t-sess { color: var(--text-3, var(--text-2)); }
   .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500; padding: 0 7px;
     border-radius: 999px; line-height: 18px; max-width: 100%; }
   .badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
@@ -369,7 +370,7 @@ function prep(state) {
   const tasks = (state && Array.isArray(state.tasks)) ? state.tasks : [];
   return tasks.map(t => {
     const items = Array.isArray(t.items) ? t.items : [];
-    const hay = [t.title, t.id, t.agent, t.activity_note, ...items.map(i => (i.title || '') + '\n' + (i.note || ''))]
+    const hay = [t.title, t.id, t.agent, t.session, t.activity_note, ...items.map(i => (i.title || '') + '\n' + (i.note || ''))]
       .join('\n').toLowerCase();
     return {
       t, items, hay, group: groupOf(t),
@@ -431,7 +432,7 @@ function stepHit(r) {
   const k = ui.toks;
   if (!k.length) return '';
   const inHead = s => k.some(x => String(s || '').toLowerCase().includes(x));
-  if (inHead(r.t.title) || inHead(r.t.id) || inHead(r.t.agent) || inHead(r.t.activity_note)) return '';
+  if (inHead(r.t.title) || inHead(r.t.id) || inHead(r.t.agent) || inHead(r.t.session) || inHead(r.t.activity_note)) return '';
   const idx = r.items.findIndex(i => inHead(i.title) || inHead(i.note));
   if (idx < 0) return '';
   const it = r.items[idx];
@@ -471,6 +472,7 @@ function detail(r) {
     <dl class="facts">
       <div><dt>Status</dt><dd>${esc(statusTxt)}${t.activity && t.status !== 'done' ? ' <span class="sub">(' + esc(t.activity) + ')</span>' : ''}</dd></div>
       <div><dt>Agent</dt><dd>${hl(t.agent || 'unknown', k)}</dd></div>
+      ${t.session ? `<div><dt>Session</dt><dd class="mono">${hl(t.session, k)}</dd></div>` : ''}
       <div><dt>Created</dt><dd>${absShort(r.created) || '—'} <span class="sub">${tm(r.created, '', 'Created')}</span></dd></div>
       <div><dt>Updated</dt><dd>${absShort(lastT) || '—'} <span class="sub">${tm(lastT, '', 'Updated')}</span></dd></div>
       <div><dt>${spanLbl}</dt><dd>${spanVal || '—'}</dd></div>
@@ -492,7 +494,7 @@ function rowHTML(r, open) {
       <span class="st" title="${esc(t.status || '')}">${icon}</span>
       <span class="t-main">
         <span class="t-title">${hl(t.title || t.id, k)}</span>
-        <span class="t-meta"><span class="mono t-id">${hl(t.id, k)}</span><span class="t-agent">${hl(agentLabel(t.agent), k)}</span>${badge(t)}${r.created != null ? `<span>Created ${tm(r.created, 'created', 'Created')}</span>` : ''}</span>
+        <span class="t-meta"><span class="mono t-id">${hl(t.id, k)}</span><span class="t-agent">${hl(agentLabel(t.agent), k)}</span>${t.session ? `<span class="mono t-sess" title="Agent's Claude session id — the same code the terminal list shows">${hl(t.session, k)}</span>` : ''}${badge(t)}${r.created != null ? `<span>Created ${tm(r.created, 'created', 'Created')}</span>` : ''}</span>
         ${stepHit(r)}
       </span>
       <span class="t-prog">${n ? progress(r.nDone, n) + `<span class="frac">${r.nDone}/${n}</span>` : '<span class="frac">no steps</span>'}</span>

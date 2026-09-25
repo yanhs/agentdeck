@@ -14,6 +14,7 @@ shared dashboard.
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -42,6 +43,20 @@ def save(s):
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, STATE)
+
+
+def session_code():
+    """The first 8 hex of this Claude session's uuid (CLAUDE_CODE_SESSION_ID), the
+    same code the dashboard shows for a terminal; None outside Claude."""
+    sid = os.getenv("CLAUDE_CODE_SESSION_ID", "")
+    return sid[:8] if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f-]{27}", sid) else None
+
+
+def stamp(t, take_over=False):
+    """add-task takes the task over; later commands only fill a missing code."""
+    code = session_code()
+    if code and (take_over or not t.get("session")):
+        t["session"] = code
 
 
 def find(s, tid):
@@ -96,11 +111,13 @@ def main():
             s["tasks"].append(t)
         t["title"] = a.title or t.get("title") or a.id
         t["agent"] = a.agent
+        stamp(t, take_over=True)
         t["status"] = a.status
         t["updated"] = now()
 
     elif a.cmd == "add-item":
         t = find(s, a.task_id) or sys.exit(f"no task {a.task_id}")
+        stamp(t)
         t["items"].append({"title": a.title, "status": a.status, "note": "", "updated": now()})
         t["updated"] = now()
         print(f"item index {len(t['items']) - 1}")
@@ -109,6 +126,7 @@ def main():
         t = find(s, a.task_id) or sys.exit(f"no task {a.task_id}")
         if not (0 <= a.index < len(t["items"])):
             sys.exit(f"bad index {a.index} (0..{len(t['items']) - 1})")
+        stamp(t)
         it = t["items"][a.index]
         it["status"] = a.status
         if a.note is not None:
@@ -118,11 +136,13 @@ def main():
 
     elif a.cmd == "set-task":
         t = find(s, a.task_id) or sys.exit(f"no task {a.task_id}")
+        stamp(t)
         t["status"] = a.status
         t["updated"] = now()
 
     elif a.cmd == "state":
         t = find(s, a.task_id) or sys.exit(f"no task {a.task_id}")
+        stamp(t)
         t["activity"] = a.activity
         if a.note is not None:
             t["activity_note"] = a.note
