@@ -345,6 +345,21 @@ def tg_save(cfg):
         os.umask(old)
 
 
+TG_SYSTEMD_UNIT = os.environ.get("TG_SYSTEMD_UNIT", "claude-tg-bridge")
+
+
+def tg_systemd_active():
+    """The bridge runs as a systemd user service on this server (not started by
+    this page): then the page must neither report it stopped nor start a second
+    one on the same token (two pollers fight over Telegram updates)."""
+    try:
+        r = subprocess.run(["systemctl", "--user", "is-active", TG_SYSTEMD_UNIT],
+                           capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() == "active"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def tg_running():
     try:
         pid = int(open(TG_PID).read().strip())
@@ -385,8 +400,27 @@ def tg_start(token, owner):
 def tg_autostart():
     """Called at startup: if the bridge was configured + enabled, bring it back up."""
     cfg = tg_load()
+    if tg_systemd_active():
+        return
     if cfg.get("enabled") and cfg.get("token") and cfg.get("owner") and not tg_running():
         tg_start(cfg["token"], cfg["owner"])
+
+
+def tg_action(action, token, owner):
+    """Start/stop from the setup page; refused when systemd owns the bridge."""
+    if tg_systemd_active():
+        return (f"The bot is managed by the systemd service {TG_SYSTEMD_UNIT} on this "
+                "server — nothing changed here.")
+    if action == "stop":
+        tg_stop()
+        cfg = tg_load(); cfg["enabled"] = False; tg_save(cfg)
+        return "Bot stopped."
+    if not token or not owner:
+        return "Enter both the bot token and your Telegram user id."
+    tg_save({"token": token, "owner": owner, "enabled": True})
+    return ("Bot started — open Telegram and message it."
+            if tg_start(token, owner)
+            else "Could not start the bot — check the container logs.")
 
 
 def tg_render(msg=""):
@@ -405,8 +439,19 @@ def tg_render(msg=""):
       '<p style="text-align:center;margin-top:14px"><a href="/">&larr; back to dashboard</a></p>'
       '</form></body></html>')
     cfg = tg_load()
-    status = ('<b style="color:#3fb950">running</b>' if tg_running()
-              else '<b style="color:#8b949e">stopped</b>')
+    if tg_systemd_active():
+        # managed outside this page: no Save&start / Stop (a second bridge on the
+        # same token would fight the live one for updates)
+        page = page.replace(
+            '<button type="submit" name="action" value="start">Save &amp; start</button>', ''
+        ).replace(
+            '<button type="submit" name="action" value="stop" style="margin-top:8px;background:#30363d">Stop</button>',
+            f'<p class="sub">Managed by the systemd service <code>{TG_SYSTEMD_UNIT}</code> on this '
+            'server — start/stop it there, not here.</p>')
+        status = '<b style="color:#3fb950">running</b> (systemd)'
+    else:
+        status = ('<b style="color:#3fb950">running</b>' if tg_running()
+                  else '<b style="color:#8b949e">stopped</b>')
     return (page.replace("__STATUS__", "Status: " + status)
             .replace("__TOKEN__", (cfg.get("token") or "").replace('"', ""))
             .replace("__OWNER__", str(cfg.get("owner") or ""))
@@ -924,18 +969,7 @@ class Handler(BaseHTTPRequestHandler):
         token = form.get("token", [""])[0].strip()
         owner = form.get("owner", [""])[0].strip()
         action = form.get("action", ["start"])[0]
-        if action == "stop":
-            tg_stop()
-            cfg = tg_load(); cfg["enabled"] = False; tg_save(cfg)
-            msg = "Bot stopped."
-        elif not token or not owner:
-            msg = "Enter both the bot token and your Telegram user id."
-        else:
-            tg_save({"token": token, "owner": owner, "enabled": True})
-            msg = ("Bot started — open Telegram and message it."
-                   if tg_start(token, owner)
-                   else "Could not start the bot — check the container logs.")
-        out = tg_render(msg).encode("utf-8")
+        out = tg_render(tg_action(action, token, owner)).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(out)))

@@ -22,7 +22,10 @@ sys.path.insert(0, str(TERMINAL_DIR))
 
 def _load():
     sys.modules.pop("status_server", None)
-    return importlib.import_module("status_server")
+    mod = importlib.import_module("status_server")
+    # the real host runs the bridge as a systemd service; tests decide explicitly
+    mod.tg_systemd_active = lambda: False
+    return mod
 
 
 def test_config_roundtrip(tmp_path, monkeypatch):
@@ -80,4 +83,37 @@ def test_autostart_starts_only_when_enabled(tmp_path, monkeypatch):
     mod.tg_save({"token": "T", "owner": "1", "enabled": False})
     monkeypatch.setattr(mod, "tg_start",
                         lambda *a: pytest.fail("must not start when disabled"))
+    mod.tg_autostart()
+
+
+# ── bridge managed by systemd (this server: claude-tg-bridge.service) ───────
+def test_render_shows_running_when_systemd_bridge_is_active(tmp_path, monkeypatch):
+    # the page only knew its own pidfile and said "stopped" while the real
+    # bridge ran as a systemd user service (owner 2026-09-25)
+    mod = _load()
+    monkeypatch.setattr(mod, "TG_PID", str(tmp_path / "tg.pid"))
+    monkeypatch.setattr(mod, "tg_systemd_active", lambda: True)
+    html = mod.tg_render()
+    assert "running" in html and "stopped" not in html
+    assert "claude-tg-bridge" in html
+    assert 'value="start"' not in html and 'value="stop"' not in html   # no duplicate-start buttons
+
+
+def test_start_and_stop_refuse_when_systemd_bridge_is_active(tmp_path, monkeypatch):
+    # a second bridge on the same token would fight the live one for updates
+    mod = _load()
+    monkeypatch.setattr(mod, "tg_systemd_active", lambda: True)
+    monkeypatch.setattr(mod, "tg_start", lambda *a: pytest.fail("must not start a second bridge"))
+    monkeypatch.setattr(mod, "tg_stop", lambda *a: pytest.fail("must not touch the systemd bridge"))
+    assert "systemd" in mod.tg_action("start", "T", "1")
+    assert "systemd" in mod.tg_action("stop", "", "")
+
+
+def test_autostart_skips_when_systemd_bridge_is_active(tmp_path, monkeypatch):
+    mod = _load()
+    monkeypatch.setattr(mod, "TG_CONF", str(tmp_path / "telegram.json"))
+    monkeypatch.setattr(mod, "tg_running", lambda: 0)
+    monkeypatch.setattr(mod, "tg_systemd_active", lambda: True)
+    mod.tg_save({"token": "T", "owner": "1", "enabled": True})
+    monkeypatch.setattr(mod, "tg_start", lambda *a: pytest.fail("must not start a second bridge"))
     mod.tg_autostart()
