@@ -526,3 +526,29 @@ def test_session_param_ignores_garbage(browser, board):
         assert len(visible_ids(pg)) > 1
     finally:
         ctx.close()
+
+
+# ---- inside the dashboard (an iframe) the board wears the dashboard's colours
+DECK_BG = "rgb(9, 9, 11)"          # dashboard body #09090b
+DECK_TEXT = "rgb(228, 228, 231)"   # dashboard text #e4e4e7
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_embedded_board_uses_the_dashboard_palette(browser, board, scheme):
+    board.write(make_state(datetime.now(timezone.utc)))
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900}, color_scheme=scheme)
+    pg = ctx.new_page()
+    try:
+        pg.set_content(f'<iframe id="f" src="{board.url}" style="width:1200px;height:800px"></iframe>')
+        fr = pg.frame_locator("#f")
+        fr.locator(".task").first.wait_for()
+        frame = pg.frames[1]
+        css = lambda sel, prop: frame.eval_on_selector(sel, f"e => getComputedStyle(e).{prop}")  # noqa: E731
+        assert css("body", "backgroundColor") == DECK_BG
+        assert css("body", "color") == DECK_TEXT
+    finally:
+        ctx.close()
+
+
+def test_standalone_board_keeps_its_own_theme(page):
+    assert page.eval_on_selector("body", "e => getComputedStyle(e).backgroundColor") != DECK_BG
