@@ -1,64 +1,28 @@
 #!/bin/bash
-unset CLAUDE_CODE_SESSION CLAUDE_SESSION_ID CLAUDE_CODE CLAUDE_CODE_RUNNING CLAUDE_PARENT_SESSION ANTHROPIC_CLAUDE_CODE
-# Unset any other CLAUDE-named env vars so the child claude doesn't think it's
-# nested. Grep the NAME only (cut first) — grepping whole lines would also match
-# a var whose *value* contains "claude" (e.g. HOME under /tmp/claude-*).
-for var in $(env | cut -d= -f1 | grep -i CLAUDE); do unset "$var"; done
-
+# MIGRATED-BY migrate_library.py — slot 3 is now library topic f91c3981 «Instagram infuencers».
+# The original script is kept next to this one as $(basename "$0").pre-library.
+# Legacy tmux session still running -> attach to it exactly as before (its claude
+# is not restarted). Otherwise -> the library opens the topic (open-session.sh
+# loads cs-f91c3981, unloading an idle topic at the limit). No order gate: the
+# library decides what loads.
 SESSION="claude-terminal-3"
 AGENT_ID="3"
+LIB_ID="f91c3981"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-# The conversation persists across restarts: first launch creates the session
-# with --session-id, later launches continue it with --resume. NOTHING else is
-# forced — no --model, no effort. The model/context (1M vs 200K) and effort are
-# whatever you last had; pick them freely in the TUI with /model and /effort.
-# The conversation persists across restarts AND closed terminals: each agent has a
-# stable session id stored in .sessions/ (generated once), so a relaunch RESUMES it
-# (claude --resume) instead of starting over. Nothing is hardcoded -- claude is found
-# on PATH and agents start in $AGENTDECK_WORKDIR (default: the directory above this
-# repo), so a fresh clone works on any machine out of the box.
-CLAUDE_BIN="${CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
-WORKDIR="${AGENTDECK_WORKDIR:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)}"
-_SID_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")/.sessions"; mkdir -p "$_SID_DIR"
-_SID_FILE="$_SID_DIR/agent-$AGENT_ID.id"
-[ -s "$_SID_FILE" ] || uuidgen > "$_SID_FILE"
-AGENT_SESSION_ID="$(cat "$_SID_FILE")"
-SESSION_FILE="$HOME/.claude/projects/$(printf '%s' "$WORKDIR" | sed 's#/#-#g')/$AGENT_SESSION_ID.jsonl"
+unset CLAUDE_CODE_SESSION CLAUDE_SESSION_ID CLAUDE_CODE CLAUDE_CODE_RUNNING CLAUDE_PARENT_SESSION ANTHROPIC_CLAUDE_CODE
+for var in $(env | cut -d= -f1 | grep -i CLAUDE | grep -vx CLAUDE_BIN); do unset "$var"; done
 
-if [ -f "$SESSION_FILE" ]; then
-  CLAUDE_CMD="$CLAUDE_BIN --resume $AGENT_SESSION_ID --dangerously-skip-permissions"
-else
-  CLAUDE_CMD="$CLAUDE_BIN --session-id $AGENT_SESSION_ID --dangerously-skip-permissions"
-fi
+TMUX_CMD=(tmux)
+[ -n "${AGENTDECK_TMUX_SOCKET:-}" ] && TMUX_CMD=(tmux -L "$AGENTDECK_TMUX_SOCKET")
 
-# Stable auth for all terminals. Source a per-user 0600 file that exports
-# CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) INSIDE the pane command,
-# so every claude uses a static token instead of racing on the shared
-# ~/.claude/.credentials.json — whose refresh token rotates on refresh and was
-# logging sibling terminals out. Sourced in the pane (not the launcher) so it
-# works regardless of the tmux server's environment, and a 0600 source keeps
-# the token out of the scrollback. No-op — falls back to credentials.json — if
-# the file is absent, so this is safe to ship before the token exists.
-CLAUDE_CMD="[ -r $HOME/.claude/oauth.env ] && . $HOME/.claude/oauth.env; $CLAUDE_CMD"
-
-# DRY_RUN=1 prints the resolved claude command, then exits (used by tests).
-if [ "${DRY_RUN:-}" = "1" ]; then
-  echo "$CLAUDE_CMD"
-  exit 0
-fi
-
-if tmux has-session -t "=$SESSION" 2>/dev/null; then
-  exec tmux attach-session -t "=$SESSION"
-else
-  # === Order gate: don't auto-spawn a brand-new tmux session if this agent
-  # was not enabled in the dashboard list (`_order` in agents.json). Existing
-  # tmux sessions still attach normally — the gate only blocks fresh starts.
-  if ! python3 "$(dirname "${BASH_SOURCE[0]:-$0}")/_order_gate.py" "$AGENT_ID" >/dev/null 2>&1; then
-    echo "Agent #$AGENT_ID is not in /agents/. Click '+ Claude' in the dashboard to enable it."
-    sleep 5
+# exact name match in code (list-sessions), never display-message
+if "${TMUX_CMD[@]}" list-sessions -F '#{session_name}' 2>/dev/null | grep -qxF -- "$SESSION"; then
+  if [ "${DRY_RUN:-}" = "1" ]; then
+    echo "attach =$SESSION"
     exit 0
   fi
-  exec tmux new-session -s "$SESSION" -c "$WORKDIR" \; \
-    set mouse on \; \
-    send-keys "$CLAUDE_CMD" Enter
+  exec "${TMUX_CMD[@]}" attach-session -t "=$SESSION"
 fi
+
+exec bash "$HERE/open-session.sh" "$LIB_ID"

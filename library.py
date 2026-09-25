@@ -116,7 +116,7 @@ def _get(lib, sid):
 
 
 def default_name(now):
-    return time.strftime("Тема %d.%m %H:%M", time.gmtime(now))
+    return time.strftime("Terminal %d.%m %H:%M", time.gmtime(now))
 
 
 def create(lib, name, cwd, now, uuid=None):
@@ -128,6 +128,9 @@ def create(lib, name, cwd, now, uuid=None):
         raise ValueError(f"session {sid} already exists")
     e = {"id": sid, "uuid": u, "name": (name or "").strip() or default_name(now),
          "cwd": cwd, "created": now, "last_used": now, "archived": False}
+    placed = [x["pos"] for x in lib["sessions"] if _has_pos(x)]
+    if placed:                                  # manual order in use: new one on top
+        e["pos"] = min(placed) - 1
     lib["sessions"].append(e)
     return e
 
@@ -150,6 +153,63 @@ def archive(lib, sid, archived=True):
     e = _get(lib, sid)
     e["archived"] = bool(archived)
     return e
+
+
+def delete(lib, sid):
+    """Remove the entry from the registry (KeyError if unknown). Callers only
+    delete archived, unloaded topics; the transcript goes to trash_transcript()."""
+    e = _get(lib, sid)
+    lib["sessions"].remove(e)
+    return e
+
+
+# ── transcripts → trash (moved, never unlinked) ─────────────────────────────
+def claude_projects_root():
+    """~/.claude/projects, or $AGENTDECK_CLAUDE_PROJECTS (tests)."""
+    return (os.getenv("AGENTDECK_CLAUDE_PROJECTS")
+            or os.path.join(os.path.expanduser("~"), ".claude", "projects"))
+
+
+def cwd_slug(cwd):
+    """Claude's project-dir name for a cwd: every non-alphanumeric char -> '-'
+    (same rule as library_cli.slug; '/' -> '-' is the common case)."""
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+def _free_name(path):
+    if not os.path.lexists(path):
+        return path
+    root, ext = os.path.splitext(path) if not os.path.isdir(path) else (path, "")
+    n = 1
+    while os.path.lexists(f"{root}.{int(time.time())}-{n}{ext}"):
+        n += 1
+    return f"{root}.{int(time.time())}-{n}{ext}"
+
+
+def trash_transcript(e, lib_file=None, projects_root=None):
+    """Move <projects>/<slug(cwd)>/<uuid>.jsonl (and a sibling <uuid>/ folder)
+    into <registry dir>/trash/. Nothing is ever unlinked; an earlier trashed copy
+    with the same name is kept (the new one gets a suffix). Returns the trashed
+    transcript path, or None when there was no transcript."""
+    u = e.get("uuid")
+    if not (isinstance(u, str) and _UUID.fullmatch(u)):
+        raise ValueError(f"bad uuid {u!r}")
+    cwd = e.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    src_dir = os.path.join(projects_root or claude_projects_root(), cwd_slug(cwd))
+    trash = os.path.join(os.path.dirname(os.path.abspath(lib_file or LIB_FILE)), "trash")
+    out = None
+    for name in (f"{u}.jsonl", u):
+        src = os.path.join(src_dir, name)
+        if not os.path.lexists(src):
+            continue
+        os.makedirs(trash, exist_ok=True)
+        dst = _free_name(os.path.join(trash, name))
+        shutil.move(src, dst)
+        if name.endswith(".jsonl"):
+            out = dst
+    return out
 
 
 # ── search / resolve / order ────────────────────────────────────────────────
@@ -178,10 +238,29 @@ def resolve(lib, text):
     return []
 
 
+def _has_pos(e):
+    p = e.get("pos")
+    return isinstance(p, (int, float)) and not isinstance(p, bool)
+
+
+def order_key(e, active_ids):
+    """Active (loaded) first, then the rest; inside each group the manual order
+    (`pos`, set by dragging on the page) first, then the others most recent first."""
+    if _has_pos(e):
+        return (e["id"] not in active_ids, 0, e["pos"])
+    return (e["id"] not in active_ids, 1, -(e.get("last_used") or 0))
+
+
 def display_order(lib, active_ids, include_archived=False):
-    """Active (loaded) first, then the rest; each group most recent first."""
     rows = [e for e in lib["sessions"] if include_archived or not e.get("archived")]
-    return sorted(rows, key=lambda e: (e["id"] not in active_ids, -e.get("last_used", 0)))
+    return sorted(rows, key=lambda e: order_key(e, active_ids))
+
+
+def reorder(lib, ids):
+    """Manual order: ids[i] gets pos i. KeyError (nothing changed) if any id is unknown."""
+    entries = [_get(lib, sid) for sid in ids]
+    for i, e in enumerate(entries):
+        e["pos"] = i
 
 
 # ── LRU eviction ────────────────────────────────────────────────────────────

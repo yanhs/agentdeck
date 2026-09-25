@@ -3,8 +3,13 @@
 The sidebar must stay compact: narrow, with small non-bold text and small
 buttons, and it must not overflow horizontally at that width. These are
 computed-style assertions driven through a real browser, because the rules
-live in a <style> block inside web/index.html and only a layout engine can
+live in a <style> block inside the page and only a layout engine can
 tell us whether the header still fits once everything shrinks.
+
+The slot-card dashboard these contracts describe is web/index-legacy.html
+since the session-library migration swapped web/index.html for the library
+page (covered by test_index_lib.py); the legacy page is kept for rollback
+(migrate_library.rollback_dashboard), so it must keep passing.
 """
 import http.server
 import json
@@ -18,6 +23,7 @@ from pathlib import Path
 import pytest
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+PAGE = "index-legacy.html"
 
 # Trimmed snapshot of a real /api/terminal-status payload (long project names
 # and a long task string on purpose — that is what stresses the narrow column).
@@ -54,7 +60,7 @@ def site():
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     srv.RequestHandlerClass.log_message = lambda *a, **k: None
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{port}/index.html"
+    yield f"http://127.0.0.1:{port}/{PAGE}"
     srv.shutdown()
 
 

@@ -599,23 +599,24 @@ def cap_reply(text: str, max_chars: int = MAX_REPLY) -> str:
 
 # ── session transcript = source of truth for the reply ──────────────────────
 
-_SID_RE = re.compile(r'AGENT_SESSION_ID="([^"]+)"')
-
-
 def transcript_path(aid: str) -> str | None:
     """The session transcript .jsonl: a topic's from the registry (uuid + cwd),
-    a legacy agent's from its launch script."""
+    a legacy slot's from .sessions/agent-<N>.id — the file its launch script
+    reads the conversation id from (the script itself only has
+    `AGENT_SESSION_ID="$(cat ...)"`, and migrated slots are library shims)."""
     if is_topic(aid):
         return topic_transcript(str(aid))
-    script = "launch-claude.sh" if str(aid) == "1" else f"launch-claude-{aid}.sh"
+    if not re.fullmatch(r"\d{1,3}", str(aid)):
+        return None
     try:
-        text = open(os.path.join(GATE_DIR, script)).read()
+        with open(os.path.join(GATE_DIR, ".sessions", f"agent-{aid}.id")) as f:
+            u = f.read().strip()
     except OSError:
         return None
-    m = _SID_RE.search(text)
-    if not m:
+    if not library_cli._UUID.fullmatch(u):
         return None
-    return os.path.expanduser(f"~/.claude/projects/-home-ubuntu-pr/{m.group(1)}.jsonl")
+    cwd = os.environ.get("AGENTDECK_WORKDIR") or os.path.dirname(GATE_DIR)
+    return library_cli.transcript_path(os.path.expanduser("~"), cwd, u)
 
 
 def _summarize_tool(block: dict) -> str:

@@ -61,7 +61,7 @@ def test_create_with_known_uuid_refuses_duplicate():
 def test_blank_name_gets_a_dated_default():
     L = lib.empty()
     e = lib.create(L, "   ", cwd="/", now=1790227538)   # 2026-09-24 05:25:38 UTC
-    assert e["name"].startswith("Тема ")
+    assert e["name"] == "Terminal 24.09 05:25"   # English, «Terminal DD.MM HH:MM»
 
 
 def test_save_and_load_roundtrip(tmp_path):
@@ -263,3 +263,126 @@ def test_hold_rejects_bad_ids_and_ignores_garbage_files(tmp_path):
         assert lib.held(bad, now=1, lib_file=reg) is False
     (tmp_path / "hold-aaaaaaaa").write_text("not a number")
     assert lib.held("aaaaaaaa", now=1, lib_file=reg) is False
+
+
+# ── delete (archived topics only; the API enforces that) ────────────────────
+def test_delete_removes_only_that_entry():
+    L = lib.empty()
+    lib.create(L, "a", cwd="/x", now=1, uuid=U1)
+    lib.create(L, "b", cwd="/x", now=2, uuid=U2)
+    e = lib.delete(L, "aaaaaaaa")
+    assert e["uuid"] == U1
+    assert [x["id"] for x in L["sessions"]] == ["bbbbbbbb"]
+    with pytest.raises(KeyError):
+        lib.delete(L, "aaaaaaaa")
+    with pytest.raises(KeyError):
+        lib.delete(L, "deadbeef")
+
+
+def test_cwd_slug_matches_claude_project_dir_names():
+    assert lib.cwd_slug("/home/ubuntu/pr") == "-home-ubuntu-pr"
+    assert lib.cwd_slug("/home/ubuntu/pr/Светлота 💡").startswith("-home-ubuntu-pr-")
+
+
+def _entry(cwd="/home/ubuntu/pr", u=U1):
+    return {"id": lib.id_from_uuid(u), "uuid": u, "name": "x", "cwd": cwd}
+
+
+def test_trash_transcript_moves_file_and_sibling_folder(tmp_path, monkeypatch):
+    projects = tmp_path / "projects"
+    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(projects))
+    d = projects / "-home-ubuntu-pr"
+    (d / U1).mkdir(parents=True)
+    (d / U1 / "sub.jsonl").write_text("sub")
+    (d / f"{U1}.jsonl").write_text("talk")
+    (d / f"{U2}.jsonl").write_text("other")               # a neighbour: untouched
+    reg = tmp_path / "reg" / "library.json"
+    out = lib.trash_transcript(_entry(), lib_file=str(reg))
+    trash = tmp_path / "reg" / "trash"
+    assert out == str(trash / f"{U1}.jsonl")
+    assert (trash / f"{U1}.jsonl").read_text() == "talk"
+    assert (trash / U1 / "sub.jsonl").read_text() == "sub"
+    assert not (d / f"{U1}.jsonl").exists() and not (d / U1).exists()
+    assert (d / f"{U2}.jsonl").read_text() == "other"
+
+
+def test_trash_transcript_missing_file_is_skipped(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))
+    reg = tmp_path / "library.json"
+    assert lib.trash_transcript(_entry(), lib_file=str(reg)) is None
+
+
+def test_trash_transcript_never_overwrites_an_earlier_trashed_copy(tmp_path, monkeypatch):
+    projects = tmp_path / "projects"
+    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(projects))
+    d = projects / "-home-ubuntu-pr"
+    d.mkdir(parents=True)
+    reg = tmp_path / "library.json"
+    (tmp_path / "trash").mkdir()
+    (tmp_path / "trash" / f"{U1}.jsonl").write_text("older")
+    (d / f"{U1}.jsonl").write_text("newer")
+    out = lib.trash_transcript(_entry(), lib_file=str(reg))
+    assert out and out != str(tmp_path / "trash" / f"{U1}.jsonl")
+    assert open(out).read() == "newer"
+    assert (tmp_path / "trash" / f"{U1}.jsonl").read_text() == "older"
+
+
+def test_trash_transcript_refuses_a_malformed_uuid(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))
+    for bad in ("../../etc/passwd", "", None, "aaaaaaaa"):
+        with pytest.raises(ValueError):
+            lib.trash_transcript({"id": "aaaaaaaa", "uuid": bad, "cwd": "/x"},
+                                 lib_file=str(tmp_path / "library.json"))
+
+
+# ── manual order (drag-and-drop on the page) ────────────────────────────────
+U3 = "cccccccc-3333-4333-8333-333333333333"
+U4 = "dddddddd-4444-4444-8444-444444444444"
+
+
+def _lib4():
+    L = lib.empty()
+    for u, t in ((U1, 10), (U2, 20), (U3, 30), (U4, 40)):
+        lib.create(L, u[:1], cwd="/", now=t, uuid=u)
+    return L
+
+
+def test_reorder_sets_pos_and_display_order_follows_it():
+    L = _lib4()
+    assert [e["id"][:1] for e in lib.display_order(L, set())] == ["d", "c", "b", "a"]  # by recency
+    lib.reorder(L, ["aaaaaaaa", "cccccccc", "bbbbbbbb", "dddddddd"])
+    assert [e["id"][:1] for e in lib.display_order(L, set())] == ["a", "c", "b", "d"]
+    assert [lib.find(L, s)["pos"] for s in ("aaaaaaaa", "cccccccc")] == [0, 1]
+
+
+def test_active_group_still_comes_first_with_manual_order():
+    L = _lib4()
+    lib.reorder(L, ["aaaaaaaa", "bbbbbbbb", "cccccccc", "dddddddd"])
+    order = [e["id"][:1] for e in lib.display_order(L, {"cccccccc", "bbbbbbbb"})]
+    assert order == ["b", "c", "a", "d"]
+
+
+def test_entries_without_pos_go_by_recency_after_positioned_ones():
+    L = _lib4()
+    lib.reorder(L, ["aaaaaaaa", "bbbbbbbb"])
+    assert [e["id"][:1] for e in lib.display_order(L, set())] == ["a", "b", "d", "c"]
+
+
+def test_new_entry_goes_to_the_top_of_its_group_when_order_is_manual():
+    L = _lib4()
+    lib.reorder(L, ["aaaaaaaa", "bbbbbbbb", "cccccccc", "dddddddd"])
+    e = lib.create(L, "new", cwd="/", now=1, uuid="eeeeeeee-5555-4555-8555-555555555555")
+    assert [x["id"][:1] for x in lib.display_order(L, set())][0] == "e"
+    assert e["pos"] < 0
+    # without any manual order a new one is on top by recency, no pos needed
+    L2 = lib.empty()
+    lib.create(L2, "old", cwd="/", now=10, uuid=U1)
+    n = lib.create(L2, "new", cwd="/", now=20, uuid=U2)
+    assert "pos" not in n and lib.display_order(L2, set())[0]["id"] == n["id"]
+
+
+def test_reorder_unknown_id_raises_and_changes_nothing():
+    L = _lib4()
+    with pytest.raises(KeyError):
+        lib.reorder(L, ["aaaaaaaa", "deadbeef"])
+    assert all("pos" not in e for e in L["sessions"])

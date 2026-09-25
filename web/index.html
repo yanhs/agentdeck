@@ -65,20 +65,76 @@
     .stat.warn .val { color: #fbbf24; }
     .stat.crit .val { color: #f87171; }
 
-    .agent-list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; overscroll-behavior: contain; }
-    /* When a card is being dragged (long-press reorder on mobile), lock the
-       list so the browser does not scroll under the finger. The dragging
-       class is added by the touchstart timer in JS and removed on touchend. */
-    .agent-list:has(.card.dragging) { touch-action: none; }
+    [hidden] { display: none !important; }
+
+    .agent-list { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; overscroll-behavior: contain; }
+
+    /* ── Library tools: new topic + search ── */
+    .lib-tools {
+      padding: 0.3rem 0.4rem;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .lib-tools.creating #newBtn, .lib-tools.creating #search { display: none; }
+
+    .new-btn {
+      width: 100%;
+      height: 22px;
+      background: rgba(99,102,241,0.16);
+      border: 1px solid rgba(129,140,248,0.55);
+      color: #c7d2fe;
+      font: 500 0.68rem 'Inter', system-ui, sans-serif;
+      border-radius: 4px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.12s;
+    }
+    .new-btn:hover { background: rgba(99,102,241,0.3); border-color: #818cf8; color: #e0e7ff; }
+    .new-btn:active { transform: scale(0.98); }
+
+    .lib-input {
+      width: 100%;
+      min-width: 0;
+      height: 22px;
+      background: #18181b;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 4px;
+      color: #e4e4e7;
+      font: 400 0.68rem 'Inter', system-ui, sans-serif;
+      padding: 0 6px;
+      outline: none;
+    }
+    .lib-input::placeholder { color: #52525b; }
+    .lib-input:focus { border-color: rgba(129,140,248,0.55); }
+
+    .new-form { display: flex; gap: 3px; align-items: center; }
+    .new-form .lib-input { flex: 1 1 0; }
+    .new-form button {
+      flex: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 4px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04);
+      color: #a1a1aa;
+      font-size: 0.72rem;
+      cursor: pointer;
+    }
+    .new-form button[type=submit] { color: #86efac; border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08); }
+    .new-form button:disabled { opacity: 0.45; pointer-events: none; }
+
+    .lib-empty { padding: 8px 7px; font-size: 0.64rem; color: #52525b; }
 
     /* ── Card ── */
     .card {
       position: relative;
-      cursor: grab;
+      cursor: pointer;
       user-select: none;
       padding: 5px 7px;
       border-bottom: 1px solid rgba(255,255,255,0.04);
-      transition: background 0.12s, transform 0.15s, box-shadow 0.15s;
+      transition: background 0.12s;
       touch-action: manipulation;
       -webkit-tap-highlight-color: rgba(99,102,241,0.15);
     }
@@ -91,16 +147,12 @@
       padding-left: 5px;
     }
 
-    .card.dragging {
-      opacity: 0.85;
-      transform: scale(1.02);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-      z-index: 10;
-      background: #151518;
-    }
-
-    .card.drag-over-top { box-shadow: inset 0 2px 0 #818cf8; }
-    .card.drag-over-bot { box-shadow: inset 0 -2px 0 #818cf8; }
+    /* Unloaded (not in RAM): still one click away, but visibly quieter. */
+    .card.unloaded .proj { color: #71717a; }
+    .card.unloaded .sid { color: #3f3f46; }
+    .card.unloaded:hover .proj { color: #a1a1aa; }
+    /* The first unloaded row after the loaded group draws the seam. */
+    .card.first-off { border-top: 1px solid rgba(255,255,255,0.10); }
 
     .card-top {
       display: flex;
@@ -148,15 +200,6 @@
     }
 
     .dot.off { background: #3f3f46; }
-
-    .oo-tag {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #3b82f6;
-      box-shadow: 0 0 3px rgba(59,130,246,0.5);
-      flex-shrink: 0;
-    }
 
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
@@ -217,14 +260,100 @@
       font-family: inherit;
     }
 
-    /* ── Second row on each card: task text ── */
+    /* ── Second row on each card: short session code + archive ── */
     .card-row2 {
       display: flex;
       align-items: center;
       gap: 4px;
-      padding: 0 5px 3px 1px;
+      padding: 1px 0 0 1px;
     }
-    .card-row2 .task { margin-top: 0; padding-left: 0; flex: 1; min-width: 0; }
+
+    .sid {
+      flex: 1;
+      min-width: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.56rem;
+      color: #52525b;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+
+    .arch-btn {
+      flex: none;
+      height: 15px;
+      padding: 0 4px;
+      font: 400 0.56rem 'Inter', system-ui, sans-serif;
+      line-height: 13px;
+      color: #52525b;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 3px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.12s;
+    }
+    .arch-btn:hover { color: #fca5a5; border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.06); }
+    .arch-btn.restore { color: #86efac; border-color: rgba(34,197,94,0.3); }
+    .arch-btn.restore:hover { color: #bbf7d0; border-color: rgba(34,197,94,0.5); background: rgba(34,197,94,0.1); }
+    /* Manual order: drag rows (desktop); ▲▼ on touch screens. */
+    .card[draggable="true"] { -webkit-user-drag: element; }
+    .card.dragging { opacity: 0.4; }
+    .card.drop-before { box-shadow: inset 0 2px 0 #818cf8; }
+    .card.drop-after { box-shadow: inset 0 -2px 0 #818cf8; }
+    .mv-btn {
+      display: none;
+      flex: none;
+      width: 22px;
+      height: 18px;
+      padding: 0;
+      font: 400 0.6rem 'Inter', system-ui, sans-serif;
+      line-height: 16px;
+      color: #71717a;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    html.touch .mv-btn { display: inline-block; }
+    @media (hover: none) and (pointer: coarse) { .mv-btn { display: inline-block; } }
+
+    /* Delete: archived rows only, next to Restore; red. */
+    .del-btn {
+      flex: none;
+      height: 15px;
+      padding: 0 4px;
+      font: 400 0.56rem 'Inter', system-ui, sans-serif;
+      line-height: 13px;
+      color: #f87171;
+      background: transparent;
+      border: 1px solid rgba(239,68,68,0.35);
+      border-radius: 3px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.12s;
+    }
+    .del-btn:hover { color: #fecaca; border-color: rgba(239,68,68,0.6); background: rgba(239,68,68,0.12); }
+
+    /* Archived rows (only with "Show archived" on): below the rest, greyed. */
+    .card.archived { opacity: 0.5; }
+    .card.archived:hover { opacity: 0.8; }
+    .card.archived .proj { font-style: italic; }
+    .card.first-arch { border-top: 1px dashed rgba(255,255,255,0.12); }
+
+    .arch-toggle {
+      display: block;
+      width: 100%;
+      margin: 0;
+      padding: 6px 7px;
+      background: transparent;
+      border: none;
+      color: #52525b;
+      font: 400 0.6rem 'Inter', system-ui, sans-serif;
+      text-align: left;
+      cursor: pointer;
+    }
+    .arch-toggle:hover { color: #a1a1aa; }
+    .arch-toggle.on { color: #a5b4fc; }
 
     /* ── Add buttons (inside the sidebar header, next to "Agents") ── */
     .header-add {
@@ -354,17 +483,35 @@
       .wrap { position: static; flex: 1; display: flex; flex-direction: column; }
       .wrap iframe { position: static; inset: auto; width: 100%; height: auto; flex: 1; touch-action: manipulation; }
       .sidebar-header { padding: 4px 10px; font-size: 0.75rem; }
-      /* One row per agent: card becomes a horizontal flex container */
-      .card { display: flex; align-items: center; padding: 3px 8px; cursor: pointer; gap: 4px; }
-      .card-top { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
+      /* Phone: tools and header share ONE row (the sidebar is only 15vh):
+         [＋ New topic][search……][📋][CPU RAM] */
+      .side-top { display: flex; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.06); flex: none; }
+      .side-top .sidebar-header { order: 2; flex: none; border-bottom: none; padding: 4px 8px 4px 5px; }
+      .lib-tools { order: 1; flex: 1; min-width: 0; flex-direction: row; align-items: center; border-bottom: none; padding: 4px 0 4px 8px; }
+      .new-btn { width: auto; flex: none; height: 26px; padding: 0 8px; font-size: 0.72rem; }
+      /* 16px: iOS zooms the page into any input with a smaller font. */
+      .lib-input { flex: 1 1 0; height: 26px; font-size: 16px; }
+      .new-form { flex: 1; min-width: 0; }
+      .new-form button { width: 26px; height: 26px; font-size: 0.8rem; }
+      .proj-edit { font-size: 16px; }
+      /* One row per session: the card's inner rows dissolve into a single
+         flex line — [name……][code][✎][Archive][●] */
+      .card { display: flex; align-items: center; padding: 3px 8px; cursor: pointer; gap: 5px; }
+      .card.sel { padding-left: 6px; }
+      .card-top, .card-btns, .card-row2 { display: contents; }
+      .proj { order: 1; flex: 1; min-width: 0; font-size: 0.8rem; }
+      .sid { order: 2; flex: none; font-size: 0.6rem; }
+      .card-btn.edit { order: 3; }
+      .arch-btn { order: 4; height: 20px; line-height: 18px; font-size: 0.64rem; padding: 0 5px; }
+      .dot { order: 5; }
       .card-btn { visibility: visible; width: 20px; height: 20px; line-height: 18px; font-size: 0.8rem; }
-      .proj { font-size: 0.8rem; }
       .task { display: none; }
-      /* card-row2 holds only the (hidden) task on phone → collapse it. */
-      .card-row2 { display: none; }
       /* Compact header buttons on phone. */
       .header-add { gap: 3px; }
       .add-btn { font-size: 0.68rem; padding: 2px 6px; }
+      /* The 8-hex code is longer than the old "#N" and would push Logout off
+         the phone's topbar; the open topic is highlighted in the list above. */
+      .topbar-lbl { display: none; }
 
       .mob-input {
         display: flex;
@@ -423,17 +570,28 @@
 </head>
 <body>
   <div class="sidebar">
-    <div class="sidebar-header">
-      <div class="header-add">
-        <button type="button" class="add-btn" id="addBtn" title="Add a Claude agent">+</button>
-        <a class="add-btn" href="/tasks/" target="_blank" title="Task board — shared progress across all agents" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">📋</a>
+    <div class="side-top">
+      <div class="sidebar-header">
+        <div class="header-add">
+          <a class="add-btn" href="/tasks/" target="_blank" title="Task board — shared progress across all agents" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center">📋</a>
+        </div>
+        <div class="sys-stats" id="sysStats" onclick="this.classList.toggle('hidden');localStorage.setItem('stats-hidden',this.classList.contains('hidden'))">
+          <span class="stat" id="cpuStat">CPU <span class="val" id="cpuVal">—</span></span>
+          <span class="stat" id="ramStat">RAM <span class="val" id="ramVal">—</span></span>
+        </div>
       </div>
-      <div class="sys-stats" id="sysStats" onclick="this.classList.toggle('hidden');localStorage.setItem('stats-hidden',this.classList.contains('hidden'))">
-        <span class="stat" id="cpuStat">CPU <span class="val" id="cpuVal">—</span></span>
-        <span class="stat" id="ramStat">RAM <span class="val" id="ramVal">—</span></span>
+      <div class="lib-tools" id="libTools">
+        <button type="button" class="new-btn" id="newBtn" title="Start a new terminal (a new Claude conversation)">＋ New terminal</button>
+        <form class="new-form" id="newForm" hidden autocomplete="off">
+          <input class="lib-input" id="newName" type="text" maxlength="200" placeholder="New terminal name" autocomplete="off" autocorrect="off" spellcheck="false">
+          <button type="submit" id="newOk" title="Create and open (Enter)">✓</button>
+          <button type="button" id="newCancel" title="Cancel (Esc)">✕</button>
+        </form>
+        <input class="lib-input" id="search" type="search" placeholder="Search: name or code" title="Search by terminal name or code (archived ones too); Enter opens the first match" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
       </div>
     </div>
-    <div class="agent-list" id="list"></div>
+    <div class="lib-empty" id="libEmpty" hidden></div>
+    <div class="agent-list" id="list"><button type="button" class="arch-toggle" id="showArchived" title="Show archived terminals (greyed) so you can restore them">Show archived</button></div>
   </div>
   <div class="main">
     <div class="topbar" id="topbar" style="display:none">
@@ -447,7 +605,7 @@
       <a class="btn btn-logout" id="tLogout" href="/logout" title="Log out">Logout</a>
     </div>
     <div class="wrap" id="wrap">
-      <div class="ph" id="ph">Select an agent</div>
+      <div class="ph" id="ph">Pick a terminal on the left</div>
     </div>
     <div class="mob-input" id="mobInput">
       <button id="mobEsc" title="Ctrl+C">⎋</button>
@@ -463,235 +621,419 @@
   </div>
 
   <script>
-    const CLAUDE_IDS = ['1','2','3','4','5','6','7','8','9','10','11','12'];
-    const OO_IDS = [];
-    const ALL_IDS = [...CLAUDE_IDS, ...OO_IDS];
-    const OO_SET = new Set(OO_IDS);
-
-    const OO_CONFIG = {
-      '9':  { path: 'terminal9', name: 'Orchestra Main' },
-      '10': { path: 'terminal10', name: 'Orchestra Dev' },
-    };
-
-    let order = JSON.parse(localStorage.getItem('agent-order'));
-    if (!order || !Array.isArray(order)) order = [...ALL_IDS];
-    order = order.filter(id => ALL_IDS.includes(id));
-
-    // Sync order from server
-    async function loadServerOrder() {
-      try {
-        const r = await fetch('/api/terminal-status');
-        const d = await r.json();
-        if (d._order && Array.isArray(d._order)) {
-          order = d._order.filter(id => ALL_IDS.includes(id));
-          localStorage.setItem('agent-order', JSON.stringify(order));
-          build(); applyData(); syncAddBtn();
-        }
-      } catch {}
-    }
-
-    function save() {
-      localStorage.setItem('agent-order', JSON.stringify(order));
-      // Save to server for cross-device sync
-      fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({_order: order})});
-    }
-
+    /* ── Session library ──
+       The left column is the list of topics (sessions) from GET /api/library:
+       loaded ones (in RAM, status dot) first, then unloaded ones (greyed); each
+       group most recently used first — the same order as library.display_order.
+       A topic is addressed ONLY by its 8-hex code; there are no slot numbers.
+       Opening one = iframe /sess/?arg=<code> (the server loads it if needed). */
+    const ID_RE = /^[0-9a-f]{8}$/;
     const _isMobile = window.matchMedia('(max-width: 700px)').matches;
-    let sel = null, data = {}, dragId = null, _justDragged = false;
+    let sel = null;            // code of the open topic
+    let sessions = [];         // last /api/library payload (+ local edits)
+    let editing = null;        // code whose name is being edited — freezes re-render
+    let mutSeq = 0;            // bumped on every local change; a poll that started
+                               // before it is stale and must not overwrite it
+    const rows = new Map();    // code -> row element (kept across polls)
     const list = document.getElementById('list');
-    const addBtn = document.getElementById('addBtn');
+    const search = document.getElementById('search');
+    const libTools = document.getElementById('libTools');
+    const newBtn = document.getElementById('newBtn');
+    const newForm = document.getElementById('newForm');
+    const newName = document.getElementById('newName');
+    const newOk = document.getElementById('newOk');
+    const libEmpty = document.getElementById('libEmpty');
+    const archToggle = document.getElementById('showArchived');
+    if (_isMobile) search.placeholder = 'Search';   // 16px font, ~130px wide on a phone
+    // "Show archived" is remembered per browser (storage may be unavailable)
+    let showArch = false;
+    try { showArch = localStorage.getItem('lib-show-archived') === '1'; } catch {}
     if (localStorage.getItem('stats-hidden') === 'true') document.getElementById('sysStats').classList.add('hidden');
 
-    function build() {
-      list.innerHTML = '';
-      order.forEach(id => {
-        const c = document.createElement('div');
-        const isOO = OO_SET.has(id);
-        c.className = 'card' + (id === sel ? ' sel' : '');
-        c.id = 'c' + id;
-        c.dataset.aid = id;
-        const ooTag = isOO ? '<span class="oo-tag" title="OpenOrchestra"></span>' : '';
-        const compactHtml = isOO ? '' : `<button class="card-btn compact" title="Send /compact to TUI">⇲</button>`;
-        c.innerHTML = `
-          <div class="card-top">
-            <div class="proj empty" id="p${id}">&nbsp;</div>
-            <div class="card-btns">
-              ${compactHtml}
-              <button class="card-btn edit" title="Edit name">✎</button>
-              <button class="card-btn del" title="Remove">×</button>
-              ${ooTag}<span class="dot off" id="d${id}"></span>
-            </div>
+    async function jpost(path, body) {
+      const r = await fetch(path, {method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+      let d = null;
+      try { d = await r.json(); } catch {}
+      if (!r.ok) throw new Error((d && d.error) || ('HTTP ' + r.status));
+      return d;
+    }
+
+    function byId(id) { return sessions.find(s => s.id === id); }
+
+    function norm(q) { return (q || '').trim().toLocaleLowerCase(); }
+
+    // same rule as library.search: name substring (any case) or code prefix
+    function matches(s, q) {
+      return !q || s.name.toLocaleLowerCase().includes(q) || s.id.startsWith(q);
+    }
+
+    // Archived topics are listed when "Show archived" is on, and also whenever
+    // the search box is non-empty (search covers the archive). The poll always
+    // fetches them (?archived=1), so both switch instantly from the last fetch.
+    function wantArch() { return showArch || !!norm(search.value); }
+
+    // Same rule as library.display_order: loaded first, then the rest; inside
+    // each group the manual order (pos) first, then most recently used.
+    function hasPos(s) { return typeof s.pos === 'number' && isFinite(s.pos); }
+    function byOrder(a, b) {
+      return (!!b.active - !!a.active)
+          || (hasPos(b) - hasPos(a))
+          || (hasPos(a) ? a.pos - b.pos : (b.last_used || 0) - (a.last_used || 0));
+    }
+
+    function ordered() {
+      const q = norm(search.value);
+      const arch = wantArch();
+      return sessions
+        .map((s, i) => [s, i])
+        .filter(([s]) => (arch || !s.archived) && matches(s, q))
+        .sort((a, b) => (!!a[0].archived - !!b[0].archived)     // archived last
+                     || byOrder(a[0], b[0])
+                     || (a[1] - b[1]))
+        .map(([s]) => s);
+    }
+
+    function makeRow(id) {
+      const c = document.createElement('div');
+      c.className = 'card';
+      c.dataset.sid = id;
+      c.innerHTML = `
+        <div class="card-top">
+          <div class="proj"></div>
+          <div class="card-btns">
+            <button type="button" class="card-btn edit" title="Rename">✎</button>
+            <span class="dot off"></span>
           </div>
-          <div class="card-row2">
-            <div class="task" id="t${id}"></div>
-          </div>`;
-
-        // Click works on both mobile and desktop
-        c.style.cursor = 'pointer';
-        c.addEventListener('click', e => {
-          if (_justDragged) return;
-          if (e.target.closest('.card-btn')) return;
-          if (e.target.tagName === 'INPUT') return;
-          pick(id);
-        });
-
-        // Desktop: drag to reorder
-        if (!_isMobile) {
-          c.draggable = true;
-          c.style.cursor = 'grab';
-          c.addEventListener('dragstart', e => { dragId = id; c.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; });
-          c.addEventListener('dragend', () => { dragId = null; c.classList.remove('dragging'); list.querySelectorAll('.card').forEach(el => el.classList.remove('drag-over-top','drag-over-bot')); });
-          c.addEventListener('dragover', e => {
-            e.preventDefault(); e.dataTransfer.dropEffect = 'move';
-            if (c.dataset.aid === dragId) return;
-            const mid = c.getBoundingClientRect().top + c.getBoundingClientRect().height / 2;
-            c.classList.toggle('drag-over-top', e.clientY < mid);
-            c.classList.toggle('drag-over-bot', e.clientY >= mid);
-          });
-          c.addEventListener('dragleave', () => c.classList.remove('drag-over-top','drag-over-bot'));
-          c.addEventListener('drop', e => {
-            e.preventDefault();
-            if (!dragId || dragId === c.dataset.aid) return;
-            order.splice(order.indexOf(dragId), 1);
-            let idx = order.indexOf(c.dataset.aid);
-            if (e.clientY >= c.getBoundingClientRect().top + c.getBoundingClientRect().height / 2) idx++;
-            order.splice(idx, 0, dragId);
-            save(); build(); applyData();
-          });
-        }
-
-        // Button handlers (both mobile & desktop)
-        c.querySelector('.card-btn.edit').addEventListener('click', e => {
-          e.stopPropagation();
-          startEdit(id);
-        });
-        const compactBtn = c.querySelector('.card-btn.compact');
-        if (compactBtn) compactBtn.addEventListener('click', e => {
-          e.stopPropagation();
-          fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({id, action: 'compact'})}).catch(()=>{});
-        });
-        c.querySelector('.card-btn.del').addEventListener('click', e => {
-          e.stopPropagation();
-          // Unload from RAM (kill tmux only). The conversation JSONL and the
-          // overrides entry (project/task/locked) are kept on disk so re-add
-          // restores both. Fire-and-forget — the server is idempotent.
-          fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({id, reset: true})}).catch(()=>{});
-          order = order.filter(i => i !== id);
-          save();
-          if (sel === id) { sel = null; document.getElementById('topbar').style.display = 'none'; }
-          build(); applyData(); syncAddBtn();
-        });
-
-        // Model / effort are read-only indicators — they show the live value
-        // the TUI is using (read back from the session transcript) and update on
-        // each poll. Change them with /model and /effort inside the terminal;
-        // a click anywhere on the card just selects the agent.
-
-        list.appendChild(c);
+        </div>
+        <div class="card-row2">
+          <span class="sid"></span>
+          <button type="button" class="mv-btn up" title="Move up" aria-label="Move up">▲</button>
+          <button type="button" class="mv-btn down" title="Move down" aria-label="Move down">▼</button>
+          <button type="button" class="arch-btn">Archive</button>
+          <button type="button" class="del-btn" hidden title="Delete this archived terminal (the transcript is moved to trash)">Delete</button>
+        </div>`;
+      c.querySelector('.sid').textContent = id;
+      c.addEventListener('click', e => {
+        if (e.target.closest('.card-btn, .arch-btn, .del-btn, .mv-btn, input')) return;
+        if (Date.now() - _dragEndedAt < 300) return;     // the end of a drag is not a click
+        const s = byId(id);
+        if (s && s.archived) { _toast('Archived terminal — click Restore to open it', 3000); return; }
+        pick(id);
       });
+      c.querySelector('.card-btn.edit').addEventListener('click', e => {
+        e.stopPropagation();
+        startEdit(id);
+      });
+      c.querySelector('.arch-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        const s = byId(id);
+        archive(id, !(s && s.archived));      // one click: archive, or restore
+      });
+      c.querySelector('.mv-btn.up').addEventListener('click', e => { e.stopPropagation(); step(id, -1); });
+      c.querySelector('.mv-btn.down').addEventListener('click', e => { e.stopPropagation(); step(id, +1); });
+      c.draggable = true;
+      c.addEventListener('dragstart', e => {
+        if (editing) { e.preventDefault(); return; }
+        _dragId = id;
+        c.classList.add('dragging');
+        try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', id); } catch {}
+      });
+      c.addEventListener('dragover', e => {
+        if (!_dragId || _dragId === id) return;
+        e.preventDefault();
+        const after = dropAfter(c, e);
+        c.classList.toggle('drop-before', !after);
+        c.classList.toggle('drop-after', after);
+      });
+      c.addEventListener('dragleave', () => c.classList.remove('drop-before', 'drop-after'));
+      c.addEventListener('drop', e => {
+        e.preventDefault();
+        c.classList.remove('drop-before', 'drop-after');
+        const from = _dragId;
+        if (!from || from === id) return;
+        const order = ordered().map(s => s.id).filter(x => x !== from);
+        const at = order.indexOf(id);
+        if (at < 0) return;
+        order.splice(dropAfter(c, e) ? at + 1 : at, 0, from);
+        applyOrder(order);
+      });
+      c.addEventListener('dragend', () => {
+        c.classList.remove('dragging');
+        _dragId = null;
+        _dragEndedAt = Date.now();
+        for (const el of rows.values()) el.classList.remove('drop-before', 'drop-after');
+      });
+      c.querySelector('.del-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        del(id);                              // one click: trash keeps the transcript
+      });
+      rows.set(id, c);
+      return c;
     }
 
-    function syncAddBtn() {
-      addBtn.classList.toggle('disabled', CLAUDE_IDS.every(id => order.includes(id)));
+    function fill(c, s, firstOff, firstArch) {
+      c.classList.toggle('sel', s.id === sel);
+      c.draggable = true;
+      c.classList.toggle('unloaded', !s.active);
+      c.classList.toggle('archived', !!s.archived);
+      c.classList.toggle('first-off', firstOff);
+      c.classList.toggle('first-arch', firstArch);
+      const ab = c.querySelector('.arch-btn');
+      ab.textContent = s.archived ? 'Restore' : 'Archive';
+      ab.classList.toggle('restore', !!s.archived);
+      c.querySelector('.del-btn').hidden = !s.archived;
+      ab.title = s.archived ? 'Restore this terminal to the list'
+                            : 'Archive this terminal (the conversation stays on disk)';
+      const pe = c.querySelector('.proj');
+      if (!pe.querySelector('input')) pe.textContent = s.name;
+      pe.title = s.name;
+      const st = !s.active ? 'off' : s.status === 'working' ? 'working' : 'idle';
+      const dot = c.querySelector('.dot');
+      dot.className = 'dot ' + st;
+      dot.title = s.archived ? 'archived'
+                : st === 'off' ? 'unloaded — click to load'
+                : st === 'working' ? 'loaded, working' : 'loaded, idle';
     }
 
-    addBtn.addEventListener('click', () => {
-      const next = CLAUDE_IDS.find(id => !order.includes(id));
-      if (!next) return;
-      order.push(next);
-      save(); build(); applyData(); syncAddBtn();
+    function render() {
+      if (editing) return;                    // never pull the input out from under the user
+      const want = ordered();
+      const keep = new Set(want.map(s => s.id));
+      for (const [id, el] of rows) if (!keep.has(id)) { el.remove(); rows.delete(id); }
+      const anyOn = want.some(s => s.active && !s.archived);
+      const anyLive = want.some(s => !s.archived);
+      let prev = null, seenOff = false, seenArch = false;
+      for (const s of want) {
+        const c = rows.get(s.id) || makeRow(s.id);
+        fill(c, s, anyOn && !s.active && !s.archived && !seenOff,
+             anyLive && !!s.archived && !seenArch);
+        if (!s.active && !s.archived) seenOff = true;
+        if (s.archived) seenArch = true;
+        const ref = prev ? prev.nextSibling : list.firstChild;
+        if (c !== ref) list.insertBefore(c, ref);
+        prev = c;
+      }
+      libEmpty.hidden = want.length > 0;
+      libEmpty.textContent = norm(search.value) ? 'No matches'
+                                                : 'No terminals yet — click “＋ New terminal”';
+      archToggle.textContent = showArch ? 'Hide archived' : 'Show archived';
+      archToggle.classList.toggle('on', showArch);
+      if (list.lastChild !== archToggle) list.appendChild(archToggle);   // always at the bottom
+    }
+
+    archToggle.addEventListener('click', () => {
+      showArch = !showArch;
+      try { localStorage.setItem('lib-show-archived', showArch ? '1' : '0'); } catch {}
+      mutSeq++;                                // a poll in flight has the other view
+      render();
+      poll();
     });
 
-    build();
-    syncAddBtn();
-    loadServerOrder();
-
-    /* ── Mobile: touch drag to reorder (long press) ── */
-    if (_isMobile) {
-      let _drag = null;
-
-      list.addEventListener('touchstart', e => {
-        const card = e.target.closest('.card');
-        if (!card || e.target.closest('.card-btn') || e.target.tagName === 'INPUT') return;
-        if (e.touches.length !== 1) return;
-        const t = e.touches[0];
-        _drag = { id: card.dataset.aid, el: card, startY: t.clientY, active: false,
-          timer: setTimeout(() => {
-            if (!_drag) return;
-            _drag.active = true;
-            card.classList.add('dragging');
-            if (navigator.vibrate) navigator.vibrate(30);
-          }, 400)
-        };
-      }, {passive: true});
-
-      list.addEventListener('touchmove', e => {
-        if (!_drag) return;
-        const t = e.touches[0];
-        if (!_drag.active) {
-          if (Math.abs(t.clientY - _drag.startY) > 8) {
-            clearTimeout(_drag.timer); _drag = null;
-          }
-          return;
-        }
-        // No preventDefault — the list's touch-action: none (while a card has
-        // .dragging) tells the browser to stop scrolling. passive: true keeps
-        // normal scroll-gesture latency at zero (no main-thread wait).
-        list.querySelectorAll('.card').forEach(el => {
-          el.classList.remove('drag-over-top', 'drag-over-bot');
-          if (el.dataset.aid === _drag.id) return;
-          const r = el.getBoundingClientRect();
-          if (t.clientY >= r.top && t.clientY <= r.bottom) {
-            el.classList.add(t.clientY < r.top + r.height / 2 ? 'drag-over-top' : 'drag-over-bot');
-          }
-        });
-      }, {passive: true});
-
-      list.addEventListener('touchend', e => {
-        if (!_drag) return;
-        clearTimeout(_drag.timer);
-        if (!_drag.active) { _drag = null; return; }
-        const t = e.changedTouches[0];
-        const fromId = _drag.id;
-        list.querySelectorAll('.card').forEach(el => el.classList.remove('dragging', 'drag-over-top', 'drag-over-bot'));
-        for (const el of list.querySelectorAll('.card')) {
-          if (el.dataset.aid === fromId) continue;
-          const r = el.getBoundingClientRect();
-          if (t.clientY >= r.top && t.clientY <= r.bottom) {
-            order.splice(order.indexOf(fromId), 1);
-            let idx = order.indexOf(el.dataset.aid);
-            if (t.clientY >= r.top + r.height / 2) idx++;
-            order.splice(idx, 0, fromId);
-            save(); build(); applyData(); syncAddBtn();
-            break;
-          }
-        }
-        _drag = null;
-        _justDragged = true;
-        setTimeout(() => _justDragged = false, 100);
-      });
-
-      list.addEventListener('touchcancel', () => {
-        if (!_drag) return;
-        clearTimeout(_drag.timer);
-        list.querySelectorAll('.card').forEach(el => el.classList.remove('dragging', 'drag-over-top', 'drag-over-bot'));
-        _drag = null;
-      });
+    function syncSel() {
+      for (const [i, el] of rows) el.classList.toggle('sel', i === sel);
+      if (sel) syncTop(byId(sel) || {id: sel, name: ''});
     }
 
+    let _searching = false;
+    search.addEventListener('input', () => {
+      render();                               // instant, from the last poll
+      const now = !!norm(search.value);
+      if (now && !_searching) poll();         // then refresh the archive in the background
+      _searching = now;
+    });
+    search.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {                 // Enter = open the top match
+        e.preventDefault();
+        const first = ordered().find(s => !s.archived);
+        if (first) pick(first.id);
+      } else if (e.key === 'Escape') {
+        search.value = ''; _searching = false; render();
+      }
+    });
+
+    /* ── ＋ New topic: ask for a name inline, create, open ── */
+    let _creating = false;
+    function openNewForm() {
+      libTools.classList.add('creating');
+      newForm.hidden = false;
+      newName.value = '';
+      newName.focus();
+    }
+    function closeNewForm() {
+      libTools.classList.remove('creating');
+      newForm.hidden = true;
+    }
+    newBtn.addEventListener('click', openNewForm);
+    document.getElementById('newCancel').addEventListener('click', closeNewForm);
+    newName.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); closeNewForm(); }
+    });
+    newForm.addEventListener('submit', async e => {
+      e.preventDefault();
+      if (_creating) return;
+      _creating = true; newOk.disabled = true;
+      const name = newName.value.trim();       // empty → the server names it «Terminal DD.MM HH:MM»
+      try {
+        const d = await jpost('/api/library/new', {name});
+        const s = d && (d.session || d);
+        if (!s || !ID_RE.test(s.id)) throw new Error('the server returned no terminal code');
+        mutSeq++;
+        if (!byId(s.id)) sessions.push(Object.assign({}, s, {name: String(s.name ?? name)}));
+        closeNewForm();
+        search.value = ''; _searching = false;
+        render();
+        pick(s.id);
+        setTimeout(poll, 1500);                // pick up "loaded" once ttyd has started it
+      } catch (err) {
+        _toast('⚠️ New terminal: ' + String(err && err.message || err).slice(0, 80), 5000);
+      } finally {
+        _creating = false; newOk.disabled = false;
+      }
+    });
+
+    /* ── ✎ rename (inline, like the old project-name editor) ── */
+    function startEdit(id) {
+      const c = rows.get(id);
+      if (!c) return;
+      const pe = c.querySelector('.proj');
+      if (pe.querySelector('input')) return;
+      const s = byId(id);
+      const cur = s ? s.name : pe.textContent;
+      const inp = document.createElement('input');
+      inp.className = 'proj-edit';
+      inp.value = cur;
+      inp.maxLength = 200;
+      inp.placeholder = 'Terminal name';
+      pe.textContent = '';
+      pe.appendChild(inp);
+      c.draggable = false;                     // let the mouse select text in the input
+      editing = id;
+      inp.focus();
+      inp.select();
+
+      let done = false;
+      function finish(save) {
+        if (done) return;
+        done = true;
+        editing = null;
+        const val = inp.value.trim();
+        const changed = save && val && val !== cur;
+        pe.textContent = changed ? val : cur;  // also drops the input
+        if (changed) {
+          mutSeq++;
+          if (s) s.name = val;
+          jpost('/api/library/rename', {id, name: val}).catch(err => {
+            if (s && s.name === val) s.name = cur;
+            render(); syncSel();
+            _toast('⚠️ Not renamed: ' + String(err && err.message || err).slice(0, 60), 5000);
+          });
+          if (id === sel) syncSel();
+        }
+        render();
+      }
+      inp.addEventListener('keydown', e => {
+        e.stopPropagation();
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+      });
+      inp.addEventListener('blur', () => finish(true));
+      inp.addEventListener('click', e => e.stopPropagation());
+    }
+
+    /* ── Archive / Restore: one click. Archived topics stay reachable via
+       "Show archived" at the bottom of the list, so no confirm step. ── */
+    async function archive(id, archived) {
+      const s = byId(id);
+      const was = s ? !!s.archived : !archived;
+      if (s) s.archived = archived;
+      mutSeq++;
+      render();
+      try {
+        await jpost('/api/library/archive', {id, archived});
+        const nm = (s ? s.name : id).slice(0, 40);
+        _toast(archived ? 'Archived “' + nm + '” — the conversation is kept'
+                        : 'Restored “' + nm + '”', 3000);
+      } catch (err) {
+        if (s) s.archived = was;
+        render();
+        _toast('⚠️ ' + (archived ? 'Not archived: ' : 'Not restored: ')
+               + String(err && err.message || err).slice(0, 60), 5000);
+      }
+    }
+
+    /* ── Manual order: drag a row (desktop) or ▲▼ (touch). Optimistic: the
+       list moves at once, POST /api/library/reorder with the full visible
+       order; on error the old order comes back with a toast. ── */
+    let _dragId = null, _dragEndedAt = 0;
+    try { if (navigator.maxTouchPoints > 0 || 'ontouchstart' in window)
+            document.documentElement.classList.add('touch'); } catch {}
+
+    function dropAfter(c, e) {
+      const r = c.getBoundingClientRect();
+      return e.clientY > r.top + r.height / 2;
+    }
+
+    function step(id, d) {
+      const order = ordered().map(s => s.id);
+      const i = order.indexOf(id), j = i + d;
+      if (i < 0 || j < 0 || j >= order.length) return;
+      [order[i], order[j]] = [order[j], order[i]];
+      applyOrder(order);
+    }
+
+    async function applyOrder(ids) {
+      const was = new Map(sessions.map(s => [s.id, s.pos]));
+      ids.forEach((id, i) => { const s = byId(id); if (s) s.pos = i; });
+      mutSeq++;
+      render();
+      try {
+        await jpost('/api/library/reorder', {ids});
+      } catch (err) {
+        for (const s of sessions) { if (was.has(s.id)) s.pos = was.get(s.id); }
+        mutSeq++;
+        render();
+        _toast('⚠️ Not reordered: ' + String(err && err.message || err).slice(0, 60), 5000);
+      }
+    }
+
+    /* ── Delete (archived topics only): one click, no confirm — the server
+       moves the transcript to trash, so it can be recovered. ── */
+    async function del(id) {
+      const i = sessions.findIndex(s => s.id === id);
+      if (i < 0) return;
+      const s = sessions[i];
+      sessions.splice(i, 1);
+      mutSeq++;
+      render();
+      try {
+        await jpost('/api/library/delete', {id});
+        _toast('Deleted — transcript moved to trash', 3000);
+      } catch (err) {
+        if (!byId(id)) sessions.splice(Math.min(i, sessions.length), 0, s);
+        mutSeq++;
+        render();
+        _toast('⚠️ Not deleted: ' + String(err && err.message || err).slice(0, 60), 5000);
+      }
+    }
+
+    let _frameFocus = null;
+    document.addEventListener('click', e => {
+      const wrap = document.getElementById('wrap');
+      if (_frameFocus && wrap.contains(e.target)) _frameFocus();
+    });
+
     function pick(id) {
+      if (!ID_RE.test(id)) return;
       sel = id;
-      order.forEach(i => { const el = document.getElementById('c'+i); if(el) el.classList.toggle('sel', i===id); });
-      const info = data[id] || {};
-      const isOO = OO_SET.has(id);
       document.getElementById('topbar').style.display = 'flex';
-      document.getElementById('tNum').textContent = '#' + id + (isOO ? ' · ' + OO_CONFIG[id]?.name : '');
-      if (isOO) info.project = OO_CONFIG[id]?.name || 'Orchestra';
-      syncTop(info);
-      const path = isOO ? '/' + (OO_CONFIG[id]?.path || 'terminal-oo') : '/' + (info.path || 'terminal');
+      document.getElementById('tNum').textContent = id;
+      syncSel();
+      // a topic still running in an old numbered terminal opens there (the
+      // server refuses a second Claude on the same conversation)
+      const row = sessions.find(s => s.id === id);
+      const legacy = row && typeof row.legacy_path === 'string' && /^\/terminal\d*\/$/.test(row.legacy_path) ? row.legacy_path : null;
+      const path = legacy || ('/sess/?arg=' + id);
       document.getElementById('tOpen').href = path;
       const wrap = document.getElementById('wrap');
       const ph = document.getElementById('ph'); if (ph) ph.remove();
@@ -705,7 +1047,7 @@
       const doFocus = () => { try { f.focus(); f.contentWindow?.focus(); } catch(e) {} };
       f.addEventListener('load', doFocus);
       f.addEventListener('mousedown', doFocus);
-      document.addEventListener('click', e => { if (wrap.contains(e.target) || e.target === f) doFocus(); });
+      _frameFocus = doFocus;
     }
 
     /* ── Mobile input bar ── */
@@ -1128,81 +1470,50 @@
       attach();   // in case it's already loaded
     }
 
-    function syncTop(info) {
+    function syncTop(s) {
       const el = document.getElementById('tInfo');
-      const p = info.project||'', t = info.task||'';
-      el.innerHTML = p ? '<b>'+esc(p)+'</b>'+(t?' &mdash; '+esc(t):'') : t?esc(t):'';
+      const st = s.archived ? 'archived' : !s.active ? 'unloaded'
+               : s.status === 'working' ? 'working' : 'idle';
+      el.innerHTML = s.name ? '<b>' + esc(s.name) + '</b> &mdash; ' + st : '';
     }
 
     function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 
-    function startEdit(id) {
-      const pe = document.getElementById('p'+id);
-      if (!pe || pe.querySelector('input')) return;
-      const info = data[id]||{};
-      const cur = info.project||'';
-      const auto = info.auto_project||'';
-      const inp = document.createElement('input');
-      inp.className = 'proj-edit';
-      inp.value = cur;
-      inp.placeholder = auto ? 'Auto: '+auto : 'Project name';
-      pe.textContent = '';
-      pe.appendChild(inp);
-      inp.focus();
-      inp.select();
-
-      function commit() {
-        const val = inp.value.trim();
-        if (val) {
-          fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({id, project: val})});
-        } else {
-          fetch('/api/terminal-status', {method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({id, unlock: true})});
-        }
-        pe.textContent = val || auto || '';
-        pe.classList.toggle('empty', !val && !auto);
-      }
-      inp.addEventListener('keydown', e => { if(e.key==='Enter') inp.blur(); if(e.key==='Escape'){pe.textContent=cur; pe.classList.toggle('empty',!cur);} });
-      inp.addEventListener('blur', commit);
+    function setSystem(s) {
+      document.getElementById('cpuVal').textContent = s.cpu_pct + '%';
+      document.getElementById('ramVal').textContent = s.ram_used_mb + '/' + s.ram_total_mb + 'M';
+      document.getElementById('cpuStat').className = 'stat' + (s.cpu_pct > 90 ? ' crit' : s.cpu_pct > 70 ? ' warn' : '');
+      document.getElementById('ramStat').className = 'stat' + (s.ram_pct > 90 ? ' crit' : s.ram_pct > 70 ? ' warn' : '');
     }
 
-    function applyData() {
-      order.forEach(id => {
-        const info = data[id]||{};
-        const isOO = OO_SET.has(id);
-        if (isOO && !data[id]) {
-          info.project = OO_CONFIG[id]?.name || 'Orchestra';
-          info.active = true;
-        }
-        const dot = document.getElementById('d'+id);
-        if(dot) dot.className = 'dot '+(!info.active?'off':info.working?'working':'idle');
-        const pe = document.getElementById('p'+id);
-        if(pe && !pe.querySelector('input')){ pe.textContent = info.project||''; pe.classList.toggle('empty',!info.project); }
-        const te = document.getElementById('t'+id);
-        if(te) te.textContent = info.task||'';
-        if(id===sel) syncTop(info);
-      });
-    }
-
-    function refresh(d) {
-      if (d._system) {
-        const s = d._system;
-        document.getElementById('cpuVal').textContent = s.cpu_pct + '%';
-        document.getElementById('ramVal').textContent = s.ram_used_mb + '/' + s.ram_total_mb + 'M';
-        document.getElementById('cpuStat').className = 'stat' + (s.cpu_pct > 90 ? ' crit' : s.cpu_pct > 70 ? ' warn' : '');
-        document.getElementById('ramStat').className = 'stat' + (s.ram_pct > 90 ? ' crit' : s.ram_pct > 70 ? ' warn' : '');
-        delete d._system;
-      }
-      if (d._order) { delete d._order; }
-      data=d; applyData();
+    // CPU/RAM: taken from /api/library when it carries `_system`; otherwise from
+    // the old status endpoint (read for `_system` only — nothing slot-related).
+    let _sysTick = 0;
+    async function pollSystem() {
+      try {
+        const r = await fetch('/api/terminal-status');
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d && d._system) setSystem(d._system);
+      } catch {}
     }
 
     async function poll() {
+      const seq = mutSeq;
       try {
-        const r = await fetch('/api/terminal-status');
+        const r = await fetch('/api/library?archived=1',
+                              {cache: 'no-store', credentials: 'same-origin'});
         if (!r.ok) return;                       // 401/5xx → skip this tick, don't churn
-        refresh(await r.json());
+        const d = await r.json();
+        if (d && d._system) setSystem(d._system);
+        else if (_sysTick++ % 2 === 0) pollSystem();
+        if (!d || !Array.isArray(d.sessions)) return;
+        if (seq !== mutSeq) return;              // a local change raced this poll — next one is fresh
+        sessions = d.sessions
+          .filter(s => s && ID_RE.test(s.id))
+          .map(s => Object.assign({}, s, {name: String(s.name ?? '')}));
+        render();
+        syncSel();
       } catch {}
     }
     poll(); setInterval(poll, 4000);

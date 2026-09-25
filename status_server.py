@@ -181,13 +181,31 @@ def read_cpu_ticks(pid):
         return 0
 
 
-def tree_cpu_ticks(pane_pid):
+def child_map():
+    """{ppid: [pid, ...]} for every process, from one pass over /proc/*/stat —
+    instead of spawning `pgrep -P` once per process."""
+    kids = {}
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            continue
+        kids.setdefault(ppid, []).append(int(name))
+    return kids
+
+
+def tree_cpu_ticks(pane_pid, children=None):
     """CPU ticks of a pane's process, its children and grandchildren — the
-    quantity whose growth over SAMPLE_INTERVAL makes a terminal "working"."""
+    quantity whose growth over SAMPLE_INTERVAL makes a terminal "working".
+    `children`: a child_map() to use instead of pgrep per process."""
+    kids = (lambda p: children.get(p, [])) if children is not None else get_child_pids
     ticks = read_cpu_ticks(pane_pid)
-    for cpid in get_child_pids(pane_pid):
+    for cpid in kids(pane_pid):
         ticks += read_cpu_ticks(cpid)
-        for gpid in get_child_pids(cpid):
+        for gpid in kids(cpid):
             ticks += read_cpu_ticks(gpid)
     return ticks
 
@@ -199,10 +217,14 @@ def is_working(ticks1, ticks2):
 def sample_working(pane_pids):
     """{key: pane_pid} -> {key: working}, one shared SAMPLE_INTERVAL sleep —
     the same measure the terminal cards use (GET /)."""
-    first = {k: tree_cpu_ticks(p) for k, p in pane_pids.items() if p}
-    if first:
-        time.sleep(SAMPLE_INTERVAL)
-    return {k: is_working(t1, tree_cpu_ticks(pane_pids[k])) for k, t1 in first.items()}
+    pids = {k: p for k, p in pane_pids.items() if p}
+    if not pids:
+        return {}
+    kids = child_map()
+    first = {k: tree_cpu_ticks(p, kids) for k, p in pids.items()}
+    time.sleep(SAMPLE_INTERVAL)
+    kids = child_map()
+    return {k: is_working(t1, tree_cpu_ticks(pids[k], kids)) for k, t1 in first.items()}
 
 
 def get_cwd(session):
@@ -410,7 +432,7 @@ DEFAULT_ORIGIN = "https://agents.reimake.com"
 
 def lib_allowed_origin():
     return os.environ.get("AGENTDECK_ORIGIN") or DEFAULT_ORIGIN
-_LIB_ROW_KEYS = ("id", "name", "cwd", "created", "last_used", "archived")
+_LIB_ROW_KEYS = ("id", "name", "cwd", "created", "last_used", "archived", "pos")
 
 
 class LibError(Exception):
@@ -455,6 +477,43 @@ def lib_live():
     return live
 
 
+_LEGACY_TMUX = re.compile(r"claude-terminal(?:-(\d+))?")
+_RESUME_UUID = re.compile(rb"--(?:resume|session-id)\x00?\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
+
+
+def _uuids_under(pid, depth=4, children=None):
+    """uuids after --resume/--session-id in the cmdline of pid and its descendants."""
+    children = child_map() if children is None else children
+    found, stack = set(), [(pid, 0)]
+    while stack:
+        p, d = stack.pop()
+        try:
+            with open(f"/proc/{p}/cmdline", "rb") as f:
+                found.update(m.decode() for m in _RESUME_UUID.findall(f.read()))
+        except OSError:
+            continue
+        if d < depth:
+            stack.extend((c, d + 1) for c in children.get(p, []))
+    return found
+
+
+def lib_legacy():
+    """{uuid: "/terminalN/"} for Claude conversations still running in the old
+    numbered terminals (migration leaves busy ones untouched until they unload)."""
+    r = lib_tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}")
+    out, children = {}, None
+    for line in r.stdout.splitlines() if r.returncode == 0 else []:
+        name, _, pid = line.partition("\t")
+        m = _LEGACY_TMUX.fullmatch(name)
+        if not m or not pid.isdigit():
+            continue
+        path = f"/terminal{m.group(1) or ''}/"
+        children = child_map() if children is None else children
+        for u in _uuids_under(int(pid), children=children):
+            out.setdefault(u, path)
+    return out
+
+
 def lib_last_output(name):
     """Latest #{window_activity} (moves on pane output) of session `name`, by
     exact name; None when unknown. list-windows + filtering, never
@@ -473,17 +532,21 @@ def lib_status(active, working):
     return "off" if not active else ("working" if working else "idle")
 
 
-def lib_rows(entries, live=None):
-    """Registry entries -> API rows with tmux state (samples CPU once for all)."""
+def lib_rows(entries, live=None, legacy_paths=None):
+    """Registry entries -> API rows with tmux state (samples CPU once for all).
+    live / legacy_paths: pass what the caller already has (one scan per request)."""
     live = lib_live() if live is None else live
     working = sample_working({e["id"]: live[e["id"]]["pane_pid"]
                               for e in entries if e["id"] in live})
+    legacy_paths = lib_legacy() if legacy_paths is None else legacy_paths
     rows = []
     for e in entries:
         row = {k: e.get(k) for k in _LIB_ROW_KEYS}
         row["archived"] = bool(e.get("archived"))
         info = live.get(e["id"])
-        row["active"] = info is not None
+        legacy = legacy_paths.get(e.get("uuid")) if info is None else None
+        row["legacy_path"] = legacy
+        row["active"] = info is not None or legacy is not None
         row["attached"] = bool(info and info["attached"])
         row["status"] = lib_status(info is not None, working.get(e["id"], False))
         rows.append(row)
@@ -493,8 +556,10 @@ def lib_rows(entries, live=None):
 def lib_listing(include_archived=False):
     lib = library.load(lib_path())
     live = lib_live()
-    entries = library.display_order(lib, set(live), include_archived=include_archived)
-    return {"max_active": library.MAX_ACTIVE, "sessions": lib_rows(entries, live),
+    legacy = lib_legacy()
+    active = set(live) | {e["id"] for e in lib["sessions"] if e.get("uuid") in legacy}
+    entries = library.display_order(lib, active, include_archived=include_archived)
+    return {"max_active": library.MAX_ACTIVE, "sessions": lib_rows(entries, live, legacy),
             "_system": get_system_stats()}      # CPU/RAM for the top bar, same as GET /
 
 
@@ -536,6 +601,8 @@ def lib_post(route, body):
         with library.update(lib_path()) as lib:
             e = library.create(lib, name, cwd=lib_workdir(), now=int(time.time()))
         return lib_rows([e], live={})[0]          # not started: nothing to ask tmux
+    if route == "reorder":
+        return lib_reorder(body.get("ids"))
 
     sid = lib_id(body)
     if route == "rename":
@@ -568,7 +635,52 @@ def lib_post(route, body):
         row = lib_rows([e])[0]
         row["killed"] = killed
         return row
+    if route == "delete":
+        return lib_delete(sid)
     raise LibError(404, "not found")
+
+
+LIB_REORDER_MAX = 10000
+
+
+def lib_reorder(ids):
+    """Manual order from the page: the full visible order of ids -> pos 0..n-1."""
+    if not isinstance(ids, list) or not ids or len(ids) > LIB_REORDER_MAX:
+        raise LibError(400, "ids must be a non-empty list")
+    if not all(library.valid_id(i) for i in ids):
+        raise LibError(400, "invalid id")
+    if len(set(ids)) != len(ids):
+        raise LibError(400, "duplicate id")
+    try:
+        with library.update(lib_path()) as lib:
+            library.reorder(lib, ids)
+    except KeyError as e:
+        raise LibError(400, f"unknown id {e.args[0]}")
+    return {"ok": True}
+
+
+def lib_delete(sid):
+    """Delete an archived, unloaded topic: drop it from the registry and move its
+    transcript into <registry dir>/trash/ (recoverable; nothing is unlinked)."""
+    def check(e):
+        if e is None:
+            raise LibError(404, "unknown id")
+        if not e.get("archived"):
+            raise LibError(409, "only archived topics can be deleted; archive it first")
+
+    check(library.find(library.load(lib_path()), sid))
+    if sid in lib_live():
+        raise LibError(409, "the topic is loaded right now; close it first")
+    e = library.find(library.load(lib_path()), sid)
+    legacy = lib_legacy().get(e.get("uuid"))
+    if legacy:
+        raise LibError(409, f"the topic's conversation is running in {legacy}; stop it first")
+    with library.update(lib_path()) as lib:
+        e = library.find(lib, sid)
+        check(e)                                  # re-checked under the lock
+        trashed = library.trash_transcript(e, lib_file=lib_path())
+        library.delete(lib, sid)
+    return {"ok": True, "trashed": trashed}
 
 
 class Handler(BaseHTTPRequestHandler):

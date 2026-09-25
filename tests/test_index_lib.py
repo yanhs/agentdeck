@@ -1,9 +1,11 @@
 """Browser contract for web/index-lib.html — the dashboard with a session library.
 
 The left column is no longer twelve numbered slots but a library of named
-topics (sessions): search, «＋ Новая тема», loaded ones first with a status dot,
-unloaded ones greyed, each row = name + 8-hex code + ✎ + «в архив». A click
-opens the one terminal endpoint `/sess/?arg=<id>` in the iframe.
+topics (sessions): search, «＋ New topic», loaded ones first with a status dot,
+unloaded ones greyed, each row = name + 8-hex code + ✎ + «Archive» (one click).
+«Show archived» at the bottom lists archived topics greyed, each with «Restore».
+A click opens the one terminal endpoint `/sess/?arg=<id>` in the iframe.
+All UI text is English (owner, 2026-09-25) — topic names are user data.
 
 Everything runs against a static copy of web/ with the API faked by
 page.route(): no tmux, no status_server, no live session is touched.
@@ -59,8 +61,10 @@ class FakeAPI:
     def __init__(self, with_system=False):
         self.sessions = base_sessions()
         self.calls = []            # [(method, path, body)]
+        self.urls = []             # full request URLs (to check the query)
         self.with_system = with_system
         self.fail_new = False
+        self.fail_reorder = False
         self._n = 0
 
     def gets(self):
@@ -83,10 +87,13 @@ class FakeAPI:
             except ValueError:
                 body = {}
         self.calls.append((req.method, path, body))
+        self.urls.append(req.url)
 
         if req.method == "GET" and path == "/api/library":
+            q = urlparse(req.url).query
+            with_arch = "archived=1" in q
             out = {"max_active": 12,
-                   "sessions": [s for s in self.sessions if not s["archived"]]}
+                   "sessions": [s for s in self.sessions if with_arch or not s["archived"]]}
             if self.with_system:
                 out["_system"] = {"cpu_pct": 42, "ram_pct": 50,
                                   "ram_used_mb": 7000, "ram_total_mb": 16000}
@@ -99,12 +106,15 @@ class FakeAPI:
                 return self._json(route, {"error": "диск полон"}, 500)
             self._n += 1
             sid = f"eeee000{self._n}"
-            e = {"id": sid, "name": (body.get("name") or "").strip() or "Тема 24.09 10:00",
+            e = {"id": sid, "name": (body.get("name") or "").strip() or "Terminal 24.09 10:00",
                  "cwd": "/home/ubuntu/pr", "created": 999, "last_used": 999,
                  "archived": False, "active": False, "attached": False, "status": "off"}
             self.sessions.append(e)
             return self._json(route, e)
-        sid = (body or {}).get("id")
+        if path == "/api/library/reorder":
+            sid = (body.get("ids") or [None])[0]
+        else:
+            sid = (body or {}).get("id")
         e = next((s for s in self.sessions if s["id"] == sid), None)
         if e is None:
             return self._json(route, {"error": "unknown id"}, 404)
@@ -114,9 +124,20 @@ class FakeAPI:
         if path == "/api/library/archive":
             e["archived"] = bool(body.get("archived"))
             return self._json(route, e)
+        if path == "/api/library/reorder":
+            if self.fail_reorder:
+                return self._json(route, {"error": "disk full"}, 500)
+            for i, x in enumerate(body["ids"]):
+                next(s for s in self.sessions if s["id"] == x)["pos"] = i
+            return self._json(route, {"ok": True})
         if path == "/api/library/close":
             e["active"] = False
             return self._json(route, e)
+        if path == "/api/library/delete":
+            if not e["archived"] or e["active"]:
+                return self._json(route, {"error": "topic is not archived"}, 409)
+            self.sessions.remove(e)
+            return self._json(route, {"ok": True, "trashed": f"/x/trash/{sid}.jsonl"})
         return self._json(route, {"error": "no such route"}, 404)
 
 
@@ -194,8 +215,10 @@ def shot(page, name):
 # ── the file itself ─────────────────────────────────────────────────────────
 def test_page_exists_and_old_page_untouched():
     assert PAGE.is_file()
-    # the live dashboard keeps its slots until the migration is done
-    assert "CLAUDE_IDS" in (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    # after the migration (2026-09-24) index.html IS the library page, and the
+    # old slot dashboard is kept as index-legacy.html for rollback
+    assert (WEB_DIR / "index.html").read_text(encoding="utf-8") == PAGE.read_text(encoding="utf-8")
+    assert "CLAUDE_IDS" in (WEB_DIR / "index-legacy.html").read_text(encoding="utf-8")
 
 
 def test_slot_machinery_is_gone_from_the_source():
@@ -327,7 +350,7 @@ def test_poll_moves_a_freshly_loaded_session_up(page, api):
 
 # ── new theme ───────────────────────────────────────────────────────────────
 def test_new_theme_posts_then_opens_it(page, api):
-    assert page.inner_text("#newBtn").strip() == "＋ Новая тема"
+    assert page.inner_text("#newBtn").strip() == "＋ New terminal"
     page.click("#newBtn")
     page.wait_for_selector("#newName:visible")
     page.fill("#newName", "Разбор логов")
@@ -399,26 +422,405 @@ def test_poll_does_not_clobber_a_rename_in_progress(page, api):
 
 
 # ── archive ─────────────────────────────────────────────────────────────────
-def test_archive_needs_a_second_tap_then_hides_the_row(page, api):
+def archived_session():
+    return {"id": "ffff0005", "name": "Old archived work", "cwd": "/home/ubuntu/pr",
+            "created": 5, "last_used": 5, "archived": True,
+            "active": False, "attached": False, "status": "off"}
+
+
+def test_archive_is_one_click(page, api):
     btn = row("cccc0003") + " .arch-btn"
-    assert page.inner_text(btn).strip() == "в архив"
-    page.click(btn)                                   # first tap only arms it
-    assert api.posts("/api/library/archive") == []
-    assert page.inner_text(btn).strip() != "в архив"
+    assert page.inner_text(btn).strip() == "Archive"
     page.click(btn)
     page.wait_for_selector(row("cccc0003"), state="detached")
     assert api.posts("/api/library/archive") == [
         ("POST", "/api/library/archive", {"id": "cccc0003", "archived": True})]
     assert page.query_selector("#wrap iframe") is None
+    page.wait_for_timeout(600)                         # no delayed second request
+    assert len(api.posts("/api/library/archive")) == 1
 
 
-def test_archive_arm_expires(page, api):
-    btn = row("cccc0003") + " .arch-btn"
+def test_archive_request_is_json(page, api):
+    seen = []
+    page.on("request", lambda r: seen.append(r.headers.get("content-type"))
+            if r.url.endswith("/api/library/archive") else None)
+    page.click(row("cccc0003") + " .arch-btn")
+    page.wait_for_selector(row("cccc0003"), state="detached")
+    assert seen and all(ct and ct.startswith("application/json") for ct in seen)
+
+
+def test_show_archived_toggle_lists_archived_rows(page, api):
+    api.sessions.append(archived_session())
+    assert page.query_selector(row("ffff0005")) is None
+    tog = "#showArchived"
+    assert page.is_visible(tog)
+    assert "Show archived" in page.inner_text(tog)
+    n = len(api.urls)
+    page.click(tog)
+    page.wait_for_selector(row("ffff0005"))
+    assert any(u.endswith("/api/library?archived=1") for u in api.urls[n:])
+    cls = page.get_attribute(row("ffff0005"), "class")
+    assert "archived" in cls
+    # archived rows are greyed, after the live ones, and have Restore (not Archive)
+    assert row_ids(page)[-1] == "ffff0005"
+    assert page.inner_text(row("ffff0005") + " .arch-btn").strip() == "Restore"
+    page.mouse.move(900, 450)                          # not hovering the row
+    page.wait_for_timeout(200)
+    op = float(page.eval_on_selector(row("ffff0005"), "e => getComputedStyle(e).opacity"))
+    assert op < 0.8
+    # still searchable
+    page.fill("#search", "old arch")
+    assert row_ids(page) == ["ffff0005"]
+    page.fill("#search", "")
+    shot(page, "index-lib-archived.png")
+    # toggle off hides them again
+    page.click(tog)
+    page.wait_for_selector(row("ffff0005"), state="detached")
+
+
+def test_restore_sends_archived_false_and_row_returns(page, api):
+    api.sessions.append(archived_session())
+    page.click("#showArchived")
+    page.wait_for_selector(row("ffff0005"))
+    page.click(row("ffff0005") + " .arch-btn")
+    page.wait_for_function(
+        "() => { const c = document.querySelector('#list .card[data-sid=\"ffff0005\"]');"
+        " return c && !c.classList.contains('archived'); }", timeout=3000)
+    assert api.posts("/api/library/archive") == [
+        ("POST", "/api/library/archive", {"id": "ffff0005", "archived": False})]
+    assert page.inner_text(row("ffff0005") + " .arch-btn").strip() == "Archive"
+    # and it stays when the archived view is switched off
+    page.click("#showArchived")
+    page.wait_for_timeout(300)
+    assert "ffff0005" in row_ids(page)
+
+
+def test_show_archived_is_remembered(browser, site):
+    api = FakeAPI()
+    api.sessions.append(archived_session())
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.click("#showArchived")
+        pg.wait_for_selector(row("ffff0005"))
+        pg.reload()
+        pg.wait_for_selector(row("ffff0005"))
+        assert "archived" in pg.get_attribute(row("ffff0005"), "class")
+    finally:
+        ctx.close()
+
+
+def test_show_archived_is_instant_from_the_last_poll(browser, site):
+    api = FakeAPI()
+    api.sessions.append(archived_session())
+    ctx, pg = _open(browser, site, api)
+    try:
+        # from now on the API is unreachable: the toggle must work from the last poll
+        pg.unroute(re.compile(r"/api/library(/|\?|$)"))
+        pg.route(re.compile(r"/api/library(/|\?|$)"), lambda r: r.abort())
+        pg.click("#showArchived")
+        pg.wait_for_selector(row("ffff0005"), timeout=500)
+    finally:
+        ctx.close()
+
+
+def test_archive_survives_the_toggle_being_on(page, api):
+    api.sessions.append(archived_session())
+    page.click("#showArchived")
+    page.wait_for_selector(row("ffff0005"))
+    page.click(row("cccc0003") + " .arch-btn")
+    page.wait_for_function(
+        "() => document.querySelector('#list .card[data-sid=\"cccc0003\"]')"
+        "?.classList.contains('archived')", timeout=3000)
+    assert page.inner_text(row("cccc0003") + " .arch-btn").strip() == "Restore"
+
+
+# ── delete (archived rows only) ────────────────────────────────────────────
+def test_live_rows_have_no_delete_button(page):
+    assert page.query_selector(row("cccc0003") + " .del-btn") is None or \
+        not page.is_visible(row("cccc0003") + " .del-btn")
+
+
+def test_delete_is_one_click_on_an_archived_row(page, api):
+    api.sessions.append(archived_session())
+    page.click("#showArchived")
+    page.wait_for_selector(row("ffff0005"))
+    btn = row("ffff0005") + " .del-btn"
+    assert page.is_visible(btn) and page.inner_text(btn).strip() == "Delete"
+    color = page.eval_on_selector(btn, "e => getComputedStyle(e).color")
+    r, g, b = [int(x) for x in re.findall(r"\d+", color)[:3]]
+    assert r > g + 40 and r > b + 40, color                # red
+    dialogs = []
+    page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
     page.click(btn)
-    page.wait_for_timeout(3300)
-    assert page.inner_text(btn).strip() == "в архив"
-    page.click(btn)
-    assert api.posts("/api/library/archive") == []
+    page.wait_for_selector(row("ffff0005"), state="detached")
+    assert dialogs == []                                   # no confirm
+    assert api.posts("/api/library/delete") == [
+        ("POST", "/api/library/delete", {"id": "ffff0005"})]
+    page.wait_for_function("() => ((document.getElementById('_imgToast')||{}).textContent||'')"
+                           ".includes('Deleted — transcript moved to trash')")
+    assert page.query_selector("#wrap iframe") is None
+    page.wait_for_timeout(400)
+    assert page.query_selector(row("ffff0005")) is None      # a poll does not bring it back
+    assert len(api.posts("/api/library/delete")) == 1
+    shot(page, "index-lib-deleted.png")
+
+
+def test_delete_error_keeps_the_row(page, api):
+    s = archived_session()
+    s["active"] = True                                     # fake API answers 409
+    api.sessions.append(s)
+    page.click("#showArchived")
+    page.wait_for_selector(row("ffff0005"))
+    page.click(row("ffff0005") + " .del-btn")
+    page.wait_for_function("() => ((document.getElementById('_imgToast')||{}).textContent||'')"
+                           ".includes('Not deleted')")
+    assert page.query_selector(row("ffff0005")) is not None
+
+
+def test_delete_button_sits_next_to_restore(page, api):
+    api.sessions.append(archived_session())
+    page.click("#showArchived")
+    page.wait_for_selector(row("ffff0005"))
+    boxes = [page.eval_on_selector(row("ffff0005") + " " + sel,
+                                   "e => { const r = e.getBoundingClientRect();"
+                                   " return [r.top, r.bottom, r.left, r.right]; }")
+             for sel in (".arch-btn", ".del-btn")]
+    (at, ab, al, ar), (dt, db, dl, dr) = boxes
+    assert abs(at - dt) < 4 and abs(ab - db) < 4           # same line
+    assert dl >= ar or dr <= al                            # side by side, no overlap
+
+
+# ── search also covers the archive ─────────────────────────────────────────
+def test_search_shows_archived_matches_with_toggle_off(page, api):
+    api.sessions.append(archived_session())
+    assert page.inner_text("#showArchived").strip() == "Show archived"   # toggle off
+    page.fill("#search", "old arch")
+    page.wait_for_selector(row("ffff0005"), timeout=3000)
+    assert row_ids(page) == ["ffff0005"]
+    assert "archived" in page.get_attribute(row("ffff0005"), "class")
+    assert page.inner_text(row("ffff0005") + " .arch-btn").strip() == "Restore"
+    assert page.is_visible(row("ffff0005") + " .del-btn")
+    page.wait_for_timeout(4500)                        # survives a poll while searching
+    assert row_ids(page) == ["ffff0005"]
+    # the toggle itself was not switched on
+    assert page.inner_text("#showArchived").strip() == "Show archived"
+
+
+def test_clearing_search_hides_archived_again(page, api):
+    api.sessions.append(archived_session())
+    page.fill("#search", "old")
+    page.wait_for_selector(row("ffff0005"), timeout=3000)
+    page.fill("#search", "")
+    page.wait_for_selector(row("ffff0005"), state="detached", timeout=3000)
+    assert len(row_ids(page)) == 4
+    page.wait_for_timeout(4500)                        # and a later poll keeps it hidden
+    assert page.query_selector(row("ffff0005")) is None
+
+
+def test_search_enter_skips_archived_matches(page, api):
+    s = archived_session()
+    s["name"] = "Старая тема archived"
+    s["last_used"] = 10**6                             # would sort first if it counted
+    api.sessions.append(s)
+    page.fill("#search", "старая")
+    page.wait_for_selector(row("ffff0005"), timeout=3000)
+    page.press("#search", "Enter")
+    page.wait_for_selector("#wrap iframe")
+    assert "arg=cccc0003" in page.get_attribute("#wrap iframe", "src")
+
+
+# ── manual order: drag-and-drop (desktop), ▲▼ (touch) ─────────────────────
+def test_initial_order_follows_pos(browser, site):
+    api = FakeAPI()
+    for s, p in zip(api.sessions, (1, 0, 0, 1)):      # aaaa, bbbb, cccc, dddd
+        s["pos"] = p
+    ctx, pg = _open(browser, site, api)
+    try:
+        # loaded first (bbbb pos 0, dddd pos 1), then the rest (cccc pos 0, aaaa pos 1)
+        assert row_ids(pg) == ["bbbb0002", "dddd0004", "cccc0003", "aaaa0001"]
+    finally:
+        ctx.close()
+
+
+def test_drag_a_row_reorders_and_posts_the_order(page, api):
+    assert row_ids(page) == ["dddd0004", "bbbb0002", "aaaa0001", "cccc0003"]
+    assert page.get_attribute(row("cccc0003"), "draggable") == "true"
+    page.drag_and_drop(row("cccc0003"), row("aaaa0001"),
+                       target_position={"x": 30, "y": 3})      # upper edge = before it
+    page.wait_for_function("() => [...document.querySelectorAll('#list .card[data-sid]')]"
+                           ".map(e => e.dataset.sid).join() === "
+                           "'dddd0004,bbbb0002,cccc0003,aaaa0001'", timeout=3000)
+    assert api.posts("/api/library/reorder") == [
+        ("POST", "/api/library/reorder",
+         {"ids": ["dddd0004", "bbbb0002", "cccc0003", "aaaa0001"]})]
+    assert page.query_selector("#wrap iframe") is None        # a drag is not a click
+    page.wait_for_timeout(4500)                               # survives the next poll
+    assert row_ids(page) == ["dddd0004", "bbbb0002", "cccc0003", "aaaa0001"]
+
+
+def test_drag_down_puts_the_row_after_the_target(page, api):
+    page.drag_and_drop(row("dddd0004"), row("bbbb0002"),
+                       target_position={"x": 30, "y": 25})     # lower half = after it
+    page.wait_for_function("() => document.querySelector('#list .card[data-sid]')"
+                           ".dataset.sid === 'bbbb0002'", timeout=3000)
+    assert api.posts("/api/library/reorder")[0][2]["ids"][:2] == ["bbbb0002", "dddd0004"]
+
+
+def test_reorder_error_reverts_with_a_toast(page, api):
+    api.fail_reorder = True
+    page.drag_and_drop(row("cccc0003"), row("aaaa0001"), target_position={"x": 30, "y": 3})
+    page.wait_for_function("() => ((document.getElementById('_imgToast')||{}).textContent||'')"
+                           ".includes('Not reordered')", timeout=3000)
+    assert row_ids(page) == ["dddd0004", "bbbb0002", "aaaa0001", "cccc0003"]
+
+
+def test_touch_move_buttons_reorder(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open(browser, site, api, width=400, height=800, mobile=True)
+    try:
+        dn = row("aaaa0001") + " .mv-btn.down"
+        assert pg.is_visible(dn)
+        pg.click(dn)
+        pg.wait_for_function("() => [...document.querySelectorAll('#list .card[data-sid]')]"
+                             ".map(e => e.dataset.sid).join() === "
+                             "'dddd0004,bbbb0002,cccc0003,aaaa0001'", timeout=3000)
+        assert api.posts("/api/library/reorder")[0][2] == {
+            "ids": ["dddd0004", "bbbb0002", "cccc0003", "aaaa0001"]}
+        assert pg.query_selector("#wrap iframe") is None
+    finally:
+        ctx.close()
+
+
+def test_move_buttons_hidden_on_desktop(page):
+    assert not page.is_visible(row("aaaa0001") + " .mv-btn.down")
+
+
+# ── English only ────────────────────────────────────────────────────────────
+CYR = re.compile(r"[\u0400-\u04FF]")
+
+SCAN_JS = """() => {
+  const out = [];
+  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let n; while ((n = w.nextNode())) {
+    const p = n.parentElement;
+    if (p && (p.closest('script,style'))) continue;
+    if (n.textContent.trim()) out.push(n.textContent.trim());
+  }
+  for (const e of document.querySelectorAll('*'))
+    for (const a of ['title', 'placeholder', 'aria-label', 'value', 'alt'])
+      if (e.getAttribute(a)) out.push(a + '=' + e.getAttribute(a));
+  out.push('title=' + document.title);
+  return out;
+}"""
+
+
+def english_api():
+    api = FakeAPI()
+    names = ["Deploy", "Site work", "Old work", "Bridge"]
+    for s, nm in zip(api.sessions, names):
+        s["name"] = nm
+    api.sessions.append(archived_session())
+    return api
+
+
+def _cyrillic(pg):
+    return [t for t in pg.evaluate(SCAN_JS) if CYR.search(t)]
+
+
+def _exercise(pg):
+    bad = _cyrillic(pg)
+    pg.click("#showArchived")
+    pg.wait_for_selector(row("ffff0005"))
+    bad += _cyrillic(pg)
+    pg.click(row("bbbb0002") + " .proj")
+    pg.wait_for_selector("#wrap iframe")
+    bad += _cyrillic(pg)
+    pg.click(row("cccc0003") + " .arch-btn")                  # toast
+    pg.wait_for_function("() => (document.getElementById('_imgToast')||{}).textContent")
+    bad += _cyrillic(pg)
+    pg.click(row("ffff0005") + " .arch-btn")                  # restore toast
+    pg.wait_for_timeout(300)
+    bad += _cyrillic(pg)
+    pg.click(row("aaaa0001") + " .card-btn.edit")
+    bad += _cyrillic(pg)
+    pg.keyboard.press("Escape")
+    pg.click("#newBtn")
+    pg.wait_for_selector("#newName:visible")
+    bad += _cyrillic(pg)
+    pg.keyboard.press("Escape")
+    pg.fill("#search", "zzz nothing")
+    bad += _cyrillic(pg)
+    return bad
+
+
+def test_no_cyrillic_in_visible_ui_desktop(browser, site):
+    ctx, pg = _open(browser, site, english_api())
+    try:
+        bad = _exercise(pg)
+        assert not bad, f"Russian UI text: {sorted(set(bad))}"
+    finally:
+        ctx.close()
+
+
+def test_no_cyrillic_in_visible_ui_phone(browser, site):
+    ctx, pg = _open(browser, site, english_api(), width=400, height=800, mobile=True)
+    try:
+        bad = _exercise(pg)
+        assert not bad, f"Russian UI text: {sorted(set(bad))}"
+    finally:
+        ctx.close()
+
+
+def test_empty_library_text_is_english(browser, site):
+    api = FakeAPI()
+    api.sessions = [archived_session()]
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    pg = ctx.new_page()
+    try:
+        pg.route(re.compile(r"^https://fonts\.(googleapis|gstatic)\.com/"), lambda r: r.abort())
+        pg.route(re.compile(r"/api/library(/|\?|$)"), api.library)
+        pg.route(re.compile(r"/api/(terminal-status|page-version)"), lambda r: r.abort())
+        pg.goto(site)
+        pg.wait_for_selector("#libEmpty:visible")
+        assert not _cyrillic(pg), _cyrillic(pg)
+        assert pg.is_visible("#showArchived")        # reachable even with no live topics
+    finally:
+        ctx.close()
+
+
+def test_no_cyrillic_in_page_strings_outside_comments():
+    src = PAGE.read_text(encoding="utf-8")
+    src = re.sub(r"<!--.*?-->", "", src, flags=re.S)
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    src = re.sub(r"(?m)(^|[\s;{}(),])//.*$", r"\1", src)
+    lines = [l.strip() for l in src.splitlines() if CYR.search(l)]
+    assert not lines, "Cyrillic outside comments:\n" + "\n".join(lines[:20])
+
+
+# ── wording: "terminal", never "topic" (owner, 2026-09-25) ─────────────────
+TOPIC = re.compile(r"\btopics?\b", re.I)
+
+
+def test_ui_says_terminal_not_topic_desktop(browser, site):
+    ctx, pg = _open(browser, site, english_api())
+    try:
+        seen = pg.evaluate(SCAN_JS)
+        _exercise(pg)
+        seen += pg.evaluate(SCAN_JS)
+        bad = [t for t in seen if TOPIC.search(t)]
+        assert not bad, f"'topic' in UI text: {sorted(set(bad))}"
+        assert pg.inner_text("#newBtn").strip() == "＋ New terminal"
+    finally:
+        ctx.close()
+
+
+def test_no_topic_word_in_page_strings_outside_comments():
+    src = PAGE.read_text(encoding="utf-8")
+    src = re.sub(r"<!--.*?-->", "", src, flags=re.S)
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    src = re.sub(r"(?m)(^|[\s;{}(),])//.*$", r"\1", src)
+    lines = [l.strip() for l in src.splitlines() if TOPIC.search(l)]
+    assert not lines, "'topic' outside comments:\n" + "\n".join(lines[:20])
 
 
 # ── no slot numbers ─────────────────────────────────────────────────────────

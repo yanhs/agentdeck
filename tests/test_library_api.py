@@ -44,7 +44,7 @@ import library  # noqa: E402
 U1 = "aaaa1111-2222-4333-8444-555566667777"
 U2 = "bbbb2222-3333-4444-8555-666677778888"
 U3 = "c0ffee00-0000-4000-8000-000000000000"
-ROW_KEYS = {"id", "name", "cwd", "created", "last_used", "archived", "active", "attached", "status"}
+ROW_KEYS = {"id", "name", "cwd", "created", "last_used", "archived", "active", "attached", "status", "legacy_path", "pos"}
 
 
 # ── fixture: the real Handler on a free port, private tmux socket, temp registry ──
@@ -154,7 +154,8 @@ def test_get_lists_registry_in_display_order_with_tmux_state(api):
     assert by["c0ffee00"]["status"] == "idle"
     assert by["aaaa1111"] == {"id": "aaaa1111", "name": "ImmAppeal деплой", "cwd": "/home/ubuntu/pr",
                               "created": 10, "last_used": 10, "archived": False,
-                              "active": False, "attached": False, "status": "off"}
+                              "active": False, "attached": False, "status": "off", "legacy_path": None,
+                              "pos": None}
 
 
 def test_status_working_is_the_terminal_cards_cpu_measure(api, monkeypatch):
@@ -230,7 +231,7 @@ def test_new_default_cwd_is_the_folder_above_this_repo(api, monkeypatch):
 def test_new_blank_or_missing_name_gets_a_dated_default(api):
     for body in ({}, {"name": "   "}):
         code, e = post(api, "new", body)
-        assert code == 200 and e["name"].startswith("Тема ")
+        assert code == 200 and e["name"].startswith("Terminal ")
 
 
 def test_new_collapses_whitespace_and_drops_control_chars(api):
@@ -334,7 +335,7 @@ def test_malformed_requests(api):
 
 def test_new_with_empty_body_is_a_default_topic(api):
     code, e = post(api, "new", raw=b"")
-    assert code == 200 and e["name"].startswith("Тема ")
+    assert code == 200 and e["name"].startswith("Terminal ")
 
 
 # ── safety: the API only ever talks to the configured tmux socket ────────────
@@ -477,3 +478,178 @@ def test_page_version_watches_index_lib_for_the_library_page(api, tmp_path, monk
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ── topics still running in a legacy numbered terminal (after migration) ────
+def test_topic_running_in_legacy_terminal_shows_active_with_its_path(api):
+    # Migration leaves busy claude-terminal-N sessions untouched; their topic must
+    # not look unloaded, and opening it must go to that terminal (a second Claude
+    # on the same uuid is refused anyway).
+    _seed(api, (U1, "PIPE", 100), (U2, "other", 50))
+    _start(api, "claude-terminal-2", f"bash -c 'sleep 600; : --resume {U1}'")
+    _start(api, "claude-terminal", f"bash -c 'sleep 600; : --session-id {U2}'")
+    rows = {r["id"]: r for r in get(api)[1]["sessions"]}
+    a, b = rows[library.id_from_uuid(U1)], rows[library.id_from_uuid(U2)]
+    assert a["active"] is True and a["legacy_path"] == "/terminal2/"
+    assert b["active"] is True and b["legacy_path"] == "/terminal/"
+
+
+def test_library_session_has_no_legacy_path(api):
+    _seed(api, (U1, "PIPE", 100))
+    _start(api, "cs-" + library.id_from_uuid(U1))
+    row = get(api)[1]["sessions"][0]
+    assert row["active"] is True and row.get("legacy_path") is None
+
+
+# ── POST /api/library/delete: archived topics only, transcript -> trash ─────
+@pytest.fixture
+def projects(tmp_path, monkeypatch):
+    root = tmp_path / "projects"
+    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(root))
+    d = root / "-home-ubuntu-pr"
+    d.mkdir(parents=True)
+    return d
+
+
+def test_delete_archived_topic_moves_transcript_to_trash(api, projects):
+    _seed(api, (U1, "old", 10, True), (U2, "keep", 20))
+    (projects / f"{U1}.jsonl").write_text("talk")
+    (projects / U1).mkdir()
+    (projects / U1 / "x").write_text("sub")
+    code, out = post(api, "delete", {"id": "aaaa1111"})
+    trash = Path(api.lib).parent / "trash"
+    assert code == 200 and out == {"ok": True, "trashed": str(trash / f"{U1}.jsonl")}
+    assert (trash / f"{U1}.jsonl").read_text() == "talk" and (trash / U1 / "x").is_file()
+    assert not (projects / f"{U1}.jsonl").exists()
+    ids = [e["id"] for e in library.load(api.lib)["sessions"]]
+    assert ids == ["bbbb2222"]
+
+
+def test_delete_without_transcript_still_removes_the_entry(api, projects):
+    _seed(api, (U1, "old", 10, True))
+    code, out = post(api, "delete", {"id": "aaaa1111"})
+    assert code == 200 and out == {"ok": True, "trashed": None}
+    assert library.load(api.lib)["sessions"] == []
+
+
+def test_delete_refuses_a_topic_that_is_not_archived(api, projects):
+    _seed(api, (U1, "live", 10))
+    (projects / f"{U1}.jsonl").write_text("talk")
+    code, err = post(api, "delete", {"id": "aaaa1111"})
+    assert code == 409 and "error" in err
+    assert library.find(library.load(api.lib), "aaaa1111") is not None
+    assert (projects / f"{U1}.jsonl").exists()
+
+
+def test_delete_refuses_a_topic_loaded_in_tmux(api, projects):
+    _seed(api, (U1, "old", 10, True))
+    (projects / f"{U1}.jsonl").write_text("talk")
+    _start(api, "cs-aaaa1111")
+    code, err = post(api, "delete", {"id": "aaaa1111"})
+    assert code == 409 and "error" in err
+    assert _alive(api, "cs-aaaa1111")
+    assert library.find(library.load(api.lib), "aaaa1111") is not None
+    assert (projects / f"{U1}.jsonl").exists()
+
+
+def test_delete_refuses_a_topic_running_in_a_legacy_terminal(api, projects):
+    _seed(api, (U1, "old", 10, True))
+    (projects / f"{U1}.jsonl").write_text("talk")
+    _start(api, "claude-terminal-3", f"bash -c 'sleep 600; : --resume {U1}'")
+    code, err = post(api, "delete", {"id": "aaaa1111"})
+    assert code == 409 and "error" in err
+    assert library.find(library.load(api.lib), "aaaa1111") is not None
+    assert (projects / f"{U1}.jsonl").exists()
+
+
+def test_delete_bad_and_unknown_ids(api, projects):
+    _seed(api, (U1, "old", 10, True))
+    for body in ({"id": "../x"}, {"id": "AAAA1111"}, {"id": 1}, {}):
+        assert post(api, "delete", body)[0] == 400, body
+    assert post(api, "delete", {"id": "deadbeef"})[0] == 404
+    assert len(library.load(api.lib)["sessions"]) == 1
+
+
+def test_delete_has_the_same_csrf_checks(api, projects, monkeypatch):
+    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    _seed(api, (U1, "old", 10, True))
+    body = json.dumps({"id": "aaaa1111"}).encode()
+    assert _raw_req(api, "POST", "/api/library/delete", body, {"Content-Type": "text/plain"})[0] == 415
+    assert _raw_req(api, "POST", "/api/library/delete", body,
+                    {"Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 403
+    assert len(library.load(api.lib)["sessions"]) == 1
+
+
+# ── speed: one legacy scan per request, no pgrep per process ─────────────────
+def test_listing_spawns_no_pgrep_and_scans_legacy_once(api, monkeypatch):
+    _seed(api, (U1, "PIPE", 100), (U2, "live", 50))
+    _start(api, "claude-terminal-2", f"bash -c 'sleep 600; : --resume {U1}'")
+    _start(api, "cs-bbbb2222", "bash -c 'sleep 600'")
+    real_run = subprocess.run
+    pgreps = []
+
+    def spy(cmd, *a, **kw):
+        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "pgrep":
+            pgreps.append(list(cmd))
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(api.ss.subprocess, "run", spy)
+    real_legacy = api.ss.lib_legacy
+    scans = []
+    monkeypatch.setattr(api.ss, "lib_legacy", lambda *a, **k: scans.append(1) or real_legacy(*a, **k))
+    for path in ("/api/library", "/api/library?archived=1"):
+        scans.clear()
+        code, data = get(api, path)
+        assert code == 200
+        assert len(scans) == 1, path
+    rows = _by_id(data)
+    assert rows["aaaa1111"]["legacy_path"] == "/terminal2/"   # still found without pgrep
+    assert rows["bbbb2222"]["active"] is True
+    assert pgreps == []
+
+
+def test_child_map_matches_the_process_tree():
+    ss = importlib.import_module("status_server")
+    p = subprocess.Popen(["bash", "-c", "sleep 30 & wait"])
+    try:
+        deadline = time.time() + 5
+        while time.time() < deadline and not ss.child_map().get(p.pid):
+            time.sleep(0.05)
+        kids = ss.child_map().get(p.pid, [])
+        assert len(kids) == 1
+        with open(f"/proc/{kids[0]}/cmdline", "rb") as f:
+            assert f.read().startswith(b"sleep")
+    finally:
+        p.kill()
+        p.wait()
+
+
+# ── POST /api/library/reorder {ids} ──────────────────────────────────────────
+def test_reorder_rewrites_the_display_order(api):
+    _seed(api, (U1, "a", 10), (U2, "b", 20), (U3, "c", 30))
+    c3 = library.id_from_uuid(U3)
+    assert [s["id"] for s in get(api)[1]["sessions"]] == [c3, "bbbb2222", "aaaa1111"]
+    code, out = post(api, "reorder", {"ids": ["aaaa1111", c3, "bbbb2222"]})
+    assert code == 200 and out == {"ok": True}
+    assert [s["id"] for s in get(api)[1]["sessions"]] == ["aaaa1111", c3, "bbbb2222"]
+    assert get(api)[1]["sessions"][0]["pos"] == 0
+
+
+def test_reorder_validates_ids(api):
+    _seed(api, (U1, "a", 10), (U2, "b", 20))
+    for body in ({}, {"ids": "aaaa1111"}, {"ids": []}, {"ids": ["aaaa1111", "../x"]},
+                 {"ids": ["aaaa1111", 5]}, {"ids": ["aaaa1111", "deadbeef"]},
+                 {"ids": ["aaaa1111", "aaaa1111"]}):
+        code, err = post(api, "reorder", body)
+        assert code == 400 and "error" in err, body
+    assert all("pos" not in e for e in library.load(api.lib)["sessions"])
+
+
+def test_reorder_has_the_same_csrf_checks(api, monkeypatch):
+    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    _seed(api, (U1, "a", 10), (U2, "b", 20))
+    body = json.dumps({"ids": ["aaaa1111", "bbbb2222"]}).encode()
+    assert _raw_req(api, "POST", "/api/library/reorder", body, {"Content-Type": "text/plain"})[0] == 415
+    assert _raw_req(api, "POST", "/api/library/reorder", body,
+                    {"Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 403
+    assert all("pos" not in e for e in library.load(api.lib)["sessions"])

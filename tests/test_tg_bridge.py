@@ -585,9 +585,42 @@ def test_screen_mirror_keeps_blank_lines():
 
 # --- transcript_path ------------------------------------------------------
 
-def test_transcript_path_resolves_real_agent():
-    p = tb.transcript_path("2")
-    assert p is not None and p.endswith(".jsonl") and "/projects/" in p
+def _legacy_slot_dir(tmp_path, monkeypatch, slot="2", uuid="0badc0de-1111-2222-3333-444455556666"):
+    """A private GATE_DIR with .sessions/agent-<slot>.id — where the launch
+    scripts keep a legacy slot's conversation id (the scripts themselves only
+    hold `AGENT_SESSION_ID="$(cat "$_SID_FILE")"`, and migrated slots are shims)."""
+    gate = tmp_path / "terminal"
+    (gate / ".sessions").mkdir(parents=True)
+    (gate / ".sessions" / f"agent-{slot}.id").write_text(uuid + "\n")
+    monkeypatch.setattr(tb, "GATE_DIR", str(gate))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("AGENTDECK_WORKDIR", "/home/ubuntu/pr")
+    return uuid
+
+
+def test_transcript_path_resolves_legacy_slot_from_its_session_id_file(tmp_path, monkeypatch):
+    u = _legacy_slot_dir(tmp_path, monkeypatch)
+    assert tb.transcript_path("2") == str(
+        tmp_path / "home" / ".claude" / "projects" / "-home-ubuntu-pr" / f"{u}.jsonl")
+
+
+def test_transcript_path_never_returns_the_unexpanded_shell_text(tmp_path, monkeypatch):
+    # the old regex read `AGENT_SESSION_ID="$(cat "` out of the launch script
+    # and built ".../$(cat .jsonl" — a path that never exists
+    _legacy_slot_dir(tmp_path, monkeypatch)
+    (tmp_path / "terminal" / "launch-claude-2.sh").write_text(
+        'AGENT_SESSION_ID="$(cat "$_SID_FILE")"\n')
+    assert "$(" not in tb.transcript_path("2")
+
+
+def test_transcript_path_of_a_slot_without_a_session_id_is_none(tmp_path, monkeypatch):
+    _legacy_slot_dir(tmp_path, monkeypatch)
+    assert tb.transcript_path("7") is None
+
+
+def test_transcript_path_rejects_a_malformed_session_id(tmp_path, monkeypatch):
+    _legacy_slot_dir(tmp_path, monkeypatch, uuid="../../etc/passwd")
+    assert tb.transcript_path("2") is None
 
 
 # --- _incoming_text: typed text + replied-to / forwarded content ----------
@@ -635,7 +668,7 @@ def test_incoming_text_empty_returns_blank():
 
 # --- on_text: lock held ONLY around the send, released before streaming ----
 
-def test_on_text_releases_lock_before_streaming(monkeypatch):
+def test_on_text_releases_lock_before_streaming(monkeypatch, tmp_path):
     """A message sent while Claude works must reach the terminal immediately, so
     on_text must drop the per-session lock once the keystrokes are sent and only
     THEN stream — otherwise the next message blocks until the stream finishes."""
@@ -644,6 +677,11 @@ def test_on_text_releases_lock_before_streaming(monkeypatch):
     session = "claude-terminal-6"
     seen = {}
 
+    # hermetic: the real registry says slot 6 was migrated into a topic, which
+    # would switch the chat to it (writing the REAL state file) and run
+    # library_cli ensure on the real registry — keep this a legacy-slot test
+    monkeypatch.setattr(tb, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(tb, "migrated_topic", lambda slot: None)
     monkeypatch.setattr(tb, "get_current", lambda c: "6")
     monkeypatch.setattr(tb, "SESSIONS", {**tb.SESSIONS, "6": session})
     monkeypatch.setattr(tb, "has_session", lambda s: True)
@@ -1281,7 +1319,7 @@ def test_new_creates_topic_selects_and_loads_it(world, monkeypatch, tmp_path):
 def test_new_without_name_gets_a_dated_default(world):
     run_cmd(tb.cmd_new, [])
     e = library.load(world.lib)["sessions"][0]
-    assert e["name"].startswith("Тема ")
+    assert e["name"].startswith("Terminal ")
 
 
 def test_new_strips_control_chars_and_caps_the_name(world):
