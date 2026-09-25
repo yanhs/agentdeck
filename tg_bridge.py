@@ -79,18 +79,20 @@ TERMINAL_STOPS = {"end_turn", "stop_sequence", "stop", "max_tokens"}
 SESSIONS = {t["id"]: t["session"] for t in ss.SESSIONS
             if t["session"].startswith("claude-terminal")}
 
-# uploaded files are saved here and served at the public URL (served by nginx on
-# reimake.com — NEVER yanhs.stream, which is deprecated). 20 MB is Telegram's
-# bot getFile cap, so anything bigger can't be downloaded by the bot at all.
-TGFILES_DIR = os.environ.get("TG_FILES_DIR", "/home/ubuntu/pr/tgfiles")
-TGFILES_URL = os.environ.get("TG_FILES_URL", "https://reimake.com/tgfiles")
+# uploaded files are saved in TG_FILES_DIR (default: <repo>/.sessions/tgfiles) and, when
+# TG_FILES_URL is set, linked at that public base URL (a server that serves the folder,
+# e.g. via nginx); without it the reply carries the saved file's local path instead.
+# 20 MB is Telegram's bot getFile cap, so anything bigger can't be downloaded at all.
+TGFILES_DIR = os.environ.get("TG_FILES_DIR") or os.path.join(GATE_DIR, ".sessions", "tgfiles")
+TGFILES_URL = os.environ.get("TG_FILES_URL", "")
 TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024
-# voice notes are transcribed with faster-whisper, which the bridge's own python
-# (system /usr/bin/python3) does NOT have — so we shell out to a venv python that
-# does, via whisper_transcribe.py, keeping the model out of the bridge process.
-WHISPER_PY = os.environ.get(
-    "TG_WHISPER_PY",
-    "/home/ubuntu/.cache/pypoetry/virtualenvs/claude-code-telegram-1NskcX1W-py3.11/bin/python")
+# voice notes are transcribed with faster-whisper via whisper_transcribe.py in a
+# subprocess (keeps the model out of the bridge process). Default: this same python;
+# point TG_WHISPER_PY at a virtualenv's python if faster-whisper lives there.
+WHISPER_PY = os.environ.get("TG_WHISPER_PY") or sys.executable
+# the folder an agent started from the bot runs in
+AGENT_CWD = (os.environ.get("TG_AGENT_CWD") or os.environ.get("AGENTDECK_WORKDIR")
+             or os.path.expanduser("~"))
 WHISPER_SCRIPT = os.path.join(GATE_DIR, "whisper_transcribe.py")
 
 
@@ -174,8 +176,7 @@ def start_session(aid: str) -> tuple[bool, str]:
     cmd = cmd[-1] if cmd else ""
     if not cmd:
         return False, f"could not resolve the launch command for #{aid}"
-    _tmux("new-session", "-d", "-s", session, "-c",
-          os.environ.get("TG_AGENT_CWD", "/home/ubuntu/pr"))
+    _tmux("new-session", "-d", "-s", session, "-c", AGENT_CWD)
     _tmux("set", "-t", _exact(session), "mouse", "on")
     time.sleep(0.3)
     _tmux("send-keys", "-t", _pane(session), "-l", "--", cmd)
@@ -1553,7 +1554,7 @@ def _incoming_text(msg) -> str:
     return body
 
 
-# ── uploaded files: save to disk, hand back a public reimake.com link ───────
+# ── uploaded files: save to disk, hand back a link (or the local path) ─────────
 
 def _stored_name(original: str, ext: str, token: str) -> str:
     """A unique, URL/shell-safe on-disk name: '<token>_<safe-stem><ext>' (or
@@ -1567,6 +1568,10 @@ def _stored_name(original: str, ext: str, token: str) -> str:
 
 
 def _public_url(filename: str) -> str:
+    """The link handed back for a saved file: TG_FILES_URL/<name>, or — when no public
+    URL is configured — the file's local path (the agent can still Read it)."""
+    if not TGFILES_URL:
+        return os.path.join(TGFILES_DIR, filename)
     return f"{TGFILES_URL.rstrip('/')}/{filename}"
 
 
@@ -1674,7 +1679,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Owner sent a file (document/photo/video/audio) → save it and reply with a
-    public reimake.com link. A caption means the file is meant for the agent, so
+    link (public URL or local path). A caption means the file is meant for the agent, so
     we also hand the local path + URL to the current terminal."""
     msg = update.message
     info = _media_info(msg)
@@ -1701,7 +1706,7 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text(f"📎 {url}")
     caption = (getattr(msg, "caption", None) or "").strip()
     if caption:                                  # the agent is meant to act on this file
-        ref = f"{caption}\n\n📎 file: {dest}\n{url}"
+        ref = f"{caption}\n\n📎 file: {dest}" + (f"\n{url}" if url != dest else "")
         await _deliver_to_terminal(msg, update.effective_chat.id, ref)
 
 

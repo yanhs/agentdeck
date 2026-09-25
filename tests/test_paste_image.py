@@ -25,7 +25,8 @@ def test_paste_ext_rejects_non_images():
     assert ss._paste_ext(None) is None
 
 
-def test_save_paste_image_writes_file_and_returns_path_url(tmp_path):
+def test_save_paste_image_writes_file_and_returns_path_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(ss, "PASTE_URL", "https://reimake.com/tgimg")
     data = b"\x89PNG\r\n\x1a\n" + b"fake-png-bytes"
     res = ss.save_paste_image(data, "image/png", token="abcd1234", dest_dir=str(tmp_path))
     assert res["path"] == str(tmp_path / "paste_abcd1234.png")
@@ -47,3 +48,33 @@ def test_save_paste_image_rejects_empty(tmp_path):
     import pytest
     with pytest.raises(ValueError):
         ss.save_paste_image(b"", "image/png", token="x", dest_dir=str(tmp_path))
+
+
+def test_save_paste_image_without_public_url_returns_the_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(ss, "PASTE_URL", "")
+    res = ss.save_paste_image(b"GIF89a", "image/gif", token="t1", dest_dir=str(tmp_path))
+    assert res["path"] == str(tmp_path / "paste_t1.gif")
+    assert res["url"] == res["path"]            # no public host configured → the local path
+
+
+def _paste_defaults(extra_env=None):
+    import json, subprocess
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("AGENTDECK_PASTE_DIR", "AGENTDECK_PASTE_URL", "TG_FILES_DIR_IMG")}
+    env.update(extra_env or {})
+    code = "import json,status_server as s;print(json.dumps([s.PASTE_DIR,s.PASTE_URL]))"
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env,
+                       cwd=str(Path(ss.__file__).parent), timeout=60)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def test_paste_defaults_are_generic_inside_the_repo():
+    d, u = _paste_defaults()
+    assert d == os.path.join(str(Path(ss.__file__).resolve().parent), ".sessions", "paste")
+    assert u == ""
+
+
+def test_paste_env_overrides():
+    assert _paste_defaults({"AGENTDECK_PASTE_DIR": "/p", "AGENTDECK_PASTE_URL": "https://h/i"}) == ["/p", "https://h/i"]
+    assert _paste_defaults({"TG_FILES_DIR_IMG": "/old"})[0] == "/old"      # legacy name still honoured

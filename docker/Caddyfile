@@ -44,6 +44,11 @@
 			reverse_proxy 127.0.0.1:3011
 		}
 
+		# Server tab (web/server.html): CPU / RAM of agents, sites and jobs — status_server
+		handle /api/server {
+			reverse_proxy 127.0.0.1:3011
+		}
+
 		# Telegram-bot setup page (status_server, behind the login gate)
 		handle /telegram* {
 			reverse_proxy 127.0.0.1:3011

@@ -25,11 +25,14 @@ services:
       - agentdeck-sessions:/app/.sessions
       # persist TLS certs if you switch to a domain (avoids Let's Encrypt rate limits)
       - caddy-data:/data
-      # OPTIONAL — let agents read/write your project files:
-      # - ./my-project:/work
+      # the agents' working directory — kept in a volume so their work survives
+      # `docker compose down` / a re-create. To work on YOUR project files instead,
+      # replace this line with a bind mount:  - ./my-project:/work
+      - agentdeck-work:/work
     restart: unless-stopped
 
 volumes:
   agentdeck-claude:
   agentdeck-sessions:
   caddy-data:
+  agentdeck-work:

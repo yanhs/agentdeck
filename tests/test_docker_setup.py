@@ -177,3 +177,76 @@ def test_dockerignore_keeps_the_library_files():
 def test_compose_passes_the_optional_origin_through():
     src = code(ROOT / "docker-compose.yml")
     assert re.search(r"AGENTDECK_ORIGIN:\s*\"\$\{AGENTDECK_ORIGIN:-\}\"", src)
+
+
+# ── fresh-user Docker test fixes (2026-09-25) ────────────────────────────────
+NGINX = ROOT / "nginx" / "agents-subdomain.conf"
+
+
+def nginx_status_server_locations() -> list[tuple[str, bool]]:
+    """[(path, strips_prefix)] for every nginx location proxied to status_server :3011.
+    `proxy_pass http://127.0.0.1:3011/;` (trailing slash, no URI) strips the location
+    prefix -> Caddy handle_path; without a URI (or with the path itself) the path is kept."""
+    out = []
+    for m in re.finditer(r"location\s+(=\s*)?(/[^\s{]*)\s*\{([^}]*)\}", NGINX.read_text()):
+        path, body = m.group(2), m.group(3)
+        pp = re.search(r"proxy_pass\s+http://127\.0\.0\.1:3011(\S*?);", body)
+        if not pp:
+            continue
+        out.append((path, pp.group(1) == "/"))
+    return out
+
+
+def test_nginx_reference_has_status_server_locations():
+    paths = [p for p, _ in nginx_status_server_locations()]
+    assert "/api/server" in paths and "/api/library" in paths, paths
+
+
+@pytest.mark.parametrize("name", CADDYFILES)
+def test_caddy_routes_every_status_server_path_nginx_does(name):
+    """Derived from nginx so a new API path can't be forgotten in the Caddyfiles again
+    (the Server tab 404'd in Docker: /api/server existed only in nginx)."""
+    p = CADDYFILES[name]
+    gate = code(p).index("forward_auth")
+    routes = caddy_routes(p)
+    for path, strips in nginx_status_server_locations():
+        hits = [r for r in routes if r[2] == "127.0.0.1:3011"
+                and (r[1] == path or fnmatch.fnmatch(path, r[1]))]
+        assert len(hits) == 1, (path, routes)
+        d, _, _, pos = hits[0]
+        assert pos > gate, path                                   # behind the login
+        assert d == ("handle_path" if strips else "handle"), (path, d)
+
+
+@pytest.mark.parametrize("name", CADDYFILES)
+def test_caddy_api_server_before_telegram(name):
+    p = CADDYFILES[name]
+    assert route_for(p, "/api/server")[3] < route_for(p, "/telegram*")[3]
+
+
+def test_dockerfile_points_caddy_storage_at_the_data_volume():
+    src = code(ROOT / "Dockerfile")
+    assert re.search(r"\bXDG_DATA_HOME=/data\b", src), src
+    assert re.search(r"\bXDG_CONFIG_HOME=/data/config\b", src), src
+    assert re.search(r"-\s*caddy-data:/data\b", code(ROOT / "docker-compose.yml"))
+
+
+def test_compose_persists_the_agents_workdir():
+    src = code(ROOT / "docker-compose.yml")
+    assert re.search(r"-\s*agentdeck-work:/work\b", src), src
+    assert re.search(r"^agentdeck-work:\s*$", src, re.M), src
+    assert "./my-project:/work" in (ROOT / "docker-compose.yml").read_text()   # hint kept
+
+
+def test_dockerfile_picks_ttyd_by_arch():
+    src = code(ROOT / "Dockerfile")
+    assert "aarch64" in src and "x86_64" in src
+    assert re.search(r"TARGETARCH|uname\s+-m", src)
+    assert not re.search(r"releases/download/[\d.]+/ttyd\.x86_64\s", src)   # no hard-wired arch
+
+
+def test_dockerfile_pins_claude_code_via_build_arg():
+    src = code(ROOT / "Dockerfile")
+    m = re.search(r"^ARG\s+CLAUDE_CODE_VERSION=(\S+)", src, re.M)
+    assert m and m.group(1), src
+    assert re.search(r"npm\s+install\s+-g\s+\"?@anthropic-ai/claude-code@\$\{?CLAUDE_CODE_VERSION\}?", src), src

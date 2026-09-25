@@ -1527,8 +1527,14 @@ class AuthHandler(BaseHTTPRequestHandler):
 # dashboard intercepts an image paste, POSTs the bytes here, and types the saved
 # file PATH into the terminal so the agent (Claude Code) can Read the image.
 
-PASTE_DIR = os.environ.get("TG_FILES_DIR_IMG", "/home/ubuntu/pr/tgimg")
-PASTE_URL = "https://reimake.com/tgimg"          # canonical host, NEVER yanhs.stream
+# Where pasted images are saved, and (optionally) the public base URL they're served at.
+# Default: inside the repo (.sessions/paste — the persisted volume in Docker), no public
+# URL → the response's "url" is the local path. The dashboard only uses "path" (typed into
+# the terminal so the agent can Read it). A server that serves the folder publicly sets
+# AGENTDECK_PASTE_DIR + AGENTDECK_PASTE_URL (TG_FILES_DIR_IMG is the legacy name for the dir).
+PASTE_DIR = (os.environ.get("AGENTDECK_PASTE_DIR") or os.environ.get("TG_FILES_DIR_IMG")
+             or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".sessions", "paste"))
+PASTE_URL = os.environ.get("AGENTDECK_PASTE_URL", "").rstrip("/")
 _PASTE_EXT = {
     "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/gif": ".gif",
     "image/webp": ".webp", "image/bmp": ".bmp", "image/svg+xml": ".svg",
@@ -1539,8 +1545,10 @@ def _paste_ext(ctype):
     return _PASTE_EXT.get((ctype or "").split(";")[0].strip().lower())
 
 
-def save_paste_image(data: bytes, ctype: str, token: str, dest_dir: str = PASTE_DIR) -> dict:
-    """Save pasted image bytes to dest_dir as paste_<token><ext>; return {path,url}."""
+def save_paste_image(data: bytes, ctype: str, token: str, dest_dir: str | None = None) -> dict:
+    """Save pasted image bytes to dest_dir as paste_<token><ext>; return {path,url}
+    (url = PASTE_URL/<name>, or the local path when no public URL is configured)."""
+    dest_dir = dest_dir or PASTE_DIR
     ext = _paste_ext(ctype)
     if not ext:
         raise ValueError(f"unsupported content-type: {ctype!r}")
@@ -1550,7 +1558,8 @@ def save_paste_image(data: bytes, ctype: str, token: str, dest_dir: str = PASTE_
     os.makedirs(dest_dir, exist_ok=True)
     with open(os.path.join(dest_dir, name), "wb") as f:
         f.write(data)
-    return {"path": os.path.join(dest_dir, name), "url": f"{PASTE_URL}/{name}"}
+    path = os.path.join(dest_dir, name)
+    return {"path": path, "url": f"{PASTE_URL}/{name}" if PASTE_URL else path}
 
 
 class PasteHandler(BaseHTTPRequestHandler):

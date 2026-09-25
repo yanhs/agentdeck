@@ -740,10 +740,53 @@ def test_stored_name_sanitizes_unsafe_chars():
     assert n.startswith("tok_") and n.endswith(".txt")
 
 
-def test_public_url_is_reimake_never_yanhs():
+def test_public_url_uses_the_configured_base(monkeypatch):
+    monkeypatch.setattr(tb, "TGFILES_URL", "https://reimake.com/tgfiles/")
     u = tb._public_url("tok_file.pdf")
     assert u == "https://reimake.com/tgfiles/tok_file.pdf"
     assert "yanhs.stream" not in u           # the deprecated host must never appear
+
+
+def test_public_url_without_a_base_is_the_local_path(monkeypatch, tmp_path):
+    # no public URL configured (Docker / fresh install) → hand back the saved file's path,
+    # not a broken "/tok_file.pdf" link
+    monkeypatch.setattr(tb, "TGFILES_DIR", str(tmp_path))
+    monkeypatch.setattr(tb, "TGFILES_URL", "")
+    assert tb._public_url("tok_file.pdf") == str(tmp_path / "tok_file.pdf")
+
+
+_ENV_KEYS = ("TG_FILES_DIR", "TG_FILES_URL", "TG_WHISPER_PY", "TG_AGENT_CWD", "AGENTDECK_WORKDIR")
+
+
+def _bridge_defaults(extra_env=None):
+    """Import tg_bridge in a fresh interpreter with a clean env; return its settings."""
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if k not in _ENV_KEYS}
+    env.update({"TG_BRIDGE_TOKEN": "t:t", "TG_BRIDGE_OWNER": "1",
+                "TG_CONVO_LOG": "/tmp/test_tg_convo.log", **(extra_env or {})})
+    code = ("import json,sys,tg_bridge as t;print(json.dumps({'dir':t.TGFILES_DIR,'url':t.TGFILES_URL,"
+            "'py':t.WHISPER_PY,'cwd':t.AGENT_CWD,'exe':sys.executable}))")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env,
+                       cwd=str(Path(tb.__file__).parent), timeout=60)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def test_defaults_are_generic_not_the_authors_server():
+    d = _bridge_defaults()
+    repo = str(Path(tb.__file__).resolve().parent)
+    assert d["dir"] == os.path.join(repo, ".sessions", "tgfiles")
+    assert d["url"] == ""
+    assert d["py"] == d["exe"]                   # its own python (has faster-whisper if installed)
+    assert d["cwd"] == os.path.expanduser("~")
+    assert not any("reimake.com" in v or "pypoetry" in v for v in d.values())
+
+
+def test_env_overrides_the_defaults():
+    d = _bridge_defaults({"TG_FILES_DIR": "/x/files", "TG_FILES_URL": "https://h/f",
+                          "TG_WHISPER_PY": "/v/bin/python", "TG_AGENT_CWD": "/w"})
+    assert (d["dir"], d["url"], d["py"], d["cwd"]) == ("/x/files", "https://h/f", "/v/bin/python", "/w")
+    assert _bridge_defaults({"AGENTDECK_WORKDIR": "/work"})["cwd"] == "/work"
 
 
 # --- media detection -------------------------------------------------------
