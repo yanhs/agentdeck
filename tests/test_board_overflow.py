@@ -76,7 +76,7 @@ def _overflow_at(site, width):
                                      body=json.dumps(STATE)))
         pg.route(re.compile(r"/events"), lambda r: r.abort())
         pg.goto(site)
-        pg.wait_for_selector(".card")
+        pg.wait_for_selector(".task")
         pg.wait_for_timeout(200)
         over = pg.evaluate(
             "() => document.documentElement.scrollWidth - document.documentElement.clientWidth")

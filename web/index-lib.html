@@ -169,14 +169,16 @@
     /* The command line: pinned above the topics, no rename/archive/drag. */
     .card.shell-row { border-bottom: 1px solid rgba(255,255,255,0.10); }
     .card.shell-row .proj { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; }
-    .shell-close {
+    .card.tasks-row { border-bottom: 1px solid rgba(255,255,255,0.10); }
+    .card.tasks-row .proj { font-weight: 500; }
+    .shell-close, .tasks-close {
       width: 18px; height: 18px; flex-shrink: 0; padding: 0;
       border: 1px solid rgba(239,68,68,0.12); border-radius: 4px;
       background: rgba(239,68,68,0.05); color: rgba(252,165,165,0.55);
       font-size: 0.62rem; line-height: 16px; text-align: center; cursor: pointer;
       transition: all 0.12s;
     }
-    .shell-close:hover { background: rgba(239,68,68,0.16); color: #fecaca; border-color: rgba(239,68,68,0.32); }
+    .shell-close:hover, .tasks-close:hover { background: rgba(239,68,68,0.16); color: #fecaca; border-color: rgba(239,68,68,0.32); }
 
     .card-top {
       display: flex;
@@ -556,7 +558,7 @@
       .arch-btn { order: 4; height: 20px; line-height: 18px; font-size: 0.64rem; padding: 0 5px; }
       .dot { order: 5; }
       .card-btn { visibility: visible; width: 20px; height: 20px; line-height: 18px; font-size: 0.8rem; }
-      .shell-close { order: 3; width: 20px; height: 20px; line-height: 18px; font-size: 0.7rem; }
+      .shell-close, .tasks-close { order: 3; width: 20px; height: 20px; line-height: 18px; font-size: 0.7rem; }
       .task { display: none; }
       /* Compact header buttons on phone. */
       .header-add { gap: 3px; }
@@ -625,7 +627,7 @@
     <div class="side-top">
       <div class="sidebar-header">
         <div class="header-add">
-          <a class="add-btn" href="/tasks/" target="_blank" title="Task board — shared progress across all agents" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-family:ui-sans-serif,system-ui,sans-serif">T</a>
+          <a class="add-btn" id="tasksBtn" href="/tasks/" title="Task board — shared progress across all agents (opens here; Ctrl/⌘-click for a new tab)" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-family:ui-sans-serif,system-ui,sans-serif">T</a>
         </div>
         <div class="sys-stats" id="sysStats" onclick="this.classList.toggle('hidden');localStorage.setItem('stats-hidden',this.classList.contains('hidden'))">
           <span class="stat" id="cpuStat">CPU <span class="val" id="cpuVal">—</span></span>
@@ -704,6 +706,28 @@
     const newOk = document.getElementById('newOk');
     const libEmpty = document.getElementById('libEmpty');
     const archToggle = document.getElementById('showArchived');
+    /* ── Tasks: the task board as a tab in the viewer (the T button). While it
+       is open a "Tasks" row is pinned at the very top; ✕ closes it. Open/closed
+       is remembered per browser. `sel === TASKS` = the board is shown. */
+    const TASKS = 'tasks';
+    const TASKS_PATH = '/tasks/';
+    let tasksOpen = false;
+    try { tasksOpen = localStorage.getItem('lib-tasks-open') === '1'; } catch {}
+    const tasksRow = document.createElement('div');
+    tasksRow.className = 'card tasks-row';
+    tasksRow.dataset.tasks = '1';
+    tasksRow.innerHTML = `
+        <div class="card-top">
+          <div class="proj">Tasks</div>
+          <div class="card-btns">
+            <button type="button" class="tasks-close" title="Close task board" aria-label="Close task board">✕</button>
+          </div>
+        </div>
+        <div class="card-row2"><span class="sid">board</span></div>`;
+    tasksRow.title = 'Task board — click to show it';
+    function saveTasksOpen() {
+      try { localStorage.setItem('lib-tasks-open', tasksOpen ? '1' : '0'); } catch {}
+    }
     /* ── cmd: the one plain command line (tmux cmd-shell, /sess/?arg=shell).
        GET /api/library reports it in `shell` (not in sessions[]); while it is
        loaded it is a row pinned above the topics. `sel === SHELL` = it is open. */
@@ -915,19 +939,32 @@
       dot.title = st === 'working' ? 'loaded, working' : 'loaded, idle';
     }
 
+    function tasksShown() {
+      if (!tasksOpen) return false;
+      const q = norm(search.value);
+      return !q || 'tasks task board'.includes(q);
+    }
+
     function render() {
       if (editing) return;                    // never pull the input out from under the user
+      // pinned rows, in this order, above the terminals: Tasks, Command line
+      const showTasks = tasksShown();
       const showShell = shellShown();
-      if (showShell) {
-        fillShell();
-        if (list.firstChild !== shellRow) list.insertBefore(shellRow, list.firstChild);
-      } else if (shellRow.parentNode) shellRow.remove();
+      tasksRow.classList.toggle('sel', sel === TASKS);
+      if (showShell) fillShell();
+      let pin = null;
+      for (const [el, on] of [[tasksRow, showTasks], [shellRow, showShell]]) {
+        if (!on) { if (el.parentNode) el.remove(); continue; }
+        const ref = pin ? pin.nextSibling : list.firstChild;
+        if (el !== ref) list.insertBefore(el, ref);
+        pin = el;
+      }
       const want = ordered();
       const keep = new Set(want.map(s => s.id));
       for (const [id, el] of rows) if (!keep.has(id)) { el.remove(); rows.delete(id); }
       const anyOn = want.some(s => s.active && !s.archived);
       const anyLive = want.some(s => !s.archived);
-      let prev = showShell ? shellRow : null, seenOff = false, seenArch = false;
+      let prev = pin, seenOff = false, seenArch = false;
       for (const s of want) {
         const c = rows.get(s.id) || makeRow(s.id);
         fill(c, s, anyOn && !s.active && !s.archived && !seenOff,
@@ -957,7 +994,10 @@
     function syncSel() {
       for (const [i, el] of rows) el.classList.toggle('sel', i === sel);
       shellRow.classList.toggle('sel', sel === SHELL);
-      if (sel === SHELL) syncTop(Object.assign({id: SHELL, name: 'Command line'}, shellState || {}));
+      tasksRow.classList.toggle('sel', sel === TASKS);
+      if (sel === TASKS) {
+        document.getElementById('tInfo').innerHTML = '<b>Task board</b>';
+      } else if (sel === SHELL) syncTop(Object.assign({id: SHELL, name: 'Command line'}, shellState || {}));
       else if (sel) syncTop(byId(sel) || {id: sel, name: ''});
     }
 
@@ -1193,13 +1233,47 @@
       if (!(shellState && shellState.active)) setTimeout(poll, 1500);   // show its row
     }
 
-    function openFrame(path) {
+    function openTasks() {
+      tasksOpen = true;
+      saveTasksOpen();
+      sel = TASKS;
+      document.getElementById('topbar').style.display = 'flex';
+      document.getElementById('tNum').textContent = 'tasks';
+      render();
+      syncSel();
+      openFrame(TASKS_PATH, true);
+    }
+
+    function closeTasks() {
+      tasksOpen = false;
+      saveTasksOpen();
+      if (sel === TASKS) showPlaceholder();
+      render();
+    }
+
+    document.getElementById('tasksBtn').addEventListener('click', e => {
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;   // new tab/window: browser default
+      e.preventDefault();
+      openTasks();
+    });
+    tasksRow.addEventListener('click', e => {
+      if (e.target.closest('.tasks-close')) return;
+      openTasks();
+    });
+    tasksRow.querySelector('.tasks-close').addEventListener('click', e => {
+      e.stopPropagation();
+      closeTasks();
+    });
+
+    // plain = a web page (the task board), not a terminal: no ttyd helpers
+    function openFrame(path, plain) {
       document.getElementById('tOpen').href = path;
       const wrap = document.getElementById('wrap');
       const ph = document.getElementById('ph'); if (ph) ph.remove();
       const old = wrap.querySelector('iframe'); if (old) old.remove();
       const f = document.createElement('iframe'); f.src = path;
       wrap.appendChild(f);
+      if (plain) { _frameFocus = null; return; }
       if (_isMobile) enableIframeTouchScroll(f);
       if (!_isMobile) enableClipboardCopy(f);
       enablePasteImage(f);

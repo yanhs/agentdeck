@@ -1242,3 +1242,135 @@ def test_account_menu_at_400px(browser, site):
         assert not _menu_open(pg)
     finally:
         ctx.close()
+
+
+# ── Task board as an in-page tab (T button) ─────────────────────────────────
+TASKS_LINK = '.sidebar a[href="/tasks/"]'
+
+
+def _open_tasks_ctx(browser, site, api, **kw):
+    ctx, pg = _open(browser, site, api, **kw)
+    pg.route(re.compile(r"/tasks/(\?|$)"),
+             lambda r: r.fulfill(status=200, content_type="text/html",
+                                 body="<html><body>task board stub</body></html>"))
+    return ctx, pg
+
+
+def _first_row_class(pg):
+    return pg.evaluate("() => document.querySelector('#list').firstElementChild.className")
+
+
+def test_T_opens_the_board_in_the_viewer_not_a_new_window(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open_tasks_ctx(browser, site, api)
+    try:
+        pg.evaluate("() => { try { localStorage.removeItem('lib-tasks-open'); } catch {} }")
+        assert pg.get_attribute(TASKS_LINK, "target") is None
+        assert pg.inner_text(TASKS_LINK).strip() == "T"
+        n_pages = len(ctx.pages)
+        pg.click(TASKS_LINK)
+        pg.wait_for_selector("#wrap iframe")
+        assert pg.get_attribute("#wrap iframe", "src") == "/tasks/"
+        assert len(ctx.pages) == n_pages                            # no new window/tab
+        assert pg.url.endswith("/index-lib.html")                  # the dashboard stayed
+        # pinned row at the very top, above the command line
+        pg.wait_for_selector("#list .tasks-row")
+        assert "tasks-row" in _first_row_class(pg)
+        second = pg.evaluate("() => document.querySelector('#list').children[1].className")
+        assert "shell-row" in second
+        assert pg.inner_text("#list .tasks-row .proj") == "Tasks"
+        assert "sel" in pg.get_attribute("#list .tasks-row", "class")
+        assert pg.get_attribute("#list .tasks-row", "draggable") != "true"
+        for sub in (".card-btn", ".arch-btn", ".del-btn", ".mv-btn", ".edit"):
+            assert pg.query_selector_all("#list .tasks-row " + sub) == [], sub
+        assert pg.get_attribute("#list .tasks-row .tasks-close", "title") == "Close task board"
+        shot(pg, "index-lib-tasks-tab.png")
+    finally:
+        ctx.close()
+
+
+def test_tasks_row_stays_while_a_terminal_is_open_and_reshows_the_board(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open_tasks_ctx(browser, site, api)
+    try:
+        pg.click(TASKS_LINK)
+        pg.wait_for_selector("#list .tasks-row")
+        pg.click(row("cccc0003") + " .proj")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=cccc0003'")
+        assert pg.query_selector("#list .tasks-row") is not None
+        assert "sel" not in pg.get_attribute("#list .tasks-row", "class")
+        pg.wait_for_timeout(4600)                                    # survives a poll
+        assert "tasks-row" in _first_row_class(pg)
+        pg.click("#list .tasks-row .proj")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/tasks/'")
+        assert "sel" in pg.get_attribute("#list .tasks-row", "class")
+        assert "sel" not in pg.get_attribute(row("cccc0003"), "class")
+    finally:
+        ctx.close()
+
+
+def test_tasks_close_removes_the_row_and_returns_to_the_placeholder(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open_tasks_ctx(browser, site, api)
+    try:
+        pg.click(TASKS_LINK)
+        pg.wait_for_selector("#list .tasks-row")
+        pg.click("#list .tasks-row .tasks-close")
+        pg.wait_for_function("() => !document.querySelector('#list .tasks-row')")
+        assert pg.query_selector("#wrap iframe") is None
+        assert pg.is_visible("#ph")
+        # closing while a terminal is shown leaves the terminal alone
+        pg.click(TASKS_LINK)
+        pg.wait_for_selector("#list .tasks-row")
+        pg.click(row("cccc0003") + " .proj")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=cccc0003'")
+        pg.click("#list .tasks-row .tasks-close")
+        pg.wait_for_function("() => !document.querySelector('#list .tasks-row')")
+        assert pg.get_attribute("#wrap iframe", "src") == "/sess/?arg=cccc0003"
+    finally:
+        ctx.close()
+
+
+def test_tasks_tab_is_remembered_across_reload(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open_tasks_ctx(browser, site, api)
+    try:
+        pg.click(TASKS_LINK)
+        pg.wait_for_selector("#list .tasks-row")
+        pg.reload()
+        pg.wait_for_selector(".card[data-sid]")
+        pg.wait_for_selector("#list .tasks-row")
+        assert "tasks-row" in _first_row_class(pg)
+        pg.click("#list .tasks-row .tasks-close")
+        pg.wait_for_function("() => !document.querySelector('#list .tasks-row')")
+        pg.reload()
+        pg.wait_for_selector(".card[data-sid]")
+        pg.wait_for_timeout(300)
+        assert pg.query_selector("#list .tasks-row") is None
+    finally:
+        ctx.close()
+
+
+def test_tasks_tab_at_400px(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open_tasks_ctx(browser, site, api, width=400, height=800, mobile=True)
+    try:
+        pg.tap(TASKS_LINK)
+        pg.wait_for_selector("#list .tasks-row")
+        shot(pg, "index-lib-mobile-tasks-tab.png")
+        assert pg.get_attribute("#wrap iframe", "src") == "/tasks/"
+        over = pg.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+        assert over <= 0
+        for sel in ("#list .tasks-row .proj", "#list .tasks-row .tasks-close"):
+            b = pg.eval_on_selector(sel, "e => { const r = e.getBoundingClientRect();"
+                                         " return [r.width, r.right]; }")
+            assert b[0] > 0 and b[1] <= 400.5, (sel, b)
+        pg.tap("#list .tasks-row .tasks-close")
+        pg.wait_for_function("() => !document.querySelector('#list .tasks-row')")
+    finally:
+        ctx.close()
