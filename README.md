@@ -89,22 +89,23 @@ The dashboard works on a phone too:
 ## 🧱 Architecture
 
 ```
-                    ┌──────────────────────────────── nginx ─────────────────────────────────┐
-  Browser ──TLS──▶  │  auth_request  ─▶ status_server.py (/login, signed cookie)             │
-                    │  /             ─▶ web/index.html   (dashboard UI)                      │
-                    │  /api/library  ─▶ status_server.py (list, new, rename, archive, …)     │
-                    │  /api/*        ─▶ status_server.py (status, tmux-buffer, paste)        │
-                    │  /sess/?arg=<code> ─▶ ttyd :3031 ─▶ open-session.sh ─▶ library_cli.py  │
-                    │  /tasks/       ─▶ tasks-dashboard/server.py :9308                      │
-                    └────────────────────────────────────────┬───────────────────────────────┘
-                                                             │  tmux session "cs-<code>"
-                                                             ▼
-                                                     ┌──────────────────┐
-  Telegram ──long-poll──▶ tg_bridge.py ──send-keys──▶│  claude (CLI)    │
-       ▲                        │                    └──────────────────┘
-       └──── reply ◀── reads session transcript (.jsonl) ────┘
+                   ┌─────────────────────────── nginx ────────────────────────────┐
+ Browser ──TLS──▶  │ auth_request   ──▶  status_server.py  login, signed cookie   │
+                   │ /              ──▶  web/index.html    dashboard UI           │
+                   │ /api/library   ──▶  status_server.py  new, rename, archive … │
+                   │ /api/*         ──▶  status_server.py  status, buffer, paste  │
+                   │ /tasks/        ──▶  tasks-dashboard/  task board :9308       │
+                   │ /sess/?arg=ID  ──▶  ttyd :3031        → open-session.sh      │
+                   └───────────────────────────────┬──────────────────────────────┘
+                                                   │  library_cli.py loads tmux "cs-<code>"
+                                                   ▼
+                                          ┌─────────────────┐
+ Telegram ◀─▶ tg_bridge.py ─ send-keys ──▶│   claude (CLI)  │
+                   ▲                      └────────┬────────┘
+                   └───── transcript (.jsonl) ─────┘
 
-  every minute (cron; Docker / ./start.sh run it themselves): idle_reaper.py ── unloads idle tmux sessions
+ cron, every minute:  idle_reaper.py ──▶ unloads idle terminals
+                      (Docker and ./start.sh run it themselves)
 ```
 
 - **`library.py`** — the session library: the list of terminals in
