@@ -775,8 +775,7 @@
             <button type="button" class="tasks-close" title="Close task board" aria-label="Close task board">✕</button>
             <span class="dot idle" title="open"></span>
           </div>
-        </div>
-        <div class="card-row2"><span class="sid">board</span></div>`;
+        </div>`;
     tasksRow.title = 'Task board — click to show it';
     function saveTasksOpen() {
       try { localStorage.setItem('lib-tasks-open', tasksOpen ? '1' : '0'); } catch {}
@@ -798,8 +797,7 @@
             <button type="button" class="server-close" title="Close server status" aria-label="Close server status">✕</button>
             <span class="dot idle" title="open"></span>
           </div>
-        </div>
-        <div class="card-row2"><span class="sid">status</span></div>`;
+        </div>`;
     serverRow.title = 'Server status — click to show it';
     function saveServerOpen() {
       try { localStorage.setItem('lib-server-open', serverOpen ? '1' : '0'); } catch {}
@@ -820,8 +818,7 @@
             <button type="button" class="shell-close" title="Close command line" aria-label="Close command line">✕</button>
             <span class="dot off"></span>
           </div>
-        </div>
-        <div class="card-row2"><span class="sid">bash</span></div>`;
+        </div>`;
     shellRow.title = 'Command line (bash) — click to open';
     shellRow.addEventListener('click', e => {
       if (e.target.closest('.shell-close')) return;

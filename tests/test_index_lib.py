@@ -1782,3 +1782,31 @@ def test_open_server_tab_follows_the_switch_live(browser, site):
                                 timeout=3000)
     finally:
         ctx.close()
+
+
+def test_pinned_rows_are_one_line_without_subtitles(browser, site):
+    """Owner, 2026-09-25: Tasks / Server / Command line take one line each — no
+    'board' / 'status' / 'bash' captions under them."""
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open_server_ctx(browser, site, api)
+    try:
+        pg.click(TASKS_LINK)
+        pg.wait_for_selector("#list .tasks-row")
+        pg.click(SERVER_LINK)
+        pg.wait_for_selector("#list .server-row")
+        pg.wait_for_selector("#list .shell-row")
+        term_h = pg.eval_on_selector(row("cccc0003"), "e => e.getBoundingClientRect().height")
+        for cls in ("tasks-row", "server-row", "shell-row"):
+            sel = f"#list .{cls}"
+            assert pg.query_selector_all(sel + " .card-row2") == [], cls
+            assert pg.query_selector_all(sel + " .sid") == [], cls
+            h = pg.eval_on_selector(sel, "e => e.getBoundingClientRect().height")
+            assert h < term_h * 0.75, (cls, h, term_h)
+            # name, ✕ and dot on one line
+            tops = pg.eval_on_selector_all(
+                sel + " .proj, " + sel + " .card-btns > *",
+                "els => els.map(e => Math.round(e.getBoundingClientRect().top + e.getBoundingClientRect().height / 2))")
+            assert max(tops) - min(tops) <= 4, (cls, tops)
+    finally:
+        ctx.close()
