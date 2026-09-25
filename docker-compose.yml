@@ -1,7 +1,6 @@
 services:
   agentdeck:
     build: .
-    container_name: agentdeck
     ports:
       # http://<your-vps-ip>:8765 — set AGENTDECK_PORT to pick any free host port.
       - "${AGENTDECK_PORT:-8765}:8765"

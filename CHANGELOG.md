@@ -2,7 +2,18 @@
 
 All notable changes to AgentDeck. Newest first.
 
-## Unreleased — fixes from a fresh-user Docker install test
+## v1.5.1 — terminal ⇄ tasks links, fixes from a fresh-user Docker install test
+
+Tested before release: the full suite, and a fresh install from GitHub with Docker following
+the README step by step (password, new terminal, cmd, Tasks, Server, theme, Password and
+Telegram pages, logout/login, data surviving `docker compose up -d --force-recreate`).
+
+### Links
+- **A terminal's code opens its tasks** from the terminal list too (it already did from the
+  top bar); the rest of the row still opens the terminal.
+- **A task's terminal code opens that terminal** from the task board — inside the dashboard it
+  switches to the terminal, on its own it opens `/?open=<code>`.
+- **Tasks, Server and Command line** rows take one line, without captions.
 
 ### Docker
 - **Server tab works in Docker.** Both Caddyfiles now route `/api/server` to the backend
@@ -21,10 +32,14 @@ All notable changes to AgentDeck. Newest first.
   `TG_WHISPER_PY` / `TG_AGENT_CWD`.
 - **ttyd for ARM too.** The Dockerfile downloads the ttyd build for the machine's CPU
   (x86_64 or aarch64).
+- **No fixed container name** in `docker-compose.yml`, so two installs (`-p`) don't clash.
 - **Claude Code version pinned** with a build argument (`CLAUDE_CODE_VERSION`, default
   `2.1.282`); `--build-arg CLAUDE_CODE_VERSION=latest` takes the newest.
 
 ### Dashboard
+- **Tab title** is "AgentDeck" (it showed the author's domain).
+- **After logout** the browser shows the login page instead of a cached, empty dashboard:
+  HTML is sent with `Cache-Control: no-cache` (Caddy and nginx).
 - **No typed command line when a terminal opens.** The Claude pane starts with its command
   directly, instead of showing the long `for v in … exec claude …` line (twice) first.
 - **Login page** says 🛰 AgentDeck and asks only for the password when the dashboard has its

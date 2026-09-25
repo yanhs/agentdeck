@@ -72,6 +72,10 @@
 		handle_path /api/paste-image* {
 			reverse_proxy 127.0.0.1:3047
 		}
+		# HTML revalidates every time: after logout the browser must ask again
+		# (and get the login redirect) instead of showing a cached, dead dashboard
+		@html path / /*.html
+		header @html Cache-Control "no-cache"
 		file_server
 	}
 }

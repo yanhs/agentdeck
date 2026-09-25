@@ -250,3 +250,32 @@ def test_dockerfile_pins_claude_code_via_build_arg():
     m = re.search(r"^ARG\s+CLAUDE_CODE_VERSION=(\S+)", src, re.M)
     assert m and m.group(1), src
     assert re.search(r"npm\s+install\s+-g\s+\"?@anthropic-ai/claude-code@\$\{?CLAUDE_CODE_VERSION\}?", src), src
+
+
+# ── pre-release fresh-install findings (2026-09-25) ───────────────────────────
+@pytest.mark.parametrize("page", ["index.html", "index-lib.html", "server.html"])
+def test_page_title_is_the_product_not_the_authors_domain(page):
+    html = (ROOT / "web" / page).read_text()
+    title = re.search(r"<title>(.*?)</title>", html, re.S).group(1)
+    assert "AgentDeck" in title, title
+    assert "ianprog" not in html and "reimake" not in title
+
+
+@pytest.mark.parametrize("name", CADDYFILES)
+def test_html_is_revalidated_so_logout_shows_the_login_page(name):
+    """Without Cache-Control the browser reused its cached dashboard after logout
+    (a dead, empty shell instead of the login page)."""
+    src = "\n".join(code_lines(CADDYFILES[name]))
+    assert re.search(r'header\s+@html\s+Cache-Control\s+"no-cache"', src), name
+    assert re.search(r"@html\s+path\s+/\s+/\*\.html", src), name
+
+
+def test_nginx_dashboard_html_is_revalidated():
+    src = (ROOT / "nginx" / "agents-subdomain.conf").read_text()
+    block = re.search(r"# Dashboard UI\s*location / \{(.*?)\}", src, re.S).group(1)
+    assert 'add_header Cache-Control "no-cache"' in block
+
+
+def test_compose_does_not_pin_a_container_name():
+    """A fixed container_name clashes between two installs even with -p."""
+    assert "container_name" not in "\n".join(code_lines(ROOT / "docker-compose.yml"))
