@@ -90,7 +90,7 @@
   .summary b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 
   .bar2 { display: flex; align-items: center; gap: 8px 10px; padding: 0 0 10px; flex-wrap: wrap; }
-  .search { position: relative; flex: 1 1 200px; min-width: 0; }
+  .search { position: relative; flex: 1 1 160px; min-width: 0; }
   .search svg { position: absolute; left: 9px; top: 50%; translate: 0 -50%; color: var(--text-3); pointer-events: none; }
   #q { width: 100%; height: 32px; padding: 0 34px 0 30px; border: 1px solid var(--line); border-radius: 6px;
     background: var(--surface); box-shadow: var(--shadow); outline: none; }
@@ -105,6 +105,13 @@
   .clear:hover { background: var(--surface-2); color: var(--text); }
   .search.has .clear { display: grid; place-items: center; }
 
+  .sess-chip { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 4px 0 10px;
+    border: 1px solid var(--accent); border-radius: 6px; background: var(--accent-soft); color: var(--text); font-size: 12.5px; }
+  .sess-chip[hidden] { display: none; }
+  .sess-chip b { font: 600 12px ui-monospace, monospace; }
+  .sess-chip button { border: 0; background: none; width: 24px; height: 24px; border-radius: 4px; cursor: pointer;
+    color: var(--text-2); display: grid; place-items: center; }
+  .sess-chip button:hover { background: var(--surface-2); color: var(--text); }
   .status-filter { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; background: var(--surface);
     box-shadow: var(--shadow); overflow: hidden; flex-wrap: wrap; }
   .status-filter button { border: 0; background: none; height: 30px; padding: 0 10px; cursor: pointer; color: var(--text-2);
@@ -251,6 +258,7 @@
         <kbd>/</kbd>
         <button class="clear" id="clear" type="button" aria-label="Clear search"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.6"><path d="M1 1l8 8M9 1L1 9"/></svg></button>
       </div>
+      <span class="sess-chip" id="sess-chip" hidden title="Only tasks from this terminal"><b></b><button type="button" aria-label="Show all terminals' tasks" title="Show all terminals' tasks"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.6"><path d="M1 1l8 8M9 1L1 9"/></svg></button></span>
       <div class="status-filter" id="status-filter" role="group" aria-label="Filter by status">
         <button type="button" data-status="all" aria-pressed="true">All <span class="n">0</span></button>
         <button type="button" data-status="active" aria-pressed="false">Active <span class="n">0</span></button>
@@ -383,7 +391,7 @@ function prep(state) {
 
 // ---------- UI state (survives every live update) ----------
 const ui = {
-  q: '', toks: [], status: 'all', agent: '', sort: 'updated',
+  q: '', toks: [], status: 'all', agent: '', sort: 'updated', session: '',
   expanded: new Set(),
   open: { active: true, blocked: true, pending: true, done: false },
   closedWhileFiltering: {},
@@ -396,6 +404,8 @@ try { const s = localStorage.getItem('tb-sort'); if (s) ui.sort = s; } catch (_)
   if (p.get('status')) ui.status = p.get('status');
   if (p.get('agent')) ui.agent = p.get('agent');
   if (p.get('sort')) ui.sort = p.get('sort');
+  // ?session=<8 hex>: the dashboard's "this terminal's tasks" link
+  if (/^[0-9a-f]{8}$/.test(p.get('session') || '')) ui.session = p.get('session');
 })();
 if (!['updated', 'created', 'title'].includes(ui.sort)) ui.sort = 'updated';
 if (!['all', 'active', 'blocked', 'pending', 'done'].includes(ui.status)) ui.status = 'all';
@@ -410,6 +420,7 @@ function syncURL() {
   if (ui.q) p.set('q', ui.q);
   if (ui.status !== 'all') p.set('status', ui.status);
   if (ui.agent) p.set('agent', ui.agent);
+  if (ui.session) p.set('session', ui.session);
   const s = p.toString();
   try { history.replaceState(null, '', s ? '?' + s : location.pathname); } catch (_) {}
 }
@@ -417,6 +428,7 @@ const filtering = g => !!ui.toks.length || ui.status === g;
 const isOpen = g => filtering(g) ? !ui.closedWhileFiltering[g] : ui.open[g];
 
 function matches(r) {
+  if (ui.session && (r.t.session || '') !== ui.session) return false;
   if (ui.agent && (r.t.agent || '') !== ui.agent) return false;
   for (const k of ui.toks) if (!r.hay.includes(k)) return false;
   return true;
@@ -575,6 +587,7 @@ function render(s) {
   const empty = $('#empty');
   const anyVisible = GROUPS.some(g => !document.querySelector(`section.group[data-group="${g.key}"]`).hidden);
   if (!rows.length) { empty.hidden = false; empty.innerHTML = '<b>No tasks yet.</b><br>Agents add them with <span class="mono">tracker.py add-task</span>.'; }
+  else if (!anyVisible && ui.session && !rows.some(matches)) { empty.hidden = false; empty.innerHTML = `<b>No tasks from terminal <span class="mono">${esc(ui.session)}</span>.</b><br>Tasks show its code once its agent updates them with <span class="mono">tracker.py</span>.`; }
   else if (!anyVisible) { empty.hidden = false; empty.innerHTML = `<b>No tasks match.</b><br>Try a shorter query or clear the filters.`; }
   else empty.hidden = true;
 
@@ -636,6 +649,13 @@ function onQuery() {
 }
 q.addEventListener('input', onQuery);
 q.addEventListener('keydown', e => { if (e.key === 'Escape') { q.value = ''; onQuery(); } });
+function showSessChip() {
+  const c = $('#sess-chip');
+  c.hidden = !ui.session;
+  c.querySelector('b').textContent = ui.session;
+}
+showSessChip();
+$('#sess-chip button').addEventListener('click', () => { ui.session = ''; showSessChip(); syncURL(); render(); });
 $('#clear').addEventListener('click', () => { q.value = ''; onQuery(); q.focus(); });
 document.addEventListener('keydown', e => {
   const tag = (e.target && e.target.tagName) || '';

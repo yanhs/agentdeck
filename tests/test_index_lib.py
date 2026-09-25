@@ -1313,6 +1313,34 @@ def test_tasks_row_has_the_green_dot_like_the_other_rows(browser, site):
         ctx.close()
 
 
+def test_clicking_the_terminal_id_in_the_top_bar_shows_its_tasks(browser, site):
+    """Owner, 2026-09-25: the 8-hex id in the top bar opens the Tasks tab filtered
+    to that terminal (/tasks/?session=<id>)."""
+    api = FakeAPI()
+    ctx, pg = _open_tasks_ctx(browser, site, api)
+    pg.route(re.compile(r"/tasks/\?session="),
+             lambda r: r.fulfill(status=200, content_type="text/html",
+                                 body="<html><body>filtered board stub</body></html>"))
+    try:
+        pg.click(row("cccc0003") + " .proj")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=cccc0003'")
+        assert pg.inner_text("#tNum") == "cccc0003"
+        assert "task" in (pg.get_attribute("#tNum", "title") or "").lower()
+        pg.click("#tNum")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/tasks/?session=cccc0003'")
+        pg.wait_for_selector("#list .tasks-row.sel")
+        assert pg.inner_text("#tNum") == "tasks"
+        # on the board itself the label is not a link any more
+        pg.click("#tNum")
+        pg.wait_for_timeout(200)
+        assert pg.get_attribute("#wrap iframe", "src") == "/tasks/?session=cccc0003"
+        assert not (pg.get_attribute("#tNum", "title") or "")
+    finally:
+        ctx.close()
+
+
 def test_tasks_row_stays_while_a_terminal_is_open_and_reshows_the_board(browser, site):
     api = FakeAPI()
     ctx, pg = _open_tasks_ctx(browser, site, api)

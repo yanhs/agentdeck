@@ -460,6 +460,8 @@
       min-width: 0;        /* don't let topbar content distend .main */
     }
 
+    .topbar-lbl.link { cursor: pointer; }
+    .topbar-lbl.link:hover { text-decoration: underline; text-underline-offset: 3px; }
     .topbar-lbl {
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.58rem;
@@ -1195,7 +1197,7 @@
       if (!ID_RE.test(id)) return;
       sel = id;
       document.getElementById('topbar').style.display = 'flex';
-      document.getElementById('tNum').textContent = id;
+      setLabel(id, true);
       syncSel();
       // a topic still running in an old numbered terminal opens there (the
       // server refuses a second Claude on the same conversation)
@@ -1228,22 +1230,34 @@
       sel = SHELL;
       _shellSeenUp = !!(shellState && shellState.active);
       document.getElementById('topbar').style.display = 'flex';
-      document.getElementById('tNum').textContent = 'cmd';
+      setLabel('cmd');
       syncSel();
       openFrame(SHELL_PATH);
       if (!(shellState && shellState.active)) setTimeout(poll, 1500);   // show its row
     }
 
-    function openTasks() {
+    // session: a terminal's 8-hex id -> the board opens filtered to its tasks
+    function openTasks(session) {
       tasksOpen = true;
       saveTasksOpen();
       sel = TASKS;
       document.getElementById('topbar').style.display = 'flex';
-      document.getElementById('tNum').textContent = 'tasks';
+      setLabel('tasks');
       render();
       syncSel();
-      openFrame(TASKS_PATH, true);
+      openFrame(ID_RE.test(session || '') ? TASKS_PATH + '?session=' + session : TASKS_PATH, true);
     }
+
+    // top-bar label; a terminal's id there is a link to that terminal's tasks
+    function setLabel(text, isTerminal) {
+      const l = document.getElementById('tNum');
+      l.textContent = text;
+      l.classList.toggle('link', !!isTerminal);
+      if (isTerminal) l.title = "Show this terminal's tasks"; else l.removeAttribute('title');
+    }
+    document.getElementById('tNum').addEventListener('click', () => {
+      if (ID_RE.test(sel || '')) openTasks(sel);
+    });
 
     function closeTasks() {
       tasksOpen = false;

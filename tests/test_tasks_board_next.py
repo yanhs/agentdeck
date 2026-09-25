@@ -374,7 +374,14 @@ def test_sse_update_keeps_search_and_focus(page, board):
 
 
 def test_desktop_toolbar_is_one_line(page):
-    ys = page.eval_on_selector_all(".bar2 > *", "els => els.map(e => Math.round(e.getBoundingClientRect().top))")
+    js = ("els => els.filter(e => e.getClientRects().length)"   # hidden ones take no room
+          ".map(e => Math.round(e.getBoundingClientRect().top))")
+    ys = page.eval_on_selector_all(".bar2 > *", js)
+    assert len(ys) >= 4 and len(set(ys)) == 1, ys
+    # with the terminal chip shown (?session=) it still fits one line at 1280
+    page.goto(page.url.split("?")[0] + "?session=5e1f00ab")
+    page.wait_for_selector("#sess-chip:not([hidden])")
+    ys = page.eval_on_selector_all(".bar2 > *", js)
     assert len(set(ys)) == 1, ys
 
 
@@ -469,3 +476,53 @@ def test_t_mark_logo_and_favicon(page):
     assert logo.inner_text().strip() == "T" or ">T<" in logo.inner_html()
     html = page.content()
     assert "📋" not in html and "📓" not in html
+
+
+# ---- ?session=<8 hex>: the dashboard opens the board filtered to one terminal
+def _goto(browser, board, query):
+    board.write(make_state(datetime.now(timezone.utc)))
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.goto(board.url + query)
+    pg.wait_for_selector("#empty, .task", state="attached")
+    pg.wait_for_timeout(200)
+    return ctx, pg, errors
+
+
+def test_session_param_filters_to_that_terminal_with_a_removable_chip(browser, board):
+    ctx, pg, errors = _goto(browser, board, "?session=5e1f00ab")
+    try:
+        assert set(visible_ids(pg)) == {"pipeline-quality"}
+        chip = pg.locator("#sess-chip")
+        assert chip.is_visible()
+        assert "5e1f00ab" in chip.inner_text()
+        assert pg.locator('.status-filter [data-status="all"] .n').inner_text() == "1"
+        chip.locator("button").click()
+        pg.wait_for_timeout(150)
+        assert not chip.is_visible()
+        assert len(visible_ids(pg)) > 1
+        assert "session=" not in pg.url
+        assert not errors, errors
+    finally:
+        ctx.close()
+
+
+def test_session_param_with_no_tasks_says_so(browser, board):
+    ctx, pg, errors = _goto(browser, board, "?session=deadbeef")
+    try:
+        assert visible_ids(pg) == []
+        assert "deadbeef" in pg.inner_text("#empty")
+        assert not errors, errors
+    finally:
+        ctx.close()
+
+
+def test_session_param_ignores_garbage(browser, board):
+    ctx, pg, errors = _goto(browser, board, "?session=<b>x</b>")
+    try:
+        assert not pg.locator("#sess-chip").is_visible()
+        assert len(visible_ids(pg)) > 1
+    finally:
+        ctx.close()
