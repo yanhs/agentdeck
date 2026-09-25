@@ -1186,7 +1186,7 @@ def test_account_menu_opens_and_closes(page):
     assert _menu_open(page) and page.get_attribute("#tMenu", "aria-expanded") == "true"
     shot(page, "index-lib-account-menu.png")
     items = page.eval_on_selector_all("#tMenuList [role=menuitem]", "els => els.map(e => e.id)")
-    assert items == ["tTg", "tChpw", "tLogout"]
+    assert items == ["tTg", "tChpw", "tTheme", "tLogout"]   # + theme switch (owner, 2026-09-25)
     for bid in items:
         assert page.is_visible("#" + bid)
     # the menu is drawn above the terminal, not clipped under it
@@ -1212,6 +1212,8 @@ def test_account_menu_keyboard(page):
     assert page.evaluate("document.activeElement.id") == "tTg"   # focus moves into the menu
     page.keyboard.press("ArrowDown")
     assert page.evaluate("document.activeElement.id") == "tChpw"
+    page.keyboard.press("ArrowDown")
+    assert page.evaluate("document.activeElement.id") == "tTheme"
     page.keyboard.press("ArrowDown")
     page.keyboard.press("ArrowDown")                            # wraps
     assert page.evaluate("document.activeElement.id") == "tTg"
@@ -1525,5 +1527,258 @@ def test_server_tab_at_400px(browser, site):
         assert over <= 0
         pg.tap("#list .server-row .server-close")
         pg.wait_for_function("() => !document.querySelector('#list .server-row')")
+    finally:
+        ctx.close()
+
+
+# ── Dark / Light theme (switch in the ⋯ menu; owner, 2026-09-25) ────────────
+THEME_KEY = "agentdeck-theme"
+# the dark look as it was before the palette became variables — must not move
+DARK = {
+    ("body", "backgroundColor"): "rgb(9, 9, 11)",
+    ("body", "color"): "rgb(228, 228, 231)",
+    (".sidebar", "backgroundColor"): "rgb(12, 12, 15)",
+    (".sidebar", "borderRightColor"): "rgba(255, 255, 255, 0.06)",
+    ("#list .card[data-sid] .proj", "color"): "rgb(212, 212, 216)",
+    ("#list .card[data-sid] .sid", "color"): "rgb(82, 82, 91)",
+    ("#search", "backgroundColor"): "rgb(24, 24, 27)",
+    ("#newBtn", "color"): "rgb(199, 210, 254)",
+    (".topbar", "backgroundColor"): "rgb(12, 12, 15)",
+    ("#tOpen", "color"): "rgb(161, 161, 170)",
+    ("#tOpen", "borderTopColor"): "rgba(255, 255, 255, 0.2)",
+    (".card.sel", "backgroundColor"): "rgba(99, 102, 241, 0.07)",
+    (".card.sel", "borderLeftColor"): "rgb(129, 140, 248)",
+    (".dot.working", "backgroundColor"): "rgb(251, 191, 36)",
+    (".dot.idle", "backgroundColor"): "rgb(74, 222, 128)",
+    (".dot.off", "backgroundColor"): "rgb(63, 63, 70)",
+    ("#cpuStat", "color"): "rgb(82, 82, 91)",
+    ("#cpuVal", "color"): "rgb(161, 161, 170)",
+    ("#tMenuList", "backgroundColor"): "rgb(17, 17, 20)",
+}
+
+
+def _rgb(s):
+    nums = [float(x) for x in re.findall(r"[\d.]+", s)]
+    return nums[:3], (nums[3] if len(nums) > 3 else 1.0)
+
+
+def _lum(s):
+    (r, g, b), _ = _rgb(s)
+    f = lambda c: (c / 255) / 12.92 if c / 255 <= 0.03928 else ((c / 255 + 0.055) / 1.055) ** 2.4  # noqa: E731
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+
+def _contrast(a, b):
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def _css(pg, sel, prop):
+    return pg.eval_on_selector(sel, f"e => getComputedStyle(e).{prop}")
+
+
+def _open_themed(browser, site, api, theme=None, **kw):
+    """Dashboard with a terminal open (so the topbar and its ⋯ menu are shown)."""
+    ctx, pg = _open(browser, site, api, **kw)
+    if theme is not None:
+        pg.evaluate(f"t => localStorage.setItem('{THEME_KEY}', t)", theme)
+        pg.reload()
+        pg.wait_for_selector(".card[data-sid]")
+    pg.click(row("dddd0004") + " .proj")
+    pg.wait_for_selector("#topbar:visible")
+    return ctx, pg
+
+
+def test_theme_item_is_in_the_account_menu(page):
+    page.click(row("dddd0004") + " .proj")
+    page.click("#tMenu")
+    assert page.get_attribute("#tTheme", "role") == "menuitem"
+    assert page.inner_text("#tTheme").strip() == "Light theme"     # names the one you'd switch to
+    assert page.evaluate("document.documentElement.dataset.theme") == "dark"
+
+
+def test_theme_switch_toggles_html_and_is_remembered(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open_themed(browser, site, api)
+    try:
+        pg.click("#tMenu")
+        pg.click("#tTheme")
+        assert pg.evaluate("document.documentElement.dataset.theme") == "light"
+        assert pg.evaluate(f"localStorage.getItem('{THEME_KEY}')") == "light"
+        assert pg.is_visible("#tTheme")                               # menu stays open
+        assert pg.inner_text("#tTheme").strip() == "Dark theme"
+        pg.reload()
+        pg.wait_for_selector(".card[data-sid]")
+        assert pg.evaluate("document.documentElement.dataset.theme") == "light"
+        pg.click(row("dddd0004") + " .proj")
+        pg.click("#tMenu")
+        assert pg.inner_text("#tTheme").strip() == "Dark theme"
+        pg.click("#tTheme")
+        assert pg.evaluate("document.documentElement.dataset.theme") == "dark"
+        assert pg.evaluate(f"localStorage.getItem('{THEME_KEY}')") == "dark"
+    finally:
+        ctx.close()
+
+
+def test_theme_switch_by_keyboard(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open_themed(browser, site, api)
+    try:
+        pg.focus("#tMenu")
+        pg.keyboard.press("Enter")
+        pg.keyboard.press("ArrowDown")
+        pg.keyboard.press("ArrowDown")
+        assert pg.evaluate("document.activeElement.id") == "tTheme"
+        pg.keyboard.press("Enter")
+        assert pg.evaluate("document.documentElement.dataset.theme") == "light"
+        pg.keyboard.press(" ")
+        assert pg.evaluate("document.documentElement.dataset.theme") == "dark"
+    finally:
+        ctx.close()
+
+
+def test_theme_is_applied_before_first_paint(browser, site):
+    """The <head> script sets data-theme before <body> exists — no dark flash."""
+    src = PAGE.read_text(encoding="utf-8")
+    head = src[:src.index("</head>")]
+    assert THEME_KEY in head and "dataset.theme" in head
+    api = FakeAPI()
+    ctx = browser.new_context(viewport={"width": 1200, "height": 800})
+    ctx.add_init_script(f"""try {{ localStorage.setItem('{THEME_KEY}', 'light'); }} catch (e) {{}}
+      window.__themeAtBody = 'unset';
+      new MutationObserver((recs, obs) => {{
+        if (document.body) {{ window.__themeAtBody = document.documentElement.dataset.theme || '';
+                              obs.disconnect(); }}
+      }}).observe(document, {{ childList: true, subtree: true }});""")
+    pg = ctx.new_page()
+    try:
+        pg.route(re.compile(r"^https://fonts\.(googleapis|gstatic)\.com/"), lambda r: r.abort())
+        pg.route(re.compile(r"/api/library(/|\?|$)"), api.library)
+        pg.route(re.compile(r"/api/page-version"), lambda r: r.abort())
+        pg.goto(site)
+        pg.wait_for_selector(".card[data-sid]")
+        assert pg.evaluate("window.__themeAtBody") == "light"
+    finally:
+        ctx.close()
+
+
+def test_theme_survives_broken_storage(browser, site):
+    api = FakeAPI()
+    ctx = browser.new_context(viewport={"width": 1200, "height": 800})
+    # reading/writing the theme key throws (blocked site data): the page still works, dark
+    ctx.add_init_script("""for (const m of ['getItem', 'setItem']) {
+        const orig = Storage.prototype[m];
+        Storage.prototype[m] = function (k, ...a) {
+          if (k === 'agentdeck-theme') throw new Error('blocked');
+          return orig.call(this, k, ...a); }; }""")
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    try:
+        pg.route(re.compile(r"^https://fonts\.(googleapis|gstatic)\.com/"), lambda r: r.abort())
+        pg.route(re.compile(r"/api/library(/|\?|$)"), api.library)
+        pg.route(re.compile(r"/api/page-version"), lambda r: r.abort())
+        pg.goto(site)
+        pg.wait_for_selector(".card[data-sid]")
+        assert pg.evaluate("document.documentElement.dataset.theme") == "dark"
+        pg.click(row("dddd0004") + " .proj")
+        pg.click("#tMenu")
+        pg.click("#tTheme")                          # still switches for this visit
+        assert pg.evaluate("document.documentElement.dataset.theme") == "light"
+        assert errors == [], errors
+    finally:
+        ctx.close()
+
+
+def test_dark_look_is_unchanged(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open_themed(browser, site, api)
+    try:
+        pg.click("#tMenu")
+        got = {k: _css(pg, *k) for k in DARK}
+        assert got == DARK
+    finally:
+        ctx.close()
+
+
+def test_light_theme_colours(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open_themed(browser, site, api, theme="light")
+    try:
+        pg.click("#tMenu")
+        bg = _css(pg, "body", "backgroundColor")
+        assert _lum(bg) > 0.8, bg                    # light, but a muted grey, not stark white
+        assert _lum(_css(pg, "body", "color")) < 0.05
+        for sel in (".sidebar", ".topbar", "#tMenuList", "#search"):
+            assert _lum(_css(pg, sel, "backgroundColor")) > 0.75, sel
+        # the sidebar sits a touch deeper than the main area
+        assert _lum(_css(pg, ".sidebar", "backgroundColor")) < _lum(bg)
+        side = _css(pg, ".sidebar", "backgroundColor")
+        # text that must stay readable on the light sidebar
+        for sel in ("#list .card[data-sid] .proj", "#newBtn", "#tOpen", "#tTheme", "#cpuVal",
+                    '#list .card[data-sid="dddd0004"] .sid'):
+            c = _css(pg, sel, "color")
+            assert _contrast(c, side) >= 4.5, (sel, c)    # WCAG AA
+        for sel in ("#tLogout",):
+            assert _contrast(_css(pg, sel, "color"), "rgb(255, 255, 255)") >= 4.0, sel
+        # status dots: working / idle / off all visible on white and different
+        dots = {s: _css(pg, f".dot.{s}", "backgroundColor") for s in ("working", "idle", "off")}
+        assert len(set(dots.values())) == 3
+        for s, c in dots.items():
+            assert _contrast(c, side) >= 1.6, (s, c)
+        # the selected row still stands out
+        assert _css(pg, ".card.sel", "borderLeftColor") != side
+        # the terminal keeps its dark frame
+        assert _css(pg, "#wrap iframe", "backgroundColor") == "rgb(0, 0, 0)"
+        shot(pg, "theme-light-desktop.png")
+    finally:
+        ctx.close()
+
+
+def test_light_theme_at_390px(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open(browser, site, api, width=390, height=844, mobile=True)
+    try:
+        pg.evaluate(f"localStorage.setItem('{THEME_KEY}', 'light')")
+        pg.reload()
+        pg.wait_for_selector(".card[data-sid]")
+        pg.tap(row("dddd0004") + " .proj")
+        pg.wait_for_selector("#topbar:visible")
+        assert _lum(_css(pg, "#mobInput", "backgroundColor")) > 0.75
+        assert _lum(_css(pg, "#mobText", "backgroundColor")) > 0.75
+        pg.tap("#tMenu")
+        b = pg.eval_on_selector("#tTheme", "e => { const r = e.getBoundingClientRect();"
+                                           " return [r.left, r.right, r.width]; }")
+        assert b[2] > 0 and b[0] >= 0 and b[1] <= 390.5, b
+        over = pg.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+        assert over <= 0
+        shot(pg, "theme-light-mobile.png")
+    finally:
+        ctx.close()
+
+
+def test_open_server_tab_follows_the_switch_live(browser, site):
+    """The real server.html in the viewer changes colour when the menu switch is
+    pressed — no reload (the storage event reaches the same-origin iframe)."""
+    from tests.test_server_page import FakeServerAPI
+    api, srv = FakeAPI(), FakeServerAPI()
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.route(re.compile(r"/api/server(\?|$)"), srv.handle)
+        pg.click(SERVER_LINK)
+        pg.wait_for_selector("#wrap iframe")
+        fr = pg.frame_locator("#wrap iframe")
+        fr.locator(".row[data-id]").first.wait_for()
+        frame = next(f for f in pg.frames if f.url.endswith("/server.html"))
+        dark_bg = frame.evaluate("getComputedStyle(document.body).backgroundColor")
+        assert dark_bg == "rgb(9, 9, 11)"
+        pg.click("#tMenu")
+        pg.click("#tTheme")
+        frame.wait_for_function("getComputedStyle(document.body).backgroundColor !== 'rgb(9, 9, 11)'",
+                                timeout=3000)
+        assert _lum(frame.evaluate("getComputedStyle(document.body).backgroundColor")) > 0.85
+        pg.click("#tTheme")
+        frame.wait_for_function("getComputedStyle(document.body).backgroundColor === 'rgb(9, 9, 11)'",
+                                timeout=3000)
     finally:
         ctx.close()

@@ -7,7 +7,23 @@
 <base href="/tasks/" />
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233d55c9'/%3E%3Ctext x='16' y='23.5' text-anchor='middle' font-family='-apple-system,Segoe UI,Helvetica,Arial,sans-serif' font-size='22' font-weight='800' fill='%23f4f6fb'%3ET%3C/text%3E%3C/svg%3E" />
 <title>Task Board</title>
-<script>try { if (window.top !== window.self) document.documentElement.dataset.theme = 'deck'; } catch (_) { document.documentElement.dataset.theme = 'deck'; }</script>
+<script>
+/* Inside the dashboard (an iframe) the board wears the dashboard's palette: 'deck'
+   (dark) or 'deck-light', from the dashboard's localStorage 'agentdeck-theme' (same
+   origin), switched live by the storage event. Standalone it follows the system. */
+(function () {
+  var embedded;
+  try { embedded = window.top !== window.self; } catch (_) { embedded = true; }
+  if (!embedded) return;
+  function pick() {
+    var t = 'dark';
+    try { t = localStorage.getItem('agentdeck-theme') || 'dark'; } catch (_) {}
+    document.documentElement.dataset.theme = t === 'light' ? 'deck-light' : 'deck';
+  }
+  pick();
+  window.addEventListener('storage', function (e) { if (e.key === 'agentdeck-theme' || e.key === null) pick(); });
+})();
+</script>
 <style>
   :root {
     --bg: oklch(0.982 0.003 260);
@@ -72,6 +88,20 @@
     --shadow: none; --top-bg: rgba(9, 9, 11, 0.92);
     color-scheme: dark;
     zoom: 0.92;   /* a bit smaller, closer to the dashboard's 11-12 px type (0.85 was too small) */
+  }
+
+  /* inside the dashboard in its light theme: zinc on white, like the dashboard */
+  :root[data-theme="deck-light"] {
+    --bg: #f1f1f3; --surface: #f7f7f8; --surface-2: #e9e9ec; --hover: #ececef;
+    --line: #d9d9de; --line-2: #e4e4e7;
+    --text: #18181b; --text-2: #52525b; --text-3: #63636b;
+    --accent: #4f46e5; --accent-soft: rgba(79, 70, 229, 0.1);
+    --green: #16a34a; --amber: #d97706; --red: #dc2626;
+    --red-soft: rgba(220, 38, 38, 0.08); --amber-soft: rgba(217, 119, 6, 0.1); --green-soft: rgba(22, 163, 74, 0.1);
+    --todo: #a1a1aa; --mark: rgba(79, 70, 229, 0.18); --mark-text: #18181b;
+    --shadow: 0 1px 2px rgba(24, 24, 27, 0.05); --top-bg: rgba(241, 241, 243, 0.92);
+    color-scheme: light;
+    zoom: 0.92;
   }
 
   * { box-sizing: border-box; }

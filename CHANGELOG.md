@@ -4,6 +4,7 @@ All notable changes to AgentDeck. Newest first.
 
 ## Unreleased
 
+- **Light theme.** A Dark / Light switch in the dashboard's ⋯ menu (remembered in `localStorage` `agentdeck-theme`, applied before first paint); the embedded Tasks and Server pages follow it live. The terminal stays dark.
 - **Guard hooks.** `hooks/guard_task_board.py` blocks the first file edit of a session until
   the task is on the board (or the agent runs `NO_BOARD=1 true` for a trivial change).
   `hooks/guard_dont_stop.py` blocks ending a turn while this session's board task is still

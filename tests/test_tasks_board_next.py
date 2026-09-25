@@ -575,3 +575,83 @@ def test_embedded_board_text_matches_the_dashboard_size(browser, board):
         pg.screenshot(path=str(ART / "tasks-embedded-small.png"))
     finally:
         ctx.close()
+
+
+# ---- light dashboard theme: the embedded board follows localStorage agentdeck-theme
+def _lum(s):
+    import re as _re
+    r, g, b = [float(x) for x in _re.findall(r"[\d.]+", s)[:3]]
+    f = lambda c: (c / 255) / 12.92 if c / 255 <= 0.03928 else ((c / 255 + 0.055) / 1.055) ** 2.4  # noqa: E731
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+
+def _embedded(browser, board, theme, scheme="dark"):
+    """A same-origin parent (like the dashboard) holding the board in an iframe."""
+    board.write(make_state(datetime.now(timezone.utc)))
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900}, color_scheme=scheme)
+    pg = ctx.new_page()
+    pg.goto(board.url)
+    pg.wait_for_selector(".task")
+    if theme is None:
+        pg.evaluate("localStorage.removeItem('agentdeck-theme')")
+    else:
+        pg.evaluate("t => localStorage.setItem('agentdeck-theme', t)", theme)
+    pg.set_content(f'<iframe id="f" src="{board.url}" style="width:1200px;height:800px"></iframe>')
+    pg.frame_locator("#f").locator(".task").first.wait_for()
+    return ctx, pg, pg.frames[1]
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_embedded_board_light_deck_palette(browser, board, scheme):
+    ctx, pg, fr = _embedded(browser, board, "light", scheme)
+    try:
+        assert fr.evaluate("document.documentElement.dataset.theme") == "deck-light"
+        bg = fr.evaluate("getComputedStyle(document.body).backgroundColor")
+        assert bg == "rgb(241, 241, 243)", bg                  # = the dashboard's light main area
+        assert _lum(fr.evaluate("getComputedStyle(document.body).color")) < 0.05
+        # same size tweak as the dark deck
+        assert fr.evaluate("getComputedStyle(document.documentElement).zoom") == "0.92"
+        pg.screenshot(path=str(ART / "tasks-embedded-light.png"))
+    finally:
+        ctx.close()
+
+
+def test_embedded_board_defaults_to_dark_deck(browser, board):
+    ctx, pg, fr = _embedded(browser, board, None, "light")
+    try:
+        assert fr.evaluate("document.documentElement.dataset.theme") == "deck"
+        assert fr.evaluate("getComputedStyle(document.body).backgroundColor") == DECK_BG
+    finally:
+        ctx.close()
+
+
+def test_embedded_board_switches_live(browser, board):
+    ctx, pg, fr = _embedded(browser, board, "dark")
+    try:
+        assert fr.evaluate("getComputedStyle(document.body).backgroundColor") == DECK_BG
+        pg.evaluate("localStorage.setItem('agentdeck-theme', 'light')")   # what the dashboard does
+        fr.wait_for_function("document.documentElement.dataset.theme === 'deck-light'", timeout=3000)
+        assert fr.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(241, 241, 243)"
+        pg.evaluate("localStorage.setItem('agentdeck-theme', 'dark')")
+        fr.wait_for_function("document.documentElement.dataset.theme === 'deck'", timeout=3000)
+    finally:
+        ctx.close()
+
+
+def test_standalone_board_ignores_the_dashboard_theme(browser, board):
+    ctx = browser.new_context(viewport={"width": 900, "height": 600}, color_scheme="dark")
+    pg = ctx.new_page()
+    try:
+        pg.goto(board.url)
+        pg.evaluate("localStorage.setItem('agentdeck-theme', 'light')")
+        pg.reload()
+        pg.wait_for_selector(".task")
+        assert pg.evaluate("document.documentElement.dataset.theme") in (None, "", "undefined") \
+            or pg.evaluate("document.documentElement.dataset.theme") is None
+        assert _lum(pg.evaluate("getComputedStyle(document.body).backgroundColor")) < 0.1
+    finally:
+        ctx.close()
+
+
+def test_live_board_copy_matches_next():
+    assert (TASKS_DIR / "static" / "index.html").read_text() == NEXT.read_text()

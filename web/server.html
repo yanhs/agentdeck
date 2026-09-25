@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Server</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%2309090b'/><path d='M3 12a5 5 0 0 1 10 0' fill='none' stroke='%23818cf8' stroke-width='2'/><path d='M8 12l3-4' stroke='%23e4e4e7' stroke-width='1.5' stroke-linecap='round'/></svg>">
+  <!-- Theme: the dashboard's choice (localStorage 'agentdeck-theme', same origin),
+       applied before first paint and switched live by the storage event. -->
+  <script>(function(){function pick(){var t='dark';try{if(localStorage.getItem('agentdeck-theme')==='light')t='light';}catch(e){}document.documentElement.dataset.theme=t;}pick();window.addEventListener('storage',function(e){if(e.key==='agentdeck-theme'||e.key===null)pick();});})();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -15,10 +18,24 @@
       --accent: #818cf8; --green: #4ade80; --amber: #fbbf24; --red: #f87171;
       --g-agents: #818cf8; --g-apps: #2dd4bf; --g-jobs: #fbbf24; --g-system: #71717a;
       --mono: 'JetBrains Mono', ui-monospace, monospace;
+      --hi-line: #3f3f46; --off: #3f3f46; --stripe-a: #3f3f46; --stripe-b: #27272a; --mem-bar: #a1a1aa;
+      --row-line: rgba(39,39,42,.55); --hover: rgba(255,255,255,.025); --open: rgba(129,140,248,.05);
+      --tip-bg: rgba(24,24,27,.96); --tip-shadow: 0 4px 14px rgba(0,0,0,.4); --stale-text: #fecaca;
+    }
+    /* the dashboard's light theme: zinc on white, indigo accent */
+    :root[data-theme="light"] {
+      --bg: #f1f1f3; --s1: #f7f7f8; --s2: #dcdce0; --line: #d9d9de; --line2: #e2e2e6;
+      --text: #18181b; --dim: #52525b; --faint: #63636b; --ghost: #63636b;
+      --accent: #4f46e5; --green: #16a34a; --amber: #d97706; --red: #dc2626;
+      --g-agents: #6366f1; --g-apps: #0d9488; --g-jobs: #f59e0b; --g-system: #a1a1aa;
+      --hi-line: #a1a1aa; --off: #a1a1aa; --stripe-a: #d4d4d8; --stripe-b: #f4f4f5; --mem-bar: #71717a;
+      --row-line: #e4e4e7; --hover: rgba(24,24,27,.03); --open: rgba(79,70,229,.06);
+      --tip-bg: rgba(247,247,248,.97); --tip-shadow: 0 4px 14px rgba(24,24,27,.12); --stale-text: #b91c1c;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     [hidden] { display: none !important; }
     html { background: var(--bg); color-scheme: dark; }
+    :root[data-theme="light"] { color-scheme: light; }
     body {
       font-family: 'Inter', -apple-system, system-ui, sans-serif;
       background: var(--bg); color: var(--text);
@@ -35,7 +52,7 @@
       color: var(--dim); text-decoration: none; font-size: 12px;
       border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px;
     }
-    #back:hover { color: var(--text); border-color: #3f3f46; }
+    #back:hover { color: var(--text); border-color: var(--hi-line); }
     body.embedded #back { display: none; }
     h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
     #host { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--faint); }
@@ -60,7 +77,7 @@
     @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
     #stale {
       margin: -4px 0 12px; padding: 7px 10px; border-radius: 8px; font-size: 12px;
-      background: rgba(248,113,113,.07); border: 1px solid rgba(248,113,113,.25); color: #fecaca;
+      background: rgba(248,113,113,.07); border: 1px solid rgba(248,113,113,.25); color: var(--stale-text);
     }
     #stale a { color: var(--text); }
 
@@ -104,8 +121,8 @@
     #chart .cursor { stroke: var(--dim); stroke-width: 1; }
     #chartTip {
       position: absolute; top: 4px; pointer-events: none; font-size: 11px;
-      background: rgba(24,24,27,.96); border: 1px solid var(--line); border-radius: 6px;
-      padding: 5px 8px; white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+      background: var(--tip-bg); border: 1px solid var(--line); border-radius: 6px;
+      padding: 5px 8px; white-space: nowrap; box-shadow: var(--tip-shadow);
     }
     #chartTip div { display: flex; justify-content: space-between; gap: 12px; }
     #chartTip .num { color: var(--text); }
@@ -135,19 +152,19 @@
     .empty { color: var(--ghost); font-size: 12px; padding: 8px 4px; }
 
     .row { border-radius: 7px; }
-    .row + .row { border-top: 1px solid rgba(39,39,42,.55); }
+    .row + .row { border-top: 1px solid var(--row-line); }
     .row.over { display: none; }
     section.group.all .row.over { display: block; }
     .main {
       display: grid; grid-template-columns: 10px minmax(0, 1fr) 150px 132px 12px;
       align-items: center; gap: 12px; padding: 7px 6px; cursor: pointer; border-radius: 7px;
     }
-    .main:hover { background: rgba(255,255,255,.025); }
-    .row.open .main { background: rgba(129,140,248,.05); }
-    .dot { width: 8px; height: 8px; border-radius: 50%; background: #3f3f46; }
+    .main:hover { background: var(--hover); }
+    .row.open .main { background: var(--open); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
     .dot.working { background: var(--amber); box-shadow: 0 0 6px rgba(251,191,36,.5); animation: pulse 2s ease-in-out infinite; }
     .dot.idle, .dot.running { background: var(--green); box-shadow: 0 0 4px rgba(74,222,128,.3); }
-    .dot.stopped { background: #3f3f46; }
+    .dot.stopped { background: var(--off); }
     .row.stopped .name, .row.stopped .what { color: var(--ghost); }
     .id { min-width: 0; }
     .nm { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -163,7 +180,7 @@
     .m .bar i { display: block; height: 100%; width: 0; border-radius: 3px; transition: width .6s ease; }
     .m .v { font-family: var(--mono); font-size: 11px; text-align: right; color: var(--dim); white-space: nowrap; }
     .m .lab { display: none; }
-    .mem .bar i { background: #a1a1aa; opacity: .55; }
+    .mem .bar i { background: var(--mem-bar); opacity: .55; }
     .chev { color: var(--ghost); font-size: 12px; transition: transform .15s; text-align: center; }
     .row.open .chev { transform: rotate(90deg); color: var(--dim); }
     .row.nokids .chev { visibility: hidden; }
@@ -181,7 +198,7 @@
       margin: 6px 0 0 28px; background: none; border: 1px solid var(--line); color: var(--dim);
       font: inherit; font-size: 11.5px; padding: 3px 10px; border-radius: 6px; cursor: pointer;
     }
-    .more:hover { color: var(--text); border-color: #3f3f46; }
+    .more:hover { color: var(--text); border-color: var(--hi-line); }
     footer { margin-top: 22px; font-size: 11px; color: var(--ghost); text-align: center; }
 
     @media (max-width: 860px) {
@@ -279,7 +296,8 @@
   const qs = new URLSearchParams(location.search);
   const POLL = Math.max(250, parseInt(qs.get('poll') || '5000', 10) || 5000);
   const LIMIT = 12;                       // rows shown per group before "Show more"
-  const GROUP_COLOR = { agents: '#818cf8', apps: '#2dd4bf', jobs: '#fbbf24', system: '#71717a' };
+  // CSS variables, so the chart, bars and legends follow the theme live
+  const GROUP_COLOR = { agents: 'var(--g-agents)', apps: 'var(--g-apps)', jobs: 'var(--g-jobs)', system: 'var(--g-system)' };
   const KIND = { claude: 'agent', container: 'docker', service: 'service', pm2: 'pm2',
                  job: 'job', kernel: 'kernel', system: 'misc' };
   const SVGNS = 'http://www.w3.org/2000/svg';
@@ -497,7 +515,7 @@
       d.dataset.group = s.g;
       d.style.width = (s.w * scale).toFixed(3) + '%';
       d.style.background = s.g === 'untracked'
-        ? 'repeating-linear-gradient(135deg, #3f3f46 0 3px, #27272a 3px 6px)' : GROUP_COLOR[s.g];
+        ? 'repeating-linear-gradient(135deg, var(--stripe-a) 0 3px, var(--stripe-b) 3px 6px)' : GROUP_COLOR[s.g];
       d.style.opacity = String(Math.max(0.45, 1 - s.k * 0.11));
       d.title = s.t;
       return d;
@@ -510,7 +528,7 @@
     });
     if (untracked >= 1) {
       const u = el('span'); const ui = el('i');
-      ui.style.background = 'repeating-linear-gradient(135deg, #3f3f46 0 2px, #27272a 2px 4px)';
+      ui.style.background = 'repeating-linear-gradient(135deg, var(--stripe-a) 0 2px, var(--stripe-b) 2px 4px)';
       u.title = 'Processes that started and finished between two samples, and interrupts';
       u.append(ui, document.createTextNode('Short-lived '), el('b', null, fmtPct(untracked)));
       items.push(u);
@@ -527,10 +545,10 @@
     const sec = el('section', 'group');
     sec.dataset.group = g.id;
     const h = el('h2');
-    const sw = el('span', 'sw'); sw.style.background = GROUP_COLOR[g.id] || '#71717a';
+    const sw = el('span', 'sw'); sw.style.background = GROUP_COLOR[g.id] || 'var(--g-system)';
     const sp = svg('svg', { class: 'spark', viewBox: '0 0 72 18', preserveAspectRatio: 'none' });
-    sp.appendChild(svg('path', { fill: GROUP_COLOR[g.id] || '#71717a', 'fill-opacity': 0.25, stroke: 'none' }));
-    sp.appendChild(svg('path', { fill: 'none', stroke: GROUP_COLOR[g.id] || '#71717a', 'stroke-width': 1.2, 'vector-effect': 'non-scaling-stroke' }));
+    sp.appendChild(svg('path', { fill: GROUP_COLOR[g.id] || 'var(--g-system)', 'fill-opacity': 0.25, stroke: 'none' }));
+    sp.appendChild(svg('path', { fill: 'none', stroke: GROUP_COLOR[g.id] || 'var(--g-system)', 'stroke-width': 1.2, 'vector-effect': 'non-scaling-stroke' }));
     h.append(sw, el('span', 'gt', g.title), el('span', 'gc'), sp, el('span', 'gsum'));
     const list = el('div', 'list');
     const more = el('button', 'more'); more.type = 'button'; more.hidden = true;
@@ -577,7 +595,7 @@
     r.querySelector('.kids').hidden = !on;
   }
   function fillRow(r, m, gid) {
-    const color = GROUP_COLOR[gid] || '#71717a';
+    const color = GROUP_COLOR[gid] || 'var(--g-system)';
     r.className = 'row' + (m.status === 'stopped' ? ' stopped' : '') + (open.has(m.id) ? ' open' : '');
     const dot = r.querySelector('.dot');
     dot.className = 'dot ' + (m.status || 'running');

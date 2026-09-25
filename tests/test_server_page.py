@@ -353,3 +353,92 @@ def test_cpu_no_process_holds_is_shown_as_short_lived(page):
     assert len(short) == 1
     assert tracked + short[0] == pytest.approx(62, abs=0.3)
     assert "Short-lived" in page.inner_text("#nowLeg")
+
+
+# ── Dark / Light: follows the dashboard's localStorage 'agentdeck-theme' ─────
+def _lum(s):
+    r, g, b = [float(x) for x in re.findall(r"[\d.]+", s)[:3]]
+    f = lambda c: (c / 255) / 12.92 if c / 255 <= 0.03928 else ((c / 255 + 0.055) / 1.055) ** 2.4  # noqa: E731
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+
+def _contrast(a, b):
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def _themed(browser, site, api, theme, **kw):
+    ctx, pg = _open(browser, site, api, **kw)
+    if theme is not None:
+        pg.evaluate("t => localStorage.setItem('agentdeck-theme', t)", theme)
+        pg.reload()
+        pg.wait_for_selector(".row[data-id]")
+    return ctx, pg
+
+
+def test_dark_is_the_default_and_unchanged(browser, site, api):
+    ctx, pg = _themed(browser, site, api, None)
+    try:
+        css = lambda s, p: pg.eval_on_selector(s, f"e => getComputedStyle(e).{p}")  # noqa: E731
+        assert css("body", "backgroundColor") == "rgb(9, 9, 11)"
+        assert css("body", "color") == "rgb(228, 228, 231)"
+        assert css(".gauge", "backgroundColor") == "rgb(17, 17, 20)"
+        # chart areas keep the dark group colours
+        fills = pg.eval_on_selector_all("#chart path.area", "els => els.map(e => getComputedStyle(e).fill)")
+        assert "rgb(129, 140, 248)" in fills and "rgb(45, 212, 191)" in fills
+        shot(pg, "theme-dark-server.png")
+        assert pg.errors == []
+    finally:
+        ctx.close()
+
+
+def test_light_theme(browser, site, api):
+    ctx, pg = _themed(browser, site, api, "light")
+    try:
+        css = lambda s, p: pg.eval_on_selector(s, f"e => getComputedStyle(e).{p}")  # noqa: E731
+        assert pg.evaluate("document.documentElement.dataset.theme") == "light"
+        bg = css("body", "backgroundColor")
+        assert _lum(bg) > 0.85, bg
+        assert _lum(css("body", "color")) < 0.05
+        card = css(".gauge", "backgroundColor")
+        assert _lum(card) > 0.85
+        for s in (".gl", ".gs", ".what", "h3", ".m .v", "#updated"):
+            assert _contrast(css(s, "color"), card) >= 4.5, s    # WCAG AA
+        # the ring track and the bars are visible on white, not dark zinc
+        trk = pg.eval_on_selector(".ring .trk", "e => getComputedStyle(e).stroke")
+        assert _lum(trk) > 0.6, trk
+        fills = pg.eval_on_selector_all("#chart path.area", "els => els.map(e => getComputedStyle(e).fill)")
+        assert len(set(fills)) == 4 and all(f not in ("none", "") for f in fills), fills
+        grid = pg.eval_on_selector("#chart .grid", "e => getComputedStyle(e).stroke") \
+            if pg.query_selector("#chart .grid") else None
+        if grid:
+            assert _lum(grid) > 0.5, grid
+        shot(pg, "theme-light-server.png")
+        assert pg.errors == []
+    finally:
+        ctx.close()
+
+
+def test_light_theme_phone_no_sideways_scroll(browser, site, api):
+    ctx, pg = _themed(browser, site, api, "light", width=390, height=844, mobile=True)
+    try:
+        over = pg.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+        assert over <= 0
+        shot(pg, "theme-light-server-mobile.png")
+    finally:
+        ctx.close()
+
+
+def test_theme_switches_live_from_another_page(browser, site, api):
+    ctx, pg = _themed(browser, site, api, "dark")
+    try:
+        other = ctx.new_page()
+        other.goto(site.replace("server.html", "no-such-page"))      # any same-origin page
+        other.evaluate("localStorage.setItem('agentdeck-theme', 'light')")
+        pg.wait_for_function("document.documentElement.dataset.theme === 'light'", timeout=3000)
+        assert _lum(pg.evaluate("getComputedStyle(document.body).backgroundColor")) > 0.85
+        other.evaluate("localStorage.setItem('agentdeck-theme', 'dark')")
+        pg.wait_for_function("getComputedStyle(document.body).backgroundColor === 'rgb(9, 9, 11)'",
+                             timeout=3000)
+    finally:
+        ctx.close()
