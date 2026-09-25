@@ -109,7 +109,8 @@ def session_for(agent_id) -> str | None:
     legacy claude-terminal-N; anything else → None."""
     key = str(agent_id)
     if library.valid_id(key):
-        return library.tmux_name(key)
+        # a migrated topic whose Claude still runs in its old terminal is served there
+        return legacy_session_of(key) or library.tmux_name(key)
     return SESSIONS.get(key)
 
 
@@ -303,6 +304,55 @@ def legacy_alive(slot) -> bool:
     return bool(session) and has_session(session)
 
 
+def legacy_session_of(sid) -> str | None:
+    """The old claude-terminal-N that still runs this topic's conversation, or
+    None. Migration (library.migrate_from_slots) sets `legacy_slot` and leaves a
+    busy terminal running until it unloads: until then cs-<id> is not loaded,
+    `library_cli ensure` refuses (a second Claude on the same conversation), and
+    the topic must be served from that terminal — the dashboard does the same
+    (status_server lib_legacy → legacy_path). A running cs-<id> wins."""
+    if not is_topic(sid):
+        return None
+    e = topic_entry(str(sid), include_archived=True)
+    slot = None if e is None else e.get("legacy_slot")
+    session = SESSIONS.get(str(slot)) if slot is not None else None
+    if not session or has_session(library.tmux_name(str(sid))):
+        return None
+    return session if has_session(session) else None
+
+
+def legacy_slot_of(session: str) -> str | None:
+    """claude-terminal-N → "N" (None for anything else)."""
+    for aid, s in SESSIONS.items():
+        if s == session:
+            return aid
+    return None
+
+
+def legacy_topics(skip=()) -> dict:
+    """id → {slot, session, working} of the topics served by their old terminal
+    (see legacy_session_of); `skip` = ids already known loaded as cs-<id>.
+    working = the spinner on its screen, the bridge's own working signal."""
+    try:
+        rows = _load_lib()["sessions"]
+    except (OSError, ValueError, KeyError):
+        return {}
+    out = {}
+    for e in rows:
+        sid = e.get("id")
+        if e.get("archived") or e.get("legacy_slot") is None or sid in skip:
+            continue
+        session = legacy_session_of(sid)
+        if session:
+            out[sid] = {"id": sid, "slot": legacy_slot_of(session), "session": session,
+                        "working": is_working(visible(session))}
+    return out
+
+
+def _old_terminal_mark(state: dict | None) -> str:
+    return f" · old terminal #{state['slot']}" if state and state.get("slot") else ""
+
+
 def migrated_topic(slot: str) -> dict | None:
     """The topic migrated from legacy slot N (library.migrate_from_slots sets
     `legacy_slot`), archived ones included: once a slot has moved into the
@@ -360,8 +410,9 @@ def pane_is_claude(sid, session: str) -> bool:
     """Is Claude the program in the pane right now? Owner text is typed only
     then — into a shell it would run as commands. A topic asks
     `library_cli.py pane-is-claude <id>` (exit 0 = yes); a legacy terminal is
-    checked by its pane_current_command. Anything unclear = no."""
-    if is_topic(sid):
+    checked by its pane_current_command (so is a topic served by its old
+    terminal — see legacy_session_of). Anything unclear = no."""
+    if is_topic(sid) and session == library.tmux_name(str(sid)):
         try:
             return run_library_cli("pane-is-claude", str(sid), timeout=15).returncode == 0
         except (OSError, subprocess.SubprocessError):
@@ -416,7 +467,12 @@ async def _wait_ready(session: str, timeout: float | None = None) -> bool:
 
 
 async def _load_topic(sid: str) -> tuple[str | None, str]:
-    """Make sure the topic runs: (cs-<id>, notice) or (None, why not)."""
+    """Make sure the topic runs: (cs-<id>, notice) or (None, why not). A topic
+    whose Claude still runs in its old terminal is already loaded there: that
+    session, and no ensure (it would refuse: same conversation)."""
+    legacy = await asyncio.to_thread(legacy_session_of, sid)
+    if legacy:
+        return legacy, ""
     name = library.tmux_name(sid)
     was = await asyncio.to_thread(has_session, name)
     code, msg = await asyncio.to_thread(ensure_topic, sid)
@@ -715,6 +771,18 @@ def assistant_records(path: str, tail_bytes: int = 1_000_000) -> list[tuple[str,
     """[(uuid, rendered)] — kept for baseline capture and tests."""
     return [(r["uuid"], "\n".join(p for p in (r["text"], r["tools"]) if p).strip())
             for r in _records(path, tail_bytes)]
+
+
+READ_UNLOADED_HEAD = "⚪️ not loaded — last reply from the transcript:"
+
+
+def last_reply(path: str | None) -> str:
+    """Claude's last text reply in the transcript (the same records the stream
+    reads), "" when there is none — /read of an unloaded topic."""
+    for r in reversed(_records(path)):
+        if r["text"]:
+            return r["text"]
+    return ""
 
 
 def baseline_uuids(path: str | None) -> set[str]:
@@ -1216,7 +1284,8 @@ def _agents_overview(chat_id: int) -> str:
     legacy terminals that still run."""
     cur = resolve_current(chat_id)
     live = loaded_topics()
-    act = live or {}
+    old = legacy_topics(skip=set(live or {}))    # loaded, but in their old terminal
+    act = {**(live or {}), **old}
     rows = library.display_order(_load_lib(), set(act))
     lines = [f"Current: {target_label(cur)}" if cur else NEED_PICK, ""]
     if live is None:
@@ -1227,12 +1296,13 @@ def _agents_overview(chat_id: int) -> str:
         for e in rows:
             s = act.get(e["id"])
             name = _clip(e.get("name", ""), 60).replace("\n", " ")
-            lines.append(f"{'🟢' if s else '⚪️'} «{name}» · {e['id']}"
+            lines.append(f"{'🟢' if s else '⚪️'} «{name}» · {e['id']}{_old_terminal_mark(s)}"
                          f"{' ⚙️' if s and s.get('working') else ''}"
                          f"{' ← current' if e['id'] == cur else ''}")
     else:
         lines.append("No topics yet — /new <name>")
-    legacy = _running_legacy()
+    # a slot whose conversation is listed above as a topic is not listed again
+    legacy = [a for a in _running_legacy() if a not in {s["slot"] for s in old.values()}]
     if legacy:
         lines += ["", "Old terminals (before the move, /use N):"]
         lines += [f"🟢 #{aid} ({SESSIONS[aid]}){' ← current' if aid == cur else ''}"
@@ -1266,17 +1336,23 @@ def _button_text(aid: str, alive: bool, label: str) -> str:
 def _topic_button(e: dict, state: dict | None) -> InlineKeyboardButton:
     dot = "🟢" if state else "⚪️"
     name = _clip(e.get("name", ""), 28).replace("\n", " ")
-    return InlineKeyboardButton(f"{dot} {name} · {e['id']}", callback_data=f"use:{e['id']}")
+    old = f" · old #{state['slot']}" if state and state.get("slot") else ""
+    busy = " ⚙️" if state and state.get("working") else ""
+    return InlineKeyboardButton(f"{dot} {name} · {e['id']}{old}{busy}",
+                                callback_data=f"use:{e['id']}")
 
 
 def _topics_keyboard(entries: list[dict], with_legacy: bool = False) -> InlineKeyboardMarkup:
     """One button per topic (loaded first, then most recent), then — for the
-    plain /use picker — the legacy terminals that still run, two per row."""
-    act = loaded_topics() or {}
+    plain /use picker — the legacy terminals that still run, two per row (not
+    the ones whose conversation is already a topic button, served there)."""
+    live = loaded_topics() or {}
+    old = legacy_topics(skip=set(live))
+    act = {**live, **old}
     order = library.display_order({"sessions": entries}, set(act))[:TOPIC_BUTTONS_MAX]
     rows = [[_topic_button(e, act.get(e["id"]))] for e in order]
     if with_legacy:
-        legacy = _running_legacy()
+        legacy = [a for a in _running_legacy() if a not in {s["slot"] for s in old.values()}]
         labels = _agent_labels() if legacy else {}
         row = []
         for aid in legacy:
@@ -1314,6 +1390,9 @@ async def _apply_topic(chat_id: int, e: dict) -> str:
     name, msg = await _load_topic(sid)
     if name is None:
         return head + f"\n⚠️ couldn't load: {msg}\nThe next message will try again."
+    slot = legacy_slot_of(name)
+    if slot:
+        return head + f"\n🟢 runs in the old terminal #{slot} ({name}) — messages go there"
     out = head + ("\n▶️ was unloaded — loading…" if name in _fresh else "")
     return out + (f"\nℹ️ {msg}" if msg else "")
 
@@ -1472,8 +1551,17 @@ async def cmd_read(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not s:
         await update.message.reply_text(NEED_PICK); return
     if not has_session(s):
-        await update.message.reply_text(
-            f"⚪️ {s} is not loaded — send a message (or /use) and the topic will load"); return
+        # not loaded: show Claude's last reply from the transcript, never load it
+        cur = resolve_current(update.effective_chat.id)
+        last = await asyncio.to_thread(last_reply, transcript_path(cur))
+        if not last:
+            await update.message.reply_text(
+                f"⚪️ {s} is not loaded and has no saved reply yet — send a message "
+                "(or /use) and the topic will load"); return
+        head = READ_UNLOADED_HEAD + "\n\n"
+        body = last[-(TG_LIMIT - len(head) - 2):]
+        await update.message.reply_text(head + ("…" + body[1:] if len(body) < len(last) else body))
+        return
     text = clean_pane(capture(s)) or "(empty)"
     for part in chunk(text):
         await update.message.reply_text(part)

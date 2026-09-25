@@ -1750,6 +1750,167 @@ def test_start_session_accepts_a_running_migrated_legacy_slot(world, monkeypatch
     assert ok and msg == "already running"
 
 
+# ── a topic whose Claude still runs in its legacy terminal (2026-09-25) ────────
+# Migration moved slot 2 into topic aaaa1111 but left the busy claude-terminal-2
+# running. cs-aaaa1111 is not loaded, so `ensure` would refuse (exit 4): the
+# bridge must treat the topic as LOADED and serve it from claude-terminal-2.
+
+def _legacy_world(world, monkeypatch, slot=2, pane_cmd="claude"):
+    world.add("app - PIPE", uuid=U1, legacy_slot=slot)
+    legacy = tb.SESSIONS[str(slot)]
+    monkeypatch.setattr(tb, "has_session",
+                        lambda s: s == legacy or (s.startswith("cs-") and s[3:] in world.loaded))
+    monkeypatch.setattr(tb, "legacy_pane_command", lambda s: pane_cmd if s == legacy else None)
+    world.codes["aaaa1111"] = (4, "conversation already running in " + legacy)
+    return legacy
+
+
+def test_session_for_topic_running_in_its_legacy_terminal(world, monkeypatch):
+    legacy = _legacy_world(world, monkeypatch)
+    assert legacy == "claude-terminal-2"
+    assert tb.session_for("aaaa1111") == "claude-terminal-2"
+    assert tb.legacy_session_of("aaaa1111") == "claude-terminal-2"
+
+
+def test_session_for_prefers_cs_when_it_runs(world, monkeypatch):
+    _legacy_world(world, monkeypatch)
+    world.loaded.append("aaaa1111")
+    assert tb.session_for("aaaa1111") == "cs-aaaa1111"
+
+
+def test_session_for_topic_whose_legacy_terminal_is_gone(world, monkeypatch):
+    world.add("app - PIPE", uuid=U1, legacy_slot=2)
+    assert tb.session_for("aaaa1111") == "cs-aaaa1111"
+
+
+def test_text_to_topic_in_legacy_terminal_goes_there_without_ensure(world, monkeypatch):
+    _legacy_world(world, monkeypatch)
+    tb.set_current(CHAT, "aaaa1111")
+    sink, streamed = _deliver(world, monkeypatch, "hello")
+    assert world.ensured() == []                          # no ensure → no refusal
+    assert ("send", "claude-terminal-2", "hello") in world.log
+    assert streamed["session"] == "claude-terminal-2" and streamed["aid"] == "aaaa1111"
+    assert streamed["path"].endswith(f"{U1}.jsonl")
+    assert not any("already open" in t for t, _ in sink)
+
+
+def test_text_to_topic_in_legacy_terminal_not_typed_into_a_shell(world, monkeypatch):
+    _legacy_world(world, monkeypatch, pane_cmd="bash")
+    tb.set_current(CHAT, "aaaa1111")
+    sink, streamed = _deliver(world, monkeypatch, "rm -rf ~")
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert "not Claude" in sink[-1][0]
+
+
+def test_use_topic_in_legacy_terminal_selects_without_refusal(world, monkeypatch):
+    _legacy_world(world, monkeypatch)
+    replies = run_cmd(tb.cmd_use, ["aaaa1111"])
+    assert tb.get_current(CHAT) == "aaaa1111" and world.ensured() == []
+    text = replies[-1][0]
+    assert "couldn't load" not in text and "old terminal #2" in text
+
+
+def test_list_shows_legacy_topic_as_loaded_and_not_twice(world, monkeypatch):
+    _legacy_world(world, monkeypatch)
+    world.add("other", uuid=U2)
+    monkeypatch.setattr(tb, "visible", lambda s: "")
+    tb.set_current(CHAT, "aaaa1111")
+    text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
+    rows = [l for l in text.splitlines() if l.startswith(("🟢", "⚪"))]
+    assert rows[0].startswith("🟢") and "aaaa1111" in rows[0]
+    assert "old terminal #2" in rows[0] and "⚙️" not in rows[0]
+    assert rows[0].endswith(" ← current")
+    assert "Old terminals" not in text and "claude-terminal-2)" not in text
+
+
+def test_list_marks_legacy_topic_working(world, monkeypatch):
+    _legacy_world(world, monkeypatch)
+    monkeypatch.setattr(tb, "visible",
+                        lambda s: "✻ Thinking… (esc to interrupt)" if s == "claude-terminal-2" else "")
+    text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
+    row = [l for l in text.splitlines() if "aaaa1111" in l and l.startswith("🟢")][0]
+    assert "⚙️" in row
+
+
+def test_use_buttons_show_legacy_topic_loaded_and_drop_its_slot(world, monkeypatch):
+    _legacy_world(world, monkeypatch)
+    world.add("other", uuid=U2, last_used=999)
+    monkeypatch.setattr(tb, "visible", lambda s: "")
+    replies = run_cmd(tb.cmd_use, [])
+    markup = replies[-1][1]
+    cbs = _callbacks(markup)
+    assert cbs[0] == "use:aaaa1111" and "use:2" not in cbs
+    first = markup.inline_keyboard[0][0].text
+    assert first.startswith("🟢") and "#2" in first
+
+
+def test_read_topic_in_legacy_terminal_shows_its_screen(world, monkeypatch):
+    _legacy_world(world, monkeypatch)
+    tb.set_current(CHAT, "aaaa1111")
+    seen = []
+    monkeypatch.setattr(tb, "capture", lambda s, lines=200: seen.append(s) or "the screen")
+    replies = run_cmd(tb.cmd_read, [])
+    assert seen == ["claude-terminal-2"] and replies[-1][0] == "the screen"
+
+
+def test_esc_and_enter_reach_the_legacy_terminal(world, monkeypatch):
+    _legacy_world(world, monkeypatch)
+    tb.set_current(CHAT, "aaaa1111")
+    keys = []
+    monkeypatch.setattr(tb, "send_key", lambda s, k: keys.append((s, k)))
+
+    async def no_sleep(*a, **k):
+        pass
+    monkeypatch.setattr(tb.asyncio, "sleep", no_sleep)
+    run_cmd(tb.cmd_esc, [])
+    run_cmd(tb.cmd_enter, [])
+    assert keys and all(s == "claude-terminal-2" for s, _ in keys)
+    assert ("claude-terminal-2", "Enter") in keys
+
+
+def test_read_unloaded_topic_shows_last_reply_from_transcript(world, monkeypatch, tmp_path):
+    world.add("topic", uuid=U1)
+    f = tmp_path / "t.jsonl"
+    _write(f, [
+        {"type": "assistant", "uuid": "a1",
+         "message": {"model": "m", "content": [{"type": "text", "text": "older reply"}]}},
+        {"type": "assistant", "uuid": "a2",
+         "message": {"model": "m", "content": [{"type": "text", "text": "the latest answer"},
+                                               {"type": "tool_use", "name": "Bash",
+                                                "input": {"command": "ls"}}]}},
+        {"type": "assistant", "uuid": "a3",
+         "message": {"model": "m", "content": [{"type": "tool_use", "name": "Bash",
+                                                "input": {"command": "pwd"}}]}},
+    ])
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: str(f) if aid == "aaaa1111" else None)
+    tb.set_current(CHAT, "aaaa1111")
+    replies = run_cmd(tb.cmd_read, [])
+    text = "\n".join(t for t, _ in replies)
+    assert text.startswith("⚪️ not loaded — last reply from the transcript:")
+    assert "the latest answer" in text and "older reply" not in text
+    assert world.ensured() == []                           # reading never loads Claude
+
+
+def test_read_unloaded_topic_clips_a_long_reply(world, monkeypatch, tmp_path):
+    world.add("topic", uuid=U1)
+    f = tmp_path / "t.jsonl"
+    _write(f, [{"type": "assistant", "uuid": "a1",
+                "message": {"model": "m", "content": [{"type": "text", "text": "x" * 50000 + "END"}]}}])
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: str(f))
+    tb.set_current(CHAT, "aaaa1111")
+    replies = run_cmd(tb.cmd_read, [])
+    assert len(replies) == 1 and len(replies[0][0]) <= tb.TG_LIMIT
+    assert replies[0][0].endswith("END")
+
+
+def test_read_unloaded_topic_without_transcript(world, monkeypatch):
+    world.add("topic", uuid=U1)
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: None)
+    tb.set_current(CHAT, "aaaa1111")
+    replies = run_cmd(tb.cmd_read, [])
+    assert "not loaded" in replies[-1][0] and world.ensured() == []
+
+
 # --- English-only user-facing text -----------------------------------------
 
 _CYR = re.compile(r"[\u0400-\u04FF]")
