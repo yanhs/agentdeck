@@ -552,3 +552,26 @@ def test_embedded_board_uses_the_dashboard_palette(browser, board, scheme):
 
 def test_standalone_board_keeps_its_own_theme(page):
     assert page.eval_on_selector("body", "e => getComputedStyle(e).backgroundColor") != DECK_BG
+
+
+def test_embedded_board_text_matches_the_dashboard_size(browser, board):
+    """Owner: the board's type looked big next to the dashboard (11-12 px). Inside
+    the dashboard the board renders ~15% smaller; a task title ends up <= 12 px
+    tall per line-box font size as seen on screen."""
+    board.write(make_state(datetime.now(timezone.utc)))
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    pg = ctx.new_page()
+    try:
+        pg.goto(board.url)
+        pg.wait_for_selector(".task")
+        alone = pg.eval_on_selector(".t-title", "e => e.getBoundingClientRect().height")
+        pg.set_content(f'<iframe id="f" src="{board.url}" style="width:1200px;height:800px"></iframe>')
+        pg.frame_locator("#f").locator(".task").first.wait_for()
+        fr = pg.frames[1]
+        emb = fr.eval_on_selector(".t-title", "e => e.getBoundingClientRect().height")
+        # measured from the parent too (what the eye sees)
+        box = pg.frame_locator("#f").locator(".t-title").first.bounding_box()
+        assert alone * 0.88 <= box["height"] <= alone * 0.95, (box, alone, emb)
+        pg.screenshot(path=str(ART / "tasks-embedded-small.png"))
+    finally:
+        ctx.close()
