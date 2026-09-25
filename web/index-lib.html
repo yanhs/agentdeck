@@ -369,8 +369,6 @@
       transition: all 0.12s;
     }
     .arch-btn:hover { color: var(--red-fg); border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.06); }
-    .arch-btn.restore { color: var(--green-fg); border-color: rgba(34,197,94,0.3); }
-    .arch-btn.restore:hover { color: var(--green-fg-hi); border-color: rgba(34,197,94,0.5); background: rgba(34,197,94,0.1); }
     /* Manual order: drag rows (desktop); ▲▼ on touch screens. */
     .card[draggable="true"] { -webkit-user-drag: element; }
     .card.dragging { opacity: 0.4; }
@@ -393,7 +391,7 @@
     html.touch .mv-btn { display: inline-block; }
     @media (hover: none) and (pointer: coarse) { .mv-btn { display: inline-block; } }
 
-    /* Delete: archived rows only, next to Restore; red. */
+    /* Delete: archived rows only, in the place of Archive; red. */
     .del-btn {
       flex: none;
       height: 15px;
@@ -929,7 +927,7 @@
         if (Date.now() - _dragEndedAt < 300) return;     // the end of a drag is not a click
         if (e.target.closest('.sid')) { openTasks(id); return; }   // code → its tasks (archived too)
         const s = byId(id);
-        if (s && s.archived) { _toast('Archived terminal — click Restore to open it', 3000); return; }
+        if (s && s.archived) { restoreAndOpen(id); return; }   // one click: restore + open
         pick(id);
       });
       c.querySelector('.card-btn.edit').addEventListener('click', e => {
@@ -938,8 +936,7 @@
       });
       c.querySelector('.arch-btn').addEventListener('click', e => {
         e.stopPropagation();
-        const s = byId(id);
-        archive(id, !(s && s.archived));      // one click: archive, or restore
+        archive(id, true);                    // one click; archived rows have no button
       });
       c.querySelector('.mv-btn.up').addEventListener('click', e => { e.stopPropagation(); step(id, -1); });
       c.querySelector('.mv-btn.down').addEventListener('click', e => { e.stopPropagation(); step(id, +1); });
@@ -991,18 +988,17 @@
       c.classList.toggle('first-off', firstOff);
       c.classList.toggle('first-arch', firstArch);
       const ab = c.querySelector('.arch-btn');
-      ab.textContent = s.archived ? 'Restore' : 'Archive';
-      ab.classList.toggle('restore', !!s.archived);
+      // archived rows: Delete instead of Archive; a click on the row restores it
+      ab.hidden = !!s.archived;
       c.querySelector('.del-btn').hidden = !s.archived;
-      ab.title = s.archived ? 'Restore this terminal to the list'
-                            : 'Archive this terminal (the conversation stays on disk)';
+      ab.title = 'Archive and unload this terminal (the conversation stays on disk)';
       const pe = c.querySelector('.proj');
       if (!pe.querySelector('input')) pe.textContent = s.name;
       pe.title = s.name;
       const st = !s.active ? 'off' : s.status === 'working' ? 'working' : 'idle';
       const dot = c.querySelector('.dot');
       dot.className = 'dot ' + st;
-      dot.title = s.archived ? 'archived'
+      dot.title = s.archived ? 'archived — click to restore and open'
                 : st === 'off' ? 'unloaded — click to load'
                 : st === 'working' ? 'loaded, working' : 'loaded, idle';
     }
@@ -1200,25 +1196,51 @@
       inp.addEventListener('click', e => e.stopPropagation());
     }
 
-    /* ── Archive / Restore: one click. Archived topics stay reachable via
-       "Show archived" at the bottom of the list, so no confirm step. ── */
+    /* ── Archive / Restore: one click. Archive also unloads the terminal (the
+       server keeps a working one loaded until it finishes and says so); if it
+       is the one in the viewer, the viewer goes back to the placeholder.
+       Archived topics stay reachable via "Show archived" and search; a click
+       on an archived row restores it and opens it. No confirm step. ── */
     async function archive(id, archived) {
       const s = byId(id);
       const was = s ? !!s.archived : !archived;
       if (s) s.archived = archived;
+      if (archived && sel === id) showPlaceholder();
       mutSeq++;
       render();
       try {
         const d = await jpost('/api/library/archive', {id, archived});
         const nm = (s ? s.name : id).slice(0, 40);
+        if (s && d && typeof d.active === 'boolean') {
+          s.active = d.active;
+          if (typeof d.status === 'string') s.status = d.status;
+          render();
+        }
         _toast(!archived ? 'Restored “' + nm + '”'
-               : d && d.unload_pending ? 'Archived “' + nm + '” — it is busy, so it stays loaded until idle'
+               : d && d.unloaded ? 'Archived and unloaded “' + nm + '”'
+               : d && d.unload_pending ? "Archived — it's busy, it will unload when it finishes"
                : 'Archived “' + nm + '” — the conversation is kept', 3000);
+        return true;
       } catch (err) {
         if (s) s.archived = was;
         render();
         _toast('⚠️ ' + (archived ? 'Not archived: ' : 'Not restored: ')
                + String(err && err.message || err).slice(0, 60), 5000);
+        return false;
+      }
+    }
+
+    // an archived row / board link: restore (same API as before), then open it
+    // like a normal row — the terminal endpoint refuses archived ids, so only
+    // after the server has said yes
+    const _restoring = new Set();
+    async function restoreAndOpen(id) {
+      if (_restoring.has(id)) return;          // a double click is one restore
+      _restoring.add(id);
+      try {
+        if (await archive(id, false)) pick(id);
+      } finally {
+        _restoring.delete(id);
       }
     }
 
@@ -1350,13 +1372,14 @@
     });
 
     // The task board (same origin, in our iframe or standalone via /?open=<id>)
-    // asks to open a terminal by its code. Same rule as a list click: a known,
-    // non-archived terminal opens even if the search hides its row.
+    // asks to open a terminal by its code. Same rule as a list click: a known
+    // terminal opens even if the search hides its row; an archived one is
+    // restored first.
     function openTerminalById(id) {
       if (!ID_RE.test(id || '')) return;
       const s = byId(id);
       if (!s) { _toast('Terminal ' + id + ' not found', 3000); return; }
-      if (s.archived) { _toast('Archived terminal — click Restore to open it', 3000); return; }
+      if (s.archived) { restoreAndOpen(id); return; }
       pick(id);
     }
     window.addEventListener('message', e => {

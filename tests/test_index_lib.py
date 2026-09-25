@@ -3,7 +3,9 @@
 The left column is no longer twelve numbered slots but a library of named
 topics (sessions): search, «＋ New topic», loaded ones first with a status dot,
 unloaded ones greyed, each row = name + 8-hex code + ✎ + «Archive» (one click).
-«Show archived» at the bottom lists archived topics greyed, each with «Restore».
+«Show archived» at the bottom lists archived topics greyed, each with «Delete»;
+one click on an archived row restores it and opens it (no Restore button).
+Archive unloads the terminal (the server says unloaded true|false + reason).
 A click opens the one terminal endpoint `/sess/?arg=<id>` in the iframe.
 All UI text is English (owner, 2026-09-25) — topic names are user data.
 
@@ -66,6 +68,8 @@ class FakeAPI:
         self.fail_new = False
         self.fail_reorder = False
         self.fail_shell_close = False
+        self.fail_archive = False
+        self.busy = set()          # ids the fake server reports as working on Archive
         self.shell = None          # top-level "shell" of GET /api/library (None = absent)
         self._n = 0
 
@@ -132,8 +136,18 @@ class FakeAPI:
             e["name"] = body["name"]
             return self._json(route, e)
         if path == "/api/library/archive":
+            if self.fail_archive:
+                return self._json(route, {"error": "disk full"}, 500)
             e["archived"] = bool(body.get("archived"))
-            return self._json(route, e)
+            if not e["archived"]:
+                return self._json(route, e)
+            loaded = e["active"]
+            busy = loaded and sid in self.busy
+            if loaded and not busy:
+                e["active"], e["status"] = False, "off"
+            return self._json(route, dict(
+                e, unloaded=loaded and not busy, unload_pending=busy,
+                reason="working" if busy else "idle" if loaded else "not-loaded"))
         if path == "/api/library/reorder":
             if self.fail_reorder:
                 return self._json(route, {"error": "disk full"}, 500)
@@ -471,9 +485,11 @@ def test_show_archived_toggle_lists_archived_rows(page, api):
     assert any(u.endswith("/api/library?archived=1") for u in api.urls[n:])
     cls = page.get_attribute(row("ffff0005"), "class")
     assert "archived" in cls
-    # archived rows are greyed, after the live ones, and have Restore (not Archive)
+    # archived rows are greyed, after the live ones, with Delete and no Restore/Archive
     assert row_ids(page)[-1] == "ffff0005"
-    assert page.inner_text(row("ffff0005") + " .arch-btn").strip() == "Restore"
+    assert not page.is_visible(row("ffff0005") + " .arch-btn")
+    assert page.is_visible(row("ffff0005") + " .del-btn")
+    assert "Restore" not in page.inner_text(row("ffff0005"))
     page.mouse.move(900, 450)                          # not hovering the row
     page.wait_for_timeout(200)
     op = float(page.eval_on_selector(row("ffff0005"), "e => getComputedStyle(e).opacity"))
@@ -488,17 +504,22 @@ def test_show_archived_toggle_lists_archived_rows(page, api):
     page.wait_for_selector(row("ffff0005"), state="detached")
 
 
-def test_restore_sends_archived_false_and_row_returns(page, api):
+def test_click_on_an_archived_row_restores_and_opens_it(page, api):
     api.sessions.append(archived_session())
     page.click("#showArchived")
     page.wait_for_selector(row("ffff0005"))
-    page.click(row("ffff0005") + " .arch-btn")
+    page.click(row("ffff0005") + " .proj")
     page.wait_for_function(
         "() => { const c = document.querySelector('#list .card[data-sid=\"ffff0005\"]');"
         " return c && !c.classList.contains('archived'); }", timeout=3000)
+    page.wait_for_function("() => (document.querySelector('#wrap iframe')||{}).getAttribute"
+                           " && document.querySelector('#wrap iframe').getAttribute('src')"
+                           " === '/sess/?arg=ffff0005'", timeout=3000)
     assert api.posts("/api/library/archive") == [
         ("POST", "/api/library/archive", {"id": "ffff0005", "archived": False})]
+    assert page.inner_text("#tNum") == "ffff0005"
     assert page.inner_text(row("ffff0005") + " .arch-btn").strip() == "Archive"
+    assert not page.is_visible(row("ffff0005") + " .del-btn")
     # and it stays when the archived view is switched off
     page.click("#showArchived")
     page.wait_for_timeout(300)
@@ -541,7 +562,67 @@ def test_archive_survives_the_toggle_being_on(page, api):
     page.wait_for_function(
         "() => document.querySelector('#list .card[data-sid=\"cccc0003\"]')"
         "?.classList.contains('archived')", timeout=3000)
-    assert page.inner_text(row("cccc0003") + " .arch-btn").strip() == "Restore"
+    assert not page.is_visible(row("cccc0003") + " .arch-btn")
+    assert page.is_visible(row("cccc0003") + " .del-btn")
+
+
+# ── Archive unloads; a click on an archived row restores + opens (owner 2026-09-25) ──
+def _toast_has(pg, text, timeout=3000):
+    pg.wait_for_function("t => ((document.getElementById('_imgToast')||{}).textContent||'')"
+                         ".includes(t)", arg=text, timeout=timeout)
+
+
+def test_archive_toast_says_unloaded(page, api):
+    page.click(row("bbbb0002") + " .arch-btn")               # loaded, not busy
+    _toast_has(page, "Archived and unloaded")
+
+
+def test_archive_toast_says_busy_terminal_unloads_later(page, api):
+    api.busy.add("bbbb0002")
+    page.click(row("bbbb0002") + " .arch-btn")
+    _toast_has(page, "Archived — it's busy, it will unload when it finishes")
+
+
+def test_archiving_the_open_terminal_goes_back_to_the_placeholder(page, api):
+    page.click(row("dddd0004") + " .proj")
+    page.wait_for_selector("#wrap iframe")
+    page.click(row("dddd0004") + " .arch-btn")
+    page.wait_for_selector("#wrap iframe", state="detached", timeout=3000)
+    assert page.is_visible("#ph")
+    assert api.posts("/api/library/archive") == [
+        ("POST", "/api/library/archive", {"id": "dddd0004", "archived": True})]
+
+
+def test_archiving_another_terminal_keeps_the_viewer(page, api):
+    page.click(row("dddd0004") + " .proj")
+    page.wait_for_selector("#wrap iframe")
+    page.click(row("cccc0003") + " .arch-btn")
+    page.wait_for_selector(row("cccc0003"), state="detached")
+    assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=dddd0004"
+
+
+def test_archived_row_found_by_search_restores_and_opens_on_click(page, api):
+    api.sessions.append(archived_session())
+    page.fill("#search", "old arch")
+    page.wait_for_selector(row("ffff0005"), timeout=3000)
+    page.click(row("ffff0005") + " .proj")
+    page.wait_for_function("() => (document.querySelector('#wrap iframe')||{}).getAttribute"
+                           " && document.querySelector('#wrap iframe').getAttribute('src')"
+                           " === '/sess/?arg=ffff0005'", timeout=3000)
+    assert api.posts("/api/library/archive") == [
+        ("POST", "/api/library/archive", {"id": "ffff0005", "archived": False})]
+    assert next(s for s in api.sessions if s["id"] == "ffff0005")["archived"] is False
+
+
+def test_failed_restore_does_not_open_and_says_so(page, api):
+    api.sessions.append(archived_session())
+    api.fail_archive = True
+    page.click("#showArchived")
+    page.wait_for_selector(row("ffff0005"))
+    page.click(row("ffff0005") + " .proj")
+    _toast_has(page, "Not restored")
+    assert page.query_selector("#wrap iframe") is None
+    assert "archived" in page.get_attribute(row("ffff0005"), "class")
 
 
 # ── delete (archived rows only) ────────────────────────────────────────────
@@ -587,17 +668,18 @@ def test_delete_error_keeps_the_row(page, api):
     assert page.query_selector(row("ffff0005")) is not None
 
 
-def test_delete_button_sits_next_to_restore(page, api):
+def test_delete_button_takes_the_place_of_archive(page, api):
     api.sessions.append(archived_session())
     page.click("#showArchived")
     page.wait_for_selector(row("ffff0005"))
+    assert not page.is_visible(row("ffff0005") + " .arch-btn")
     boxes = [page.eval_on_selector(row("ffff0005") + " " + sel,
                                    "e => { const r = e.getBoundingClientRect();"
                                    " return [r.top, r.bottom, r.left, r.right]; }")
-             for sel in (".arch-btn", ".del-btn")]
-    (at, ab, al, ar), (dt, db, dl, dr) = boxes
-    assert abs(at - dt) < 4 and abs(ab - db) < 4           # same line
-    assert dl >= ar or dr <= al                            # side by side, no overlap
+             for sel in (".sid", ".del-btn")]
+    (st, sb, sl, sr), (dt, db, dl, dr) = boxes
+    assert abs((st + sb) / 2 - (dt + db) / 2) < 4          # same line as the code
+    assert dl >= sr                                        # to its right, no overlap
 
 
 # ── search also covers the archive ─────────────────────────────────────────
@@ -608,7 +690,7 @@ def test_search_shows_archived_matches_with_toggle_off(page, api):
     page.wait_for_selector(row("ffff0005"), timeout=3000)
     assert row_ids(page) == ["ffff0005"]
     assert "archived" in page.get_attribute(row("ffff0005"), "class")
-    assert page.inner_text(row("ffff0005") + " .arch-btn").strip() == "Restore"
+    assert not page.is_visible(row("ffff0005") + " .arch-btn")
     assert page.is_visible(row("ffff0005") + " .del-btn")
     page.wait_for_timeout(4500)                        # survives a poll while searching
     assert row_ids(page) == ["ffff0005"]
@@ -748,7 +830,7 @@ def _exercise(pg):
     pg.click(row("cccc0003") + " .arch-btn")                  # toast
     pg.wait_for_function("() => (document.getElementById('_imgToast')||{}).textContent")
     bad += _cyrillic(pg)
-    pg.click(row("ffff0005") + " .arch-btn")                  # restore toast
+    pg.click(row("ffff0005") + " .proj")                      # restore + open toast
     pg.wait_for_timeout(300)
     bad += _cyrillic(pg)
     pg.click(row("aaaa0001") + " .card-btn.edit")
@@ -1930,6 +2012,22 @@ def test_board_message_for_an_unknown_terminal_only_toasts(browser, site):
         ctx.close()
 
 
+def test_board_message_for_an_archived_terminal_restores_and_opens_it(browser, site):
+    api = FakeAPI()
+    api.sessions.append(archived_session())
+    ctx, pg = _tasks_stubbed(browser, site, api)
+    try:
+        fr = _board_frame(pg)
+        fr.evaluate("() => parent.postMessage({type: 'agentdeck:open-terminal', id: 'ffff0005'},"
+                    " location.origin)")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=ffff0005'", timeout=3000)
+        assert api.posts("/api/library/archive") == [
+            ("POST", "/api/library/archive", {"id": "ffff0005", "archived": False})]
+    finally:
+        ctx.close()
+
+
 def test_foreign_origin_message_is_ignored(browser, site):
     api = FakeAPI()
     ctx, pg = _tasks_stubbed(browser, site, api)
@@ -1958,6 +2056,21 @@ def test_open_param_on_load_opens_that_terminal_and_is_removed(browser, site):
                              " === '/sess/?arg=cccc0003'")
         assert "open=" not in pg.url
         assert pg.url.endswith("/index-lib.html")
+    finally:
+        ctx.close()
+
+
+def test_open_param_for_an_archived_terminal_restores_and_opens_it(browser, site):
+    api = FakeAPI()
+    api.sessions.append(archived_session())
+    ctx, pg = _open(browser, site + "?open=ffff0005", api)
+    try:
+        pg.wait_for_function("() => (document.querySelector('#wrap iframe')||{}).getAttribute"
+                             " && document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=ffff0005'", timeout=3000)
+        assert api.posts("/api/library/archive") == [
+            ("POST", "/api/library/archive", {"id": "ffff0005", "archived": False})]
+        assert "open=" not in pg.url
     finally:
         ctx.close()
 

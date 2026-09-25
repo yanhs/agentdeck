@@ -16,6 +16,7 @@ import unicodedata
 from urllib.parse import urlparse, parse_qs
 
 import library   # session registry (library.py next to this file)
+import idle_reaper   # background-task detection (tree_has_task_output), pure /proc walk
 import server_status   # the Server page's collector (GET /api/server)
 
 SESSIONS = [
@@ -737,6 +738,7 @@ def lib_post(route, body):
 
 LIB_REORDER_MAX = 10000
 DELETE_QUIET_SECONDS = 120     # no output for 2 min = idle enough to unload for delete
+ARCHIVE_BUSY_SECONDS = 15      # output this recent = working: Archive leaves it loaded
 
 
 def lib_reorder(ids):
@@ -764,27 +766,58 @@ def lib_idle_loaded(sid, info):
     return last is not None and time.time() - last >= DELETE_QUIET_SECONDS
 
 
+def lib_busy_reason(sid, info, working):
+    """Why a loaded terminal must not be unloaded right now, or None when it
+    may go. The owner's top rule is "never interrupt work": printing in the
+    last ARCHIVE_BUSY_SECONDS (unknown output time counts as printing), an
+    unexpired hold marker (a timer is pending), a live background task, or the
+    cards' CPU status 'working'. An open tab is NOT a reason."""
+    now = time.time()
+    last = lib_last_output(library.tmux_name(sid))
+    if last is None or now - last < ARCHIVE_BUSY_SECONDS:
+        return "printing"
+    if library.held(sid, now, lib_file=lib_path()):
+        return "hold"
+    pid = info.get("pane_pid")
+    if pid and idle_reaper.tree_has_task_output(pid):
+        return "background-task"
+    if working:
+        return "working"
+    return None
+
+
 def lib_archive(sid, archived):
-    """Archive/restore. Archived terminals must not stay in RAM (owner): a loaded
-    one that is idle is unloaded right away; one in use (tab open or printing)
-    is left alone and reported as unload_pending — idle_reaper unloads it once
-    it has been idle for the same window."""
+    """Archive/restore. Archive unloads the terminal right away (owner: "When I
+    press Archive, the terminal should unload") — even with a tab open, since
+    the owner pressed Archive on purpose — unless it is working
+    (lib_busy_reason): then it stays loaded, unload_pending, and idle_reaper
+    unloads it once quiet (ARCHIVED_IDLE_SECONDS). The reply says which:
+    unloaded true|false + reason (idle | printing | hold | background-task |
+    working | not-loaded)."""
     try:
         with library.update(lib_path()) as lib:
             e = dict(library.archive(lib, sid, archived))
     except KeyError:
         raise LibError(404, "unknown id")
-    pending = False
-    if archived:
-        info = lib_live().get(sid)
-        if info is not None:
-            if lib_idle_loaded(sid, info):
-                lib_tmux("kill-session", "-t", "=" + library.tmux_name(sid))
-            else:
-                pending = True
-    row = lib_rows([e])[0]
-    if archived:
-        row["unload_pending"] = pending
+    if not archived:
+        return lib_rows([e])[0]
+    live = lib_live()
+    info = live.get(sid)
+    working = {}
+    if info is None:
+        unloaded, reason = False, "not-loaded"
+    else:
+        working = sample_working({sid: info["pane_pid"]})
+        reason = lib_busy_reason(sid, info, working.get(sid, False))
+        unloaded = reason is None
+        if unloaded:
+            lib_tmux("kill-session", "-t", "=" + library.tmux_name(sid))
+            reason = "idle"
+            live, working = None, {}
+    row = lib_rows([e], live=live, working=working)[0]
+    row["unloaded"] = unloaded
+    row["reason"] = reason
+    row["unload_pending"] = info is not None and not unloaded
     return row
 
 

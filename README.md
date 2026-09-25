@@ -35,9 +35,10 @@ working reference you adapt, not a turn-key installer.
 - **Named terminals, no slot numbers.** Each terminal has a name and an 8-character code —
   the start of its Claude session id, so the dashboard, the tmux session (`cs-<code>`), the
   logs and the transcript file all match. **＋ New terminal**, rename (✎), drag to reorder,
-  **Archive** / **Restore**, and **Delete** (archived only; the transcript goes to
+  **Archive** (also unloads the terminal right away — unless it is working, then it unloads
+  once it finishes), and **Delete** (archived only; the transcript goes to
   `.sessions/trash/`, never erased). Search finds terminals by name or code, archived ones
-  too.
+  too; clicking an archived terminal restores it and opens it.
 - **Persistent sessions.** An agent keeps running after you **close the tab, close the
   browser, or disconnect**. Opening it again (or after a restart) resumes the exact same
   conversation via `claude --resume`. Nothing is lost.
@@ -86,7 +87,7 @@ working reference you adapt, not a turn-key installer.
 
 | Login gate | Tasks tab in the dashboard | Archived terminals |
 |---|---|---|
-| ![Login](docs/screenshots/login.png) | ![The task board open as a tab inside the dashboard](docs/screenshots/tasks-tab.png) | ![Show archived: archived terminals with Restore and Delete](docs/screenshots/archive.png) |
+| ![Login](docs/screenshots/login.png) | ![The task board open as a tab inside the dashboard](docs/screenshots/tasks-tab.png) | ![Show archived: archived terminals with Delete; a click restores one](docs/screenshots/archive.png) |
 
 | Task board | Task board (dark) | Telegram bridge |
 |---|---|---|

@@ -702,46 +702,110 @@ def test_reorder_has_the_same_csrf_checks(api, monkeypatch):
     assert all("pos" not in e for e in library.load(api.lib)["sessions"])
 
 
-# ── archive unloads an idle loaded terminal (owner: archived must not stay in RAM) ──
-def test_archive_unloads_a_loaded_idle_terminal_at_once(api, monkeypatch):
+# ── Archive unloads at once unless the terminal is working (owner 2026-09-25:
+#    "When I press Archive, the terminal should unload"; top rule: never
+#    interrupt work — printing in the last ~15 s, a live background task, an
+#    unexpired hold marker or CPU status 'working' keep it loaded, and
+#    idle_reaper unloads it once quiet). An open tab does NOT keep it. ──
+@pytest.fixture
+def quiet(api, monkeypatch):
+    """A loaded terminal that is not working: last output 60 s ago, no CPU."""
+    monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 60)
+    monkeypatch.setattr(api.ss, "sample_working", lambda pids: {k: False for k in pids})
+    return api
+
+
+def test_archive_unloads_a_loaded_quiet_terminal_at_once(quiet):
+    api = quiet
     _seed(api, (U1, "в архив", 10), (U2, "соседка", 20))
     _start(api, "cs-aaaa1111")
     _start(api, "cs-bbbb2222")
-    monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 1000)
     code, e = post(api, "archive", {"id": "aaaa1111"})
     assert code == 200, e
-    assert e["archived"] is True and e["active"] is False and e["unload_pending"] is False
+    assert e["archived"] is True and e["active"] is False
+    assert e["unloaded"] is True and e["unload_pending"] is False
     assert not _alive(api, "cs-aaaa1111")
     assert _alive(api, "cs-bbbb2222")                        # only its own session
 
 
-def test_archive_leaves_a_working_terminal_loaded_and_says_so(api, monkeypatch):
-    _seed(api, (U1, "работает", 10))
+def test_archive_unloads_even_with_a_tab_open(quiet, monkeypatch):
+    api = quiet
+    _seed(api, (U1, "во вкладке", 10))
+    _start(api, "cs-aaaa1111")
+    real = api.ss.lib_live
+    monkeypatch.setattr(api.ss, "lib_live",
+                        lambda: {k: dict(v, attached=True) for k, v in real().items()})
+    code, e = post(api, "archive", {"id": "aaaa1111"})
+    assert code == 200 and e["unloaded"] is True
+    assert not _alive(api, "cs-aaaa1111")
+
+
+def test_archive_keeps_a_terminal_that_printed_in_the_last_seconds(quiet, monkeypatch):
+    api = quiet
+    _seed(api, (U1, "печатает", 10))
     _start(api, "cs-aaaa1111")
     monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 5)
     code, e = post(api, "archive", {"id": "aaaa1111"})
     assert code == 200 and e["archived"] is True
-    assert e["unload_pending"] is True and e["active"] is True
-    assert _alive(api, "cs-aaaa1111")
+    assert e["unloaded"] is False and e["unload_pending"] is True and e["reason"] == "printing"
+    assert e["active"] is True and _alive(api, "cs-aaaa1111")
     assert library.find(library.load(api.lib), "aaaa1111")["archived"] is True
 
 
-def test_archive_leaves_an_attached_terminal_loaded(api, monkeypatch):
-    _seed(api, (U1, "во вкладке", 10))
+def test_archive_busy_window_is_about_fifteen_seconds(quiet, monkeypatch):
+    api = quiet
+    assert api.ss.ARCHIVE_BUSY_SECONDS == 15
+    _seed(api, (U1, "затихла", 10))
     _start(api, "cs-aaaa1111")
-    monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 1000)
-    monkeypatch.setattr(api.ss, "lib_live",
-                        lambda: {"aaaa1111": {"attached": True, "pane_pid": None}})
-    code, e = post(api, "archive", {"id": "aaaa1111"})
-    assert code == 200 and e["unload_pending"] is True
-    assert _alive(api, "cs-aaaa1111")
+    monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 20)
+    assert post(api, "archive", {"id": "aaaa1111"})[1]["unloaded"] is True
 
 
-def test_archive_unknown_output_time_counts_as_working(api, monkeypatch):
+def test_archive_unknown_output_time_counts_as_working(quiet, monkeypatch):
+    api = quiet
     _seed(api, (U1, "неясно", 10))
     _start(api, "cs-aaaa1111")
     monkeypatch.setattr(api.ss, "lib_last_output", lambda name: None)
-    assert post(api, "archive", {"id": "aaaa1111"})[1]["unload_pending"] is True
+    e = post(api, "archive", {"id": "aaaa1111"})[1]
+    assert e["unloaded"] is False and e["reason"] == "printing"
+    assert _alive(api, "cs-aaaa1111")
+
+
+def test_archive_keeps_a_terminal_with_a_hold_marker(quiet):
+    api = quiet
+    _seed(api, (U1, "таймер", 10))
+    _start(api, "cs-aaaa1111")
+    library.set_hold("aaaa1111", time.time() + 600, api.lib)
+    e = post(api, "archive", {"id": "aaaa1111"})[1]
+    assert e["unloaded"] is False and e["unload_pending"] is True and e["reason"] == "hold"
+    assert _alive(api, "cs-aaaa1111")
+
+
+def test_archive_ignores_an_expired_hold_marker(quiet):
+    api = quiet
+    _seed(api, (U1, "старый таймер", 10))
+    _start(api, "cs-aaaa1111")
+    library.set_hold("aaaa1111", time.time() - 5, api.lib)
+    assert post(api, "archive", {"id": "aaaa1111"})[1]["unloaded"] is True
+
+
+def test_archive_keeps_a_terminal_with_a_background_task(quiet, monkeypatch):
+    api = quiet
+    _seed(api, (U1, "фон", 10))
+    _start(api, "cs-aaaa1111")
+    monkeypatch.setattr(api.ss.idle_reaper, "tree_has_task_output", lambda pid: True)
+    e = post(api, "archive", {"id": "aaaa1111"})[1]
+    assert e["unloaded"] is False and e["reason"] == "background-task"
+    assert _alive(api, "cs-aaaa1111")
+
+
+def test_archive_keeps_a_terminal_whose_status_is_working(quiet, monkeypatch):
+    api = quiet
+    _seed(api, (U1, "CPU", 10))
+    _start(api, "cs-aaaa1111")
+    monkeypatch.setattr(api.ss, "sample_working", lambda pids: {k: True for k in pids})
+    e = post(api, "archive", {"id": "aaaa1111"})[1]
+    assert e["unloaded"] is False and e["reason"] == "working" and e["status"] == "working"
     assert _alive(api, "cs-aaaa1111")
 
 
@@ -749,6 +813,7 @@ def test_archive_of_an_unloaded_terminal_has_nothing_pending(api):
     _seed(api, (U1, "выгружена", 10))
     code, e = post(api, "archive", {"id": "aaaa1111"})
     assert code == 200 and e["unload_pending"] is False and e["active"] is False
+    assert e["unloaded"] is False and e["reason"] == "not-loaded"
 
 
 def test_restore_never_unloads(api, monkeypatch):
