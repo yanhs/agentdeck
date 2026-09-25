@@ -77,7 +77,20 @@
       flex-direction: column;
       gap: 4px;
     }
-    .lib-tools.creating #newBtn, .lib-tools.creating #search { display: none; }
+    .lib-tools.creating .new-row, .lib-tools.creating #search { display: none; }
+    /* [＋ New terminal][cmd] — cmd opens the one plain command line */
+    .new-row { display: flex; gap: 3px; min-width: 0; }
+    .new-row .new-btn { flex: 1 1 0; min-width: 0; }
+    .new-row .cmd-btn {
+      flex: none;
+      width: auto;
+      padding: 0 7px;
+      font-family: 'JetBrains Mono', monospace;
+      background: rgba(255,255,255,0.04);
+      border-color: rgba(255,255,255,0.16);
+      color: #d4d4d8;
+    }
+    .new-row .cmd-btn:hover { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.3); color: #fafafa; }
 
     .new-btn {
       width: 100%;
@@ -153,6 +166,9 @@
     .card.unloaded:hover .proj { color: #a1a1aa; }
     /* The first unloaded row after the loaded group draws the seam. */
     .card.first-off { border-top: 1px solid rgba(255,255,255,0.10); }
+    /* The command line: pinned above the topics, no rename/archive/drag. */
+    .card.shell-row { border-bottom: 1px solid rgba(255,255,255,0.10); }
+    .card.shell-row .proj { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; }
 
     .card-top {
       display: flex;
@@ -489,6 +505,9 @@
       .side-top .sidebar-header { order: 2; flex: none; border-bottom: none; padding: 4px 8px 4px 5px; }
       .lib-tools { order: 1; flex: 1; min-width: 0; flex-direction: row; align-items: center; border-bottom: none; padding: 4px 0 4px 8px; }
       .new-btn { width: auto; flex: none; height: 26px; padding: 0 8px; font-size: 0.72rem; }
+      .new-row { flex: none; }
+      .new-row .new-btn { flex: none; }
+      .new-row .cmd-btn { padding: 0 6px; }
       /* 16px: iOS zooms the page into any input with a smaller font. */
       .lib-input { flex: 1 1 0; height: 26px; font-size: 16px; }
       .new-form { flex: 1; min-width: 0; }
@@ -581,7 +600,10 @@
         </div>
       </div>
       <div class="lib-tools" id="libTools">
-        <button type="button" class="new-btn" id="newBtn" title="Start a new terminal (a new Claude conversation)">＋ New terminal</button>
+        <div class="new-row" id="newRow">
+          <button type="button" class="new-btn" id="newBtn" title="Start a new terminal (a new Claude conversation)">＋ New terminal</button>
+          <button type="button" class="new-btn cmd-btn" id="cmdBtn" title="Command line: one plain bash shell (pressing it again reopens the same one)">cmd</button>
+        </div>
         <form class="new-form" id="newForm" hidden autocomplete="off">
           <input class="lib-input" id="newName" type="text" maxlength="200" placeholder="New terminal name" autocomplete="off" autocorrect="off" spellcheck="false">
           <button type="submit" id="newOk" title="Create and open (Enter)">✓</button>
@@ -644,6 +666,24 @@
     const newOk = document.getElementById('newOk');
     const libEmpty = document.getElementById('libEmpty');
     const archToggle = document.getElementById('showArchived');
+    /* ── cmd: the one plain command line (tmux cmd-shell, /sess/?arg=shell).
+       GET /api/library reports it in `shell` (not in sessions[]); while it is
+       loaded it is a row pinned above the topics. `sel === SHELL` = it is open. */
+    const SHELL = 'shell';
+    const SHELL_PATH = '/sess/?arg=shell';
+    let shellState = null;     // {active, attached, status} from the last poll
+    const shellRow = document.createElement('div');
+    shellRow.className = 'card shell-row';
+    shellRow.dataset.shell = '1';
+    shellRow.innerHTML = `
+        <div class="card-top">
+          <div class="proj">Command line</div>
+          <div class="card-btns"><span class="dot off"></span></div>
+        </div>
+        <div class="card-row2"><span class="sid">bash</span></div>`;
+    shellRow.title = 'Command line (bash) — click to open';
+    shellRow.addEventListener('click', () => pickShell());
+    document.getElementById('cmdBtn').addEventListener('click', () => pickShell());
     if (_isMobile) search.placeholder = 'Search';   // 16px font, ~130px wide on a phone
     // "Show archived" is remembered per browser (storage may be unavailable)
     let showArch = false;
@@ -796,14 +836,33 @@
                 : st === 'working' ? 'loaded, working' : 'loaded, idle';
     }
 
+    function shellShown() {
+      if (!shellState || !shellState.active) return false;
+      const q = norm(search.value);
+      return !q || 'command line cmd shell bash'.includes(q);
+    }
+
+    function fillShell() {
+      shellRow.classList.toggle('sel', sel === SHELL);
+      const st = shellState && shellState.status === 'working' ? 'working' : 'idle';
+      const dot = shellRow.querySelector('.dot');
+      dot.className = 'dot ' + st;
+      dot.title = st === 'working' ? 'loaded, working' : 'loaded, idle';
+    }
+
     function render() {
       if (editing) return;                    // never pull the input out from under the user
+      const showShell = shellShown();
+      if (showShell) {
+        fillShell();
+        if (list.firstChild !== shellRow) list.insertBefore(shellRow, list.firstChild);
+      } else if (shellRow.parentNode) shellRow.remove();
       const want = ordered();
       const keep = new Set(want.map(s => s.id));
       for (const [id, el] of rows) if (!keep.has(id)) { el.remove(); rows.delete(id); }
       const anyOn = want.some(s => s.active && !s.archived);
       const anyLive = want.some(s => !s.archived);
-      let prev = null, seenOff = false, seenArch = false;
+      let prev = showShell ? shellRow : null, seenOff = false, seenArch = false;
       for (const s of want) {
         const c = rows.get(s.id) || makeRow(s.id);
         fill(c, s, anyOn && !s.active && !s.archived && !seenOff,
@@ -832,7 +891,9 @@
 
     function syncSel() {
       for (const [i, el] of rows) el.classList.toggle('sel', i === sel);
-      if (sel) syncTop(byId(sel) || {id: sel, name: ''});
+      shellRow.classList.toggle('sel', sel === SHELL);
+      if (sel === SHELL) syncTop(Object.assign({id: SHELL, name: 'Command line'}, shellState || {}));
+      else if (sel) syncTop(byId(sel) || {id: sel, name: ''});
     }
 
     let _searching = false;
@@ -950,10 +1011,11 @@
       mutSeq++;
       render();
       try {
-        await jpost('/api/library/archive', {id, archived});
+        const d = await jpost('/api/library/archive', {id, archived});
         const nm = (s ? s.name : id).slice(0, 40);
-        _toast(archived ? 'Archived “' + nm + '” — the conversation is kept'
-                        : 'Restored “' + nm + '”', 3000);
+        _toast(!archived ? 'Restored “' + nm + '”'
+               : d && d.unload_pending ? 'Archived “' + nm + '” — it is busy, so it stays loaded until idle'
+               : 'Archived “' + nm + '” — the conversation is kept', 3000);
       } catch (err) {
         if (s) s.archived = was;
         render();
@@ -1033,7 +1095,21 @@
       // server refuses a second Claude on the same conversation)
       const row = sessions.find(s => s.id === id);
       const legacy = row && typeof row.legacy_path === 'string' && /^\/terminal\d*\/$/.test(row.legacy_path) ? row.legacy_path : null;
-      const path = legacy || ('/sess/?arg=' + id);
+      openFrame(legacy || ('/sess/?arg=' + id));
+    }
+
+    // cmd button / "Command line" row: the server starts the shell if needed
+    // and every tab attaches to the same one
+    function pickShell() {
+      sel = SHELL;
+      document.getElementById('topbar').style.display = 'flex';
+      document.getElementById('tNum').textContent = 'cmd';
+      syncSel();
+      openFrame(SHELL_PATH);
+      if (!(shellState && shellState.active)) setTimeout(poll, 1500);   // show its row
+    }
+
+    function openFrame(path) {
       document.getElementById('tOpen').href = path;
       const wrap = document.getElementById('wrap');
       const ph = document.getElementById('ph'); if (ph) ph.remove();
@@ -1472,7 +1548,7 @@
 
     function syncTop(s) {
       const el = document.getElementById('tInfo');
-      const st = s.archived ? 'archived' : !s.active ? 'unloaded'
+      const st = s.archived ? 'archived' : !s.active ? (s.id === SHELL ? 'starting' : 'unloaded')
                : s.status === 'working' ? 'working' : 'idle';
       el.innerHTML = s.name ? '<b>' + esc(s.name) + '</b> &mdash; ' + st : '';
     }
@@ -1507,7 +1583,12 @@
         const d = await r.json();
         if (d && d._system) setSystem(d._system);
         else if (_sysTick++ % 2 === 0) pollSystem();
-        if (!d || !Array.isArray(d.sessions)) return;
+        const sh = d && d.shell;
+        shellState = sh && typeof sh === 'object'
+          ? {active: sh.active === true, attached: sh.attached === true,
+             status: sh.status === 'working' ? 'working' : 'idle'}
+          : null;
+        if (!d || !Array.isArray(d.sessions)) { render(); syncSel(); return; }
         if (seq !== mutSeq) return;              // a local change raced this poll — next one is fresh
         sessions = d.sessions
           .filter(s => s && ID_RE.test(s.id))

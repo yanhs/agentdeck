@@ -267,3 +267,65 @@ def test_session_held_only_for_library_names(monkeypatch, tmp_path):
     assert reaper.session_held("cs-aaaaaaaa", now=1) is True
     assert reaper.session_held("cs-bbbbbbbb", now=1) is False
     assert reaper.session_held("claude-terminal-3", now=1) is False
+
+
+# ── archived terminals: unloaded as soon as idle (120 s), not after 2 h ────
+def _archived(monkeypatch, ids):
+    monkeypatch.setattr(reaper, "archived_ids", lambda: set(ids))
+
+
+def test_archived_idle_terminal_goes_after_two_minutes(monkeypatch, tmp_path):
+    now = 100_000
+    t = FakeTmux({"cs-aaaaaaaa": dict(activity=now - 130, attached=False, bg=False),
+                  "cs-bbbbbbbb": dict(activity=now - 130, attached=False, bg=False)})
+    t.install(monkeypatch, tmp_path)
+    _archived(monkeypatch, {"aaaaaaaa"})
+    assert reaper.sweep(now=now) == ["cs-aaaaaaaa"]           # the live one keeps 2 h
+
+
+def test_archived_terminal_is_kept_while_in_use(monkeypatch, tmp_path):
+    now = 100_000
+    t = FakeTmux({"cs-aaaaaaaa": dict(activity=now - 60, attached=False, bg=False),
+                  "cs-bbbbbbbb": dict(activity=now - 1000, attached=True, bg=False),
+                  "cs-cccccccc": dict(activity=now - 1000, attached=False, bg=True),
+                  "cs-dddddddd": dict(activity=None, attached=False, bg=False)})
+    t.install(monkeypatch, tmp_path)
+    _archived(monkeypatch, {"aaaaaaaa", "bbbbbbbb", "cccccccc", "dddddddd"})
+    assert reaper.sweep(now=now) == []
+
+
+def test_archived_held_terminal_is_kept(monkeypatch, tmp_path):
+    now = 100_000
+    t = FakeTmux({"cs-aaaaaaaa": dict(activity=now - 1000, attached=False, bg=False)})
+    t.install(monkeypatch, tmp_path)
+    _archived(monkeypatch, {"aaaaaaaa"})
+    monkeypatch.setattr(reaper, "session_held", lambda s, n: True)
+    assert reaper.sweep(now=now) == []
+
+
+def test_closing_the_tab_of_an_archived_terminal_restarts_its_two_minutes(monkeypatch, tmp_path):
+    now = 100_000
+    t = FakeTmux({"cs-aaaaaaaa": dict(activity=now - 5000, attached=True, bg=False)})
+    t.install(monkeypatch, tmp_path)
+    _archived(monkeypatch, {"aaaaaaaa"})
+    assert reaper.sweep(now=now) == []
+    t.sessions["cs-aaaaaaaa"]["attached"] = False
+    assert reaper.sweep(now=now + 60) == []
+    assert reaper.sweep(now=now + 125) == ["cs-aaaaaaaa"]
+
+
+def test_archived_window_default_is_120s():
+    assert reaper.ARCHIVED_IDLE_SECONDS == 120
+
+
+def test_archived_ids_read_the_registry(monkeypatch, tmp_path):
+    lib = tmp_path / "library.json"
+    monkeypatch.setenv("AGENTDECK_LIBRARY", str(lib))
+    assert reaper.archived_ids() == set()                     # no registry yet
+    with reaper.library.update(str(lib)) as L:
+        a = reaper.library.create(L, "a", cwd="/", now=1, uuid="aaaaaaaa-1111-4111-8111-111111111111")
+        reaper.library.create(L, "b", cwd="/", now=1, uuid="bbbbbbbb-1111-4111-8111-111111111111")
+        a["archived"] = True
+    assert reaper.archived_ids() == {"aaaaaaaa"}
+    lib.write_text("{broken")
+    assert reaper.archived_ids() == set()                     # never guess towards killing

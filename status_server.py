@@ -532,12 +532,30 @@ def lib_status(active, working):
     return "off" if not active else ("working" if working else "idle")
 
 
-def lib_rows(entries, live=None, legacy_paths=None):
+def lib_shell_live():
+    """The dashboard's command line (tmux cmd-shell, exact name):
+    {"attached": bool, "pane_pid": int|None}, or None when it is not running."""
+    r = lib_tmux("list-panes", "-a", "-F",
+                 "#{session_name}\t#{session_attached}\t#{pane_pid}")
+    for line in r.stdout.splitlines() if r.returncode == 0 else []:
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[0] == library.SHELL_TMUX:
+            return {"attached": parts[1] not in ("", "0"),
+                    "pane_pid": int(parts[2]) if parts[2].isdigit() else None}
+    return None
+
+
+_SHELL_KEY = "\0shell"        # never a valid id: cannot collide with a topic's key
+
+
+def lib_rows(entries, live=None, legacy_paths=None, working=None):
     """Registry entries -> API rows with tmux state (samples CPU once for all).
-    live / legacy_paths: pass what the caller already has (one scan per request)."""
+    live / legacy_paths / working: pass what the caller already has (one scan
+    and one CPU sample per request)."""
     live = lib_live() if live is None else live
-    working = sample_working({e["id"]: live[e["id"]]["pane_pid"]
-                              for e in entries if e["id"] in live})
+    if working is None:
+        working = sample_working({e["id"]: live[e["id"]]["pane_pid"]
+                                  for e in entries if e["id"] in live})
     legacy_paths = lib_legacy() if legacy_paths is None else legacy_paths
     rows = []
     for e in entries:
@@ -559,7 +577,17 @@ def lib_listing(include_archived=False):
     legacy = lib_legacy()
     active = set(live) | {e["id"] for e in lib["sessions"] if e.get("uuid") in legacy}
     entries = library.display_order(lib, active, include_archived=include_archived)
-    return {"max_active": library.MAX_ACTIVE, "sessions": lib_rows(entries, live, legacy),
+    shell = lib_shell_live()
+    pids = {e["id"]: live[e["id"]]["pane_pid"] for e in entries if e["id"] in live}
+    if shell is not None:
+        pids[_SHELL_KEY] = shell["pane_pid"]
+    working = sample_working(pids)                  # one CPU sample for all rows
+    return {"max_active": library.MAX_ACTIVE,
+            "sessions": lib_rows(entries, live, legacy, working),
+            # the "cmd" button's shell: not a topic, so not in sessions[]
+            "shell": {"active": shell is not None,
+                      "attached": bool(shell and shell["attached"]),
+                      "status": lib_status(shell is not None, working.get(_SHELL_KEY, False))},
             "_system": get_system_stats()}      # CPU/RAM for the top bar, same as GET /
 
 
@@ -612,7 +640,7 @@ def lib_post(route, body):
         archived = body.get("archived", True)
         if not isinstance(archived, bool):
             raise LibError(400, "archived must be true or false")
-        return lib_edit(sid, lambda lib: library.archive(lib, sid, archived))
+        return lib_archive(sid, archived)
     if route == "close":
         force = body.get("force", False)
         if not isinstance(force, bool):
@@ -660,6 +688,39 @@ def lib_reorder(ids):
     return {"ok": True}
 
 
+def lib_idle_loaded(sid, info):
+    """A loaded terminal nobody uses: no tab open and no screen output for
+    DELETE_QUIET_SECONDS (unknown output time counts as working)."""
+    if info["attached"]:
+        return False
+    last = lib_last_output(library.tmux_name(sid))
+    return last is not None and time.time() - last >= DELETE_QUIET_SECONDS
+
+
+def lib_archive(sid, archived):
+    """Archive/restore. Archived terminals must not stay in RAM (owner): a loaded
+    one that is idle is unloaded right away; one in use (tab open or printing)
+    is left alone and reported as unload_pending — idle_reaper unloads it once
+    it has been idle for the same window."""
+    try:
+        with library.update(lib_path()) as lib:
+            e = dict(library.archive(lib, sid, archived))
+    except KeyError:
+        raise LibError(404, "unknown id")
+    pending = False
+    if archived:
+        info = lib_live().get(sid)
+        if info is not None:
+            if lib_idle_loaded(sid, info):
+                lib_tmux("kill-session", "-t", "=" + library.tmux_name(sid))
+            else:
+                pending = True
+    row = lib_rows([e])[0]
+    if archived:
+        row["unload_pending"] = pending
+    return row
+
+
 def lib_delete(sid):
     """Delete an archived, unloaded topic: drop it from the registry and move its
     transcript into <registry dir>/trash/ (recoverable; nothing is unlinked)."""
@@ -674,13 +735,11 @@ def lib_delete(sid):
     if info is not None:
         # an archived terminal still loaded in tmux: unload it first when it is
         # idle (no tab open, no output lately); refuse only if it is in use
-        name = library.tmux_name(sid)
         if info["attached"]:
             raise LibError(409, "it is open in a tab right now; close the tab first")
-        last = lib_last_output(name)
-        if last is None or time.time() - last < DELETE_QUIET_SECONDS:
+        if not lib_idle_loaded(sid, info):
             raise LibError(409, "it is working right now; try again when it is idle")
-        lib_tmux("kill-session", "-t", "=" + name)
+        lib_tmux("kill-session", "-t", "=" + library.tmux_name(sid))
     e = library.find(library.load(lib_path()), sid)
     legacy = lib_legacy().get(e.get("uuid"))
     if legacy:

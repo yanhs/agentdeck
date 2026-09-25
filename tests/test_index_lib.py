@@ -65,6 +65,7 @@ class FakeAPI:
         self.with_system = with_system
         self.fail_new = False
         self.fail_reorder = False
+        self.shell = None          # top-level "shell" of GET /api/library (None = absent)
         self._n = 0
 
     def gets(self):
@@ -97,6 +98,8 @@ class FakeAPI:
             if self.with_system:
                 out["_system"] = {"cpu_pct": 42, "ram_pct": 50,
                                   "ram_used_mb": 7000, "ram_total_mb": 16000}
+            if self.shell is not None:
+                out["shell"] = self.shell
             return self._json(route, out)
         if req.method != "POST":
             return self._json(route, {"error": "method"}, 405)
@@ -913,5 +916,130 @@ def test_works_at_400px(browser, site):
         shot(pg, "index-lib-mobile-new.png")
         box = pg.eval_on_selector("#newName", "e => e.getBoundingClientRect().right")
         assert box <= 400.5
+    finally:
+        ctx.close()
+
+
+# ── cmd: the one plain command line (tmux cmd-shell) ────────────────────────
+SHELL_ON = {"active": True, "attached": False, "status": "idle"}
+
+
+def shell_row(page):
+    return page.query_selector("#list .shell-row")
+
+
+def test_cmd_button_sits_next_to_new_terminal(page):
+    assert page.inner_text("#cmdBtn").strip() == "cmd"
+    nb = page.eval_on_selector("#newBtn", "e => e.getBoundingClientRect().toJSON()")
+    cb = page.eval_on_selector("#cmdBtn", "e => e.getBoundingClientRect().toJSON()")
+    assert abs(nb["top"] - cb["top"]) < 2 and cb["left"] >= nb["right"] - 0.5
+    over = page.eval_on_selector(".sidebar", "e => e.getBoundingClientRect().right")
+    assert cb["right"] <= over + 0.5
+
+
+def test_cmd_opens_the_shell_endpoint_without_any_post(page, api):
+    page.click("#cmdBtn")
+    page.wait_for_selector("#wrap iframe")
+    assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=shell"
+    assert page.get_attribute("#tOpen", "href") == "/sess/?arg=shell"
+    assert api.posts() == []
+    assert "Command line" in page.inner_text("#tInfo")
+    # no topic row is selected
+    assert page.query_selector_all("#list .card[data-sid].sel") == []
+
+
+def test_no_shell_row_while_the_shell_is_not_loaded(page, api):
+    assert shell_row(page) is None
+    api.shell = {"active": False, "attached": False, "status": "off"}
+    page.wait_for_timeout(4600)
+    assert shell_row(page) is None
+
+
+def test_shell_row_pinned_on_top_with_status_dot(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON, status="working")
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.wait_for_selector("#list .shell-row")
+        shot(pg, "index-lib-shell-row.png")
+        first = pg.evaluate("() => document.querySelector('#list').firstElementChild.className")
+        assert "shell-row" in first
+        assert pg.inner_text("#list .shell-row .proj") == "Command line"
+        assert "working" in pg.get_attribute("#list .shell-row .dot", "class")
+        assert pg.get_attribute("#list .shell-row", "draggable") != "true"
+        for sub in (".card-btn", ".arch-btn", ".del-btn", ".mv-btn"):
+            assert pg.query_selector_all("#list .shell-row " + sub) == [], sub
+        # topic rows are unchanged and still ordered after it
+        assert row_ids(pg) == ["dddd0004", "bbbb0002", "aaaa0001", "cccc0003"]
+        # it stays on top across polls, and the status follows the poll
+        api.shell = dict(SHELL_ON)
+        pg.wait_for_timeout(4600)
+        first = pg.evaluate("() => document.querySelector('#list').firstElementChild.className")
+        assert "shell-row" in first
+        assert "idle" in pg.get_attribute("#list .shell-row .dot", "class")
+        # unloaded -> the row goes away
+        api.shell = {"active": False, "attached": False, "status": "off"}
+        pg.wait_for_timeout(4600)
+        assert shell_row(pg) is None
+    finally:
+        ctx.close()
+
+
+def test_click_shell_row_reopens_it_and_selects_it(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.wait_for_selector("#list .shell-row")
+        pg.click(row("cccc0003") + " .proj")
+        pg.wait_for_selector("#wrap iframe")
+        pg.click("#list .shell-row .proj")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe')"
+                             ".getAttribute('src') === '/sess/?arg=shell'")
+        assert "sel" in pg.get_attribute("#list .shell-row", "class")
+        assert "sel" not in pg.get_attribute(row("cccc0003"), "class")
+        assert api.posts() == []
+    finally:
+        ctx.close()
+
+
+def test_shell_row_hidden_by_an_unrelated_search(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.wait_for_selector("#list .shell-row")
+        pg.fill("#search", "свет")
+        assert shell_row(pg) is None or not shell_row(pg).is_visible()
+        pg.fill("#search", "cmd")
+        assert shell_row(pg).is_visible()
+        pg.fill("#search", "")
+        assert shell_row(pg).is_visible()
+    finally:
+        ctx.close()
+
+
+def test_cmd_and_shell_row_fit_at_400px(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open(browser, site, api, width=400, height=800, mobile=True)
+    try:
+        pg.wait_for_selector("#list .shell-row")
+        shot(pg, "index-lib-mobile-shell.png")
+        over = pg.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+        assert over <= 0
+        for sel in ("#newBtn", "#cmdBtn", "#search", '.sidebar a[href="/tasks/"]', "#sysStats"):
+            box = pg.eval_on_selector(sel, "e => { const r = e.getBoundingClientRect();"
+                                           " return [r.left, r.right, r.width]; }")
+            assert box[2] > 0 and box[0] >= 0 and box[1] <= 400.5, (sel, box)
+        assert pg.eval_on_selector("#search", "e => e.getBoundingClientRect().width") >= 60
+        for sel in ("#list .shell-row .dot", "#list .shell-row .proj"):
+            r = pg.eval_on_selector(sel, "e => e.getBoundingClientRect().right")
+            assert r <= 400.5
+        pg.tap("#cmdBtn")
+        pg.wait_for_selector("#wrap iframe")
+        assert pg.get_attribute("#wrap iframe", "src") == "/sess/?arg=shell"
+        over = pg.eval_on_selector(".topbar", "e => e.scrollWidth - e.clientWidth")
+        assert over <= 1
     finally:
         ctx.close()

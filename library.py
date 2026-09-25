@@ -28,6 +28,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LIB_FILE = os.getenv("AGENTDECK_LIBRARY", os.path.join(HERE, ".sessions", "library.json"))
 MAX_ACTIVE = int(os.getenv("AGENTDECK_MAX_ACTIVE", "12"))
 TMUX_PREFIX = "cs-"
+# The dashboard's one plain command line (the "cmd" button): a bash shell, not a
+# topic — never counted toward MAX_ACTIVE, never an eviction victim.
+SHELL_TMUX = "cmd-shell"
 
 _ID = re.compile(r"[0-9a-f]{8}")
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")

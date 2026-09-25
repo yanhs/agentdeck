@@ -28,6 +28,9 @@ A session is unloaded when ALL of these hold:
     silent for BG_MAX_SECONDS (default 24 h): by then it is a stuck loop,
     not work.
 
+An ARCHIVED library session goes after ARCHIVED_IDLE_SECONDS (120 s) instead of
+IDLE_SECONDS, by the same rules otherwise.
+
 It never touches agents.json (the id stays in the dashboard's order, so the
 card stays visible and reloadable) and never deletes a transcript.
 """
@@ -43,6 +46,10 @@ sys.path.insert(0, HERE)
 import library  # noqa: E402  (hold markers)
 IDLE_SECONDS = int(os.getenv("REAPER_IDLE_SECONDS", "7200"))        # 2 hours
 BG_MAX_SECONDS = int(os.getenv("REAPER_BG_MAX_SECONDS", "86400"))   # 24 hours
+# Archived terminals must not stay in RAM (owner, 2026-09-25): once idle by the
+# same rule (no tab, no hold, no background task), they go after this much
+# silence — the same window POST /api/library/archive uses (DELETE_QUIET_SECONDS).
+ARCHIVED_IDLE_SECONDS = int(os.getenv("REAPER_ARCHIVED_IDLE_SECONDS", "120"))
 STATE_FILE = os.path.join(HERE, ".idle_reaper_state.json")          # last seen attached
 
 # Legacy numbered terminals (until the session-library migration) ...
@@ -82,9 +89,11 @@ def _tmux_session_names():
 
 
 def watched_sessions():
-    """Legacy terminals + library sessions currently in tmux; nothing else."""
-    lib = [s for s in _tmux_session_names() if _LIBRARY_SESSION.fullmatch(s)]
-    return SESSIONS + [s for s in lib if s not in SESSIONS]
+    """Legacy terminals + library sessions + the dashboard's command line
+    (cmd-shell: cheap to recreate, same 2 h rule) currently in tmux; nothing else."""
+    lib = [s for s in _tmux_session_names()
+           if _LIBRARY_SESSION.fullmatch(s) or s == library.SHELL_TMUX]
+    return SESSIONS + [s for s in dict.fromkeys(lib) if s not in SESSIONS]
 
 
 def session_exists(session):
@@ -157,6 +166,17 @@ def unload(session):
     return _tmux(["kill-session", "-t", "=" + session]).returncode == 0   # exact name
 
 
+def archived_ids():
+    """Ids of archived registry entries; empty when the registry is missing or
+    unreadable (never guess towards killing)."""
+    path = os.getenv("AGENTDECK_LIBRARY") or library.LIB_FILE
+    try:
+        lib = library.load(path)
+        return {e["id"] for e in lib.get("sessions", []) if e.get("archived") and "id" in e}
+    except Exception:
+        return set()
+
+
 def session_held(session, now):
     """True while a library session (cs-<id>) has an unexpired hold marker."""
     sid = library.id_from_tmux(session)
@@ -209,6 +229,7 @@ def sweep(now=None, dry_run=False):
     now = now if now is not None else time.time()
     state = load_state()
     actions = []
+    archived = archived_ids()
     for s in watched_sessions():
         if not session_exists(s):
             state.pop(s, None)          # forget dead sessions
@@ -220,10 +241,11 @@ def sweep(now=None, dry_run=False):
         if session_held(s, now):
             state[s] = now              # a timer is pending: working; clock restarts after
             continue
+        window = ARCHIVED_IDLE_SECONDS if library.id_from_tmux(s) in archived else IDLE_SECONDS
         last = last_active_of(session_activity(s), state.get(s))
         # the process-tree walk only for sessions already past the idle window
-        bg = last is not None and now - last >= IDLE_SECONDS and session_has_bg_jobs(s)
-        if decide(now, last, False, bg, IDLE_SECONDS, BG_MAX_SECONDS):
+        bg = last is not None and now - last >= window and session_has_bg_jobs(s)
+        if decide(now, last, False, bg, window, BG_MAX_SECONDS):
             actions.append(s)
             if not dry_run and unload(s):
                 state.pop(s, None)

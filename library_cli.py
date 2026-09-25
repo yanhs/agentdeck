@@ -19,6 +19,11 @@ page (open-session.sh) and the Telegram bridge.
                                    keep the session counted as working until now +
                                    seconds (`-` = $AGENTDECK_SESSION); a longer
                                    existing hold is kept.
+    library_cli.py shell-ensure    print cmd-shell once the dashboard's one plain
+                                   command line runs (`bash -l` in WORKDIR, mouse
+                                   on; started detached if missing). Not a topic:
+                                   not counted toward MAX_ACTIVE, never unloaded
+                                   to make room. Exit 0; 1 = tmux failed.
 
 The id arrives from a URL (/sess/?arg=<id>), so it is checked before anything
 else: 8 hex chars, present in the registry, not archived, and its uuid must be a
@@ -64,7 +69,7 @@ _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 _CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 USAGE = ("usage: library_cli.py ensure <id> | active | pane-cmd <id> | pane-is-claude <id>"
-         " | hold <id|-> <seconds>")
+         " | hold <id|-> <seconds> | shell-ensure")
 
 
 # ── tmux ────────────────────────────────────────────────────────────────────
@@ -349,6 +354,30 @@ def ensure(sid, now=None):
     return EXIT_OK
 
 
+# ── the plain command line ──────────────────────────────────────────────────
+# The pane inherits the tmux SERVER's environment when the server was started by
+# someone else (a Claude-spawned caller would leak CLAUDE* into it): scrub it,
+# then exec so the pane's process is the login bash itself.
+SHELL_CMD = ("bash", "-c", 'for v in $(env | cut -d= -f1 | grep -i CLAUDE); do unset "$v"; done; '
+             "unset AGENTDECK_SESSION; exec bash -l")
+
+
+def shell_ensure():
+    """Start cmd-shell unless it runs; either way print its name. tmux refuses a
+    second session with the same name, so two presses at once still make one."""
+    name = library.SHELL_TMUX
+    if not _has(name):
+        cwd = WORKDIR if os.path.isdir(WORKDIR) else os.path.expanduser("~")
+        r = _tmux("new-session", "-d", "-s", name, "-c", cwd, *SHELL_CMD)
+        if r.returncode != 0 and not _has(name):
+            _say(f"не удалось запустить командную строку: {_clean(r.stderr.strip())}")
+            return EXIT_FAIL
+        # option commands need the `=name:` form (a bare `=name` is "no such session")
+        _tmux("set-option", "-t", f"={name}:", "mouse", "on")
+    print(name, flush=True)
+    return EXIT_OK
+
+
 # ── hold ────────────────────────────────────────────────────────────────────
 def hold(sid, seconds, now=None):
     if sid == "-":
@@ -387,6 +416,8 @@ def _main(argv):
         return EXIT_OK if pane_is_claude(argv[1]) else EXIT_FAIL
     if len(argv) == 2 and argv[0] == "ensure":
         return ensure(argv[1])
+    if len(argv) == 1 and argv[0] == "shell-ensure":
+        return shell_ensure()
     if len(argv) == 1 and argv[0] == "active":
         print(json.dumps(active()))
         return EXIT_OK
