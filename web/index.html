@@ -169,16 +169,16 @@
     /* The command line: pinned above the topics, no rename/archive/drag. */
     .card.shell-row { border-bottom: 1px solid rgba(255,255,255,0.10); }
     .card.shell-row .proj { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; }
-    .card.tasks-row { border-bottom: 1px solid rgba(255,255,255,0.10); }
-    .card.tasks-row .proj { font-weight: 500; }
-    .shell-close, .tasks-close {
+    .card.tasks-row, .card.server-row { border-bottom: 1px solid rgba(255,255,255,0.10); }
+    .card.tasks-row .proj, .card.server-row .proj { font-weight: 500; }
+    .shell-close, .tasks-close, .server-close {
       width: 18px; height: 18px; flex-shrink: 0; padding: 0;
       border: 1px solid rgba(239,68,68,0.12); border-radius: 4px;
       background: rgba(239,68,68,0.05); color: rgba(252,165,165,0.55);
       font-size: 0.62rem; line-height: 16px; text-align: center; cursor: pointer;
       transition: all 0.12s;
     }
-    .shell-close:hover, .tasks-close:hover { background: rgba(239,68,68,0.16); color: #fecaca; border-color: rgba(239,68,68,0.32); }
+    .shell-close:hover, .tasks-close:hover, .server-close:hover { background: rgba(239,68,68,0.16); color: #fecaca; border-color: rgba(239,68,68,0.32); }
 
     .card-top {
       display: flex;
@@ -560,11 +560,11 @@
       .arch-btn { order: 4; height: 20px; line-height: 18px; font-size: 0.64rem; padding: 0 5px; }
       .dot { order: 5; }
       .card-btn { visibility: visible; width: 20px; height: 20px; line-height: 18px; font-size: 0.8rem; }
-      .shell-close, .tasks-close { order: 3; width: 20px; height: 20px; line-height: 18px; font-size: 0.7rem; }
+      .shell-close, .tasks-close, .server-close { order: 3; width: 20px; height: 20px; line-height: 18px; font-size: 0.7rem; }
       .task { display: none; }
       /* Compact header buttons on phone. */
-      .header-add { gap: 3px; }
-      .add-btn { font-size: 0.68rem; padding: 2px 6px; }
+      .header-add { gap: 2px; }
+      .add-btn { font-size: 0.68rem; padding: 2px 6px; width: 20px; }
       /* The 8-hex code is longer than the old "#N" and would push Logout off
          the phone's topbar; the open topic is highlighted in the list above. */
       .topbar-lbl { display: none; }
@@ -630,6 +630,7 @@
       <div class="sidebar-header">
         <div class="header-add">
           <a class="add-btn" id="tasksBtn" href="/tasks/" title="Task board — shared progress across all agents (opens here; Ctrl/⌘-click for a new tab)" style="text-decoration:none;display:inline-flex;align-items:center;justify-content:center;font-weight:800;font-family:ui-sans-serif,system-ui,sans-serif">T</a>
+          <a class="add-btn" id="serverBtn" href="/server.html" aria-label="Server status" title="Server status — CPU and memory of agents, sites and jobs (opens here; Ctrl/⌘-click for a new tab)" style="text-decoration:none"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M2.5 12a5.5 5.5 0 0 1 11 0"/><path d="M8 12l2.8-3.6"/></svg></a>
         </div>
         <div class="sys-stats" id="sysStats" onclick="this.classList.toggle('hidden');localStorage.setItem('stats-hidden',this.classList.contains('hidden'))">
           <span class="stat" id="cpuStat">CPU <span class="val" id="cpuVal">—</span></span>
@@ -730,6 +731,29 @@
     tasksRow.title = 'Task board — click to show it';
     function saveTasksOpen() {
       try { localStorage.setItem('lib-tasks-open', tasksOpen ? '1' : '0'); } catch {}
+    }
+    /* ── Server: the server status page (web/server.html) as a tab, exactly like
+       Tasks — the gauge button opens it, a pinned "Server" row stays while it is
+       open, ✕ closes it; remembered per browser. `sel === SERVER` = it is shown. */
+    const SERVER = 'server';
+    const SERVER_PATH = '/server.html';
+    let serverOpen = false;
+    try { serverOpen = localStorage.getItem('lib-server-open') === '1'; } catch {}
+    const serverRow = document.createElement('div');
+    serverRow.className = 'card server-row';
+    serverRow.dataset.server = '1';
+    serverRow.innerHTML = `
+        <div class="card-top">
+          <div class="proj">Server</div>
+          <div class="card-btns">
+            <button type="button" class="server-close" title="Close server status" aria-label="Close server status">✕</button>
+            <span class="dot idle" title="open"></span>
+          </div>
+        </div>
+        <div class="card-row2"><span class="sid">status</span></div>`;
+    serverRow.title = 'Server status — click to show it';
+    function saveServerOpen() {
+      try { localStorage.setItem('lib-server-open', serverOpen ? '1' : '0'); } catch {}
     }
     /* ── cmd: the one plain command line (tmux cmd-shell, /sess/?arg=shell).
        GET /api/library reports it in `shell` (not in sessions[]); while it is
@@ -948,15 +972,23 @@
       return !q || 'tasks task board'.includes(q);
     }
 
+    function serverShown() {
+      if (!serverOpen) return false;
+      const q = norm(search.value);
+      return !q || 'server status'.includes(q);
+    }
+
     function render() {
       if (editing) return;                    // never pull the input out from under the user
-      // pinned rows, in this order, above the terminals: Tasks, Command line
+      // pinned rows, in this order, above the terminals: Tasks, Server, Command line
       const showTasks = tasksShown();
+      const showServer = serverShown();
       const showShell = shellShown();
       tasksRow.classList.toggle('sel', sel === TASKS);
+      serverRow.classList.toggle('sel', sel === SERVER);
       if (showShell) fillShell();
       let pin = null;
-      for (const [el, on] of [[tasksRow, showTasks], [shellRow, showShell]]) {
+      for (const [el, on] of [[tasksRow, showTasks], [serverRow, showServer], [shellRow, showShell]]) {
         if (!on) { if (el.parentNode) el.remove(); continue; }
         const ref = pin ? pin.nextSibling : list.firstChild;
         if (el !== ref) list.insertBefore(el, ref);
@@ -998,8 +1030,11 @@
       for (const [i, el] of rows) el.classList.toggle('sel', i === sel);
       shellRow.classList.toggle('sel', sel === SHELL);
       tasksRow.classList.toggle('sel', sel === TASKS);
+      serverRow.classList.toggle('sel', sel === SERVER);
       if (sel === TASKS) {
         document.getElementById('tInfo').innerHTML = '<b>Task board</b>';
+      } else if (sel === SERVER) {
+        document.getElementById('tInfo').innerHTML = '<b>Server status</b>';
       } else if (sel === SHELL) syncTop(Object.assign({id: SHELL, name: 'Command line'}, shellState || {}));
       else if (sel) syncTop(byId(sel) || {id: sel, name: ''});
     }
@@ -1278,6 +1313,38 @@
     tasksRow.querySelector('.tasks-close').addEventListener('click', e => {
       e.stopPropagation();
       closeTasks();
+    });
+
+    function openServer() {
+      serverOpen = true;
+      saveServerOpen();
+      sel = SERVER;
+      document.getElementById('topbar').style.display = 'flex';
+      setLabel('server');
+      render();
+      syncSel();
+      openFrame(SERVER_PATH, true);
+    }
+
+    function closeServer() {
+      serverOpen = false;
+      saveServerOpen();
+      if (sel === SERVER) showPlaceholder();
+      render();
+    }
+
+    document.getElementById('serverBtn').addEventListener('click', e => {
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.button === 1) return;   // new tab/window: browser default
+      e.preventDefault();
+      openServer();
+    });
+    serverRow.addEventListener('click', e => {
+      if (e.target.closest('.server-close')) return;
+      openServer();
+    });
+    serverRow.querySelector('.server-close').addEventListener('click', e => {
+      e.stopPropagation();
+      closeServer();
     });
 
     // plain = a web page (the task board), not a terminal: no ttyd helpers

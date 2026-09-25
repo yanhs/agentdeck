@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Server</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%2309090b'/><path d='M3 12a5 5 0 0 1 10 0' fill='none' stroke='%23818cf8' stroke-width='2'/><path d='M8 12l3-4' stroke='%23e4e4e7' stroke-width='1.5' stroke-linecap='round'/></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #09090b; --s1: #111114; --s2: #18181b; --line: #27272a; --line2: #1f1f23;
+      --text: #e4e4e7; --dim: #a1a1aa; --faint: #71717a; --ghost: #52525b;
+      --accent: #818cf8; --green: #4ade80; --amber: #fbbf24; --red: #f87171;
+      --g-agents: #818cf8; --g-apps: #2dd4bf; --g-jobs: #fbbf24; --g-system: #71717a;
+      --mono: 'JetBrains Mono', ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    [hidden] { display: none !important; }
+    html { background: var(--bg); color-scheme: dark; }
+    body {
+      font-family: 'Inter', -apple-system, system-ui, sans-serif;
+      background: var(--bg); color: var(--text);
+      font-size: 13px; line-height: 1.4;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    .wrap { max-width: 1120px; margin: 0 auto; padding: 14px 16px 28px; }
+    .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+    /* ── header ── */
+    .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+    #back {
+      color: var(--dim); text-decoration: none; font-size: 12px;
+      border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px;
+    }
+    #back:hover { color: var(--text); border-color: #3f3f46; }
+    body.embedded #back { display: none; }
+    h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+    #host { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--faint); }
+    .pill {
+      display: inline-flex; align-items: center; gap: 6px; min-width: 0;
+      font-size: 11.5px; padding: 3px 9px 3px 7px; border-radius: 999px;
+      border: 1px solid var(--line); background: var(--s1); color: var(--dim);
+    }
+    .pill i { width: 7px; height: 7px; border-radius: 50%; background: var(--ghost); flex-shrink: 0; }
+    .pill b { font-weight: 600; color: var(--text); }
+    .pill.ok i { background: var(--green); box-shadow: 0 0 6px rgba(74,222,128,.45); }
+    .pill.busy { border-color: rgba(251,191,36,.28); }
+    .pill.busy i { background: var(--amber); box-shadow: 0 0 6px rgba(251,191,36,.5); }
+    .pill.busy b { color: var(--amber); }
+    .pill.overloaded { border-color: rgba(248,113,113,.35); background: rgba(248,113,113,.06); }
+    .pill.overloaded i { background: var(--red); box-shadow: 0 0 7px rgba(248,113,113,.6); animation: pulse 1.6s ease-in-out infinite; }
+    .pill.overloaded b { color: var(--red); }
+    .meta { margin-left: auto; font-size: 11px; color: var(--faint); display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+    .live { width: 6px; height: 6px; border-radius: 50%; background: var(--green); opacity: .9; }
+    .live.tick { animation: blink .6s ease-out; }
+    @keyframes blink { 0% { box-shadow: 0 0 0 0 rgba(74,222,128,.7); } 100% { box-shadow: 0 0 0 6px rgba(74,222,128,0); } }
+    @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
+    #stale {
+      margin: -4px 0 12px; padding: 7px 10px; border-radius: 8px; font-size: 12px;
+      background: rgba(248,113,113,.07); border: 1px solid rgba(248,113,113,.25); color: #fecaca;
+    }
+    #stale a { color: var(--text); }
+
+    /* ── gauges ── */
+    .gauges { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+    .gauge {
+      background: var(--s1); border: 1px solid var(--line2); border-radius: 10px;
+      padding: 12px; display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 4px 12px;
+      align-items: center; min-width: 0;
+    }
+    .ring { width: 58px; height: 58px; position: relative; grid-row: span 2; }
+    .ring svg { width: 58px; height: 58px; transform: rotate(-90deg); display: block; }
+    .ring .trk { stroke: var(--s2); }
+    .ring .val { transition: stroke-dashoffset .6s ease, stroke .3s; stroke-linecap: round; }
+    .gv {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: -0.02em;
+    }
+    .gl { font-size: 11px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; align-self: end; }
+    .gs { font-size: 11.5px; color: var(--faint); align-self: start; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .gs b { color: var(--text); font-weight: 500; }
+    .cores { grid-column: 1 / -1; display: flex; gap: 3px; height: 16px; align-items: flex-end; margin-top: 4px; }
+    .core { flex: 1; background: var(--s2); border-radius: 2px; height: 100%; position: relative; overflow: hidden; }
+    .core i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 2px; transition: height .6s ease, background .3s; }
+
+    /* ── cards ── */
+    .card { background: var(--s1); border: 1px solid var(--line2); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; min-width: 0; }
+    .card-h { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+    h3 { font-size: 12px; font-weight: 600; color: var(--dim); }
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--faint); margin-left: auto; }
+    .legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+    .legend i.line { height: 0; border-top: 2px dashed var(--text); border-radius: 0; width: 12px; }
+    .legend b { color: var(--text); font-weight: 500; font-family: var(--mono); font-size: 10.5px; }
+    #chartBox { position: relative; height: 150px; }
+    #chart { width: 100%; height: 100%; display: block; overflow: visible; }
+    #chart .grid { stroke: var(--line2); stroke-width: 1; }
+    #chart .axis { fill: var(--ghost); font-size: 9.5px; font-family: var(--mono); }
+    #chart .area { stroke-width: 0; }
+    #chart .ram { fill: none; stroke: var(--text); stroke-width: 1.3; stroke-dasharray: 3 3; opacity: .75; }
+    #chart .cursor { stroke: var(--dim); stroke-width: 1; }
+    #chartTip {
+      position: absolute; top: 4px; pointer-events: none; font-size: 11px;
+      background: rgba(24,24,27,.96); border: 1px solid var(--line); border-radius: 6px;
+      padding: 5px 8px; white-space: nowrap; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+    }
+    #chartTip div { display: flex; justify-content: space-between; gap: 12px; }
+    #chartTip .num { color: var(--text); }
+    #chartEmpty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--ghost); font-size: 12px; }
+
+    /* ── cpu now ── */
+    #now {
+      display: flex; height: 22px; border-radius: 6px; overflow: hidden; background: var(--s2);
+      gap: 1px;
+    }
+    #now .seg { height: 100%; min-width: 0; transition: width .5s ease; }
+    #now .seg:hover { filter: brightness(1.25); }
+    .nowleg { margin-top: 8px; margin-left: 0; }
+
+    /* ── groups ── */
+    section.group { margin-top: 18px; }
+    section.group h2 {
+      display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600;
+      padding: 0 2px 6px; border-bottom: 1px solid var(--line2); margin-bottom: 4px;
+    }
+    h2 .sw { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+    h2 .gc { font-family: var(--mono); font-size: 10.5px; color: var(--faint); font-weight: 400;
+             border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+    h2 .gsum { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--faint); white-space: nowrap; }
+    h2 .gsum b { color: var(--dim); font-weight: 500; font-family: var(--mono); font-size: 10.5px; }
+    h2 .spark { width: 72px; height: 18px; flex-shrink: 0; }
+    .empty { color: var(--ghost); font-size: 12px; padding: 8px 4px; }
+
+    .row { border-radius: 7px; }
+    .row + .row { border-top: 1px solid rgba(39,39,42,.55); }
+    .row.over { display: none; }
+    section.group.all .row.over { display: block; }
+    .main {
+      display: grid; grid-template-columns: 10px minmax(0, 1fr) 150px 132px 12px;
+      align-items: center; gap: 12px; padding: 7px 6px; cursor: pointer; border-radius: 7px;
+    }
+    .main:hover { background: rgba(255,255,255,.025); }
+    .row.open .main { background: rgba(129,140,248,.05); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #3f3f46; }
+    .dot.working { background: var(--amber); box-shadow: 0 0 6px rgba(251,191,36,.5); animation: pulse 2s ease-in-out infinite; }
+    .dot.idle, .dot.running { background: var(--green); box-shadow: 0 0 4px rgba(74,222,128,.3); }
+    .dot.stopped { background: #3f3f46; }
+    .row.stopped .name, .row.stopped .what { color: var(--ghost); }
+    .id { min-width: 0; }
+    .nm { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .name { font-weight: 500; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .chip {
+      font-size: 9.5px; font-family: var(--mono); color: var(--faint); border: 1px solid var(--line);
+      border-radius: 4px; padding: 0 4px; line-height: 14px; flex-shrink: 0; text-transform: lowercase;
+    }
+    .tag { font-family: var(--mono); font-size: 10px; color: var(--ghost); white-space: nowrap; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .what { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+    .m { display: grid; grid-template-columns: minmax(0, 1fr) 48px; align-items: center; gap: 8px; }
+    .m .bar { height: 5px; border-radius: 3px; background: var(--s2); overflow: hidden; }
+    .m .bar i { display: block; height: 100%; width: 0; border-radius: 3px; transition: width .6s ease; }
+    .m .v { font-family: var(--mono); font-size: 11px; text-align: right; color: var(--dim); white-space: nowrap; }
+    .m .lab { display: none; }
+    .mem .bar i { background: #a1a1aa; opacity: .55; }
+    .chev { color: var(--ghost); font-size: 12px; transition: transform .15s; text-align: center; }
+    .row.open .chev { transform: rotate(90deg); color: var(--dim); }
+    .row.nokids .chev { visibility: hidden; }
+    .row.nokids .main { cursor: default; }
+    .kids { padding: 2px 6px 8px 28px; }
+    .kid {
+      display: grid; grid-template-columns: minmax(0, 1fr) 64px 72px 34px; gap: 10px;
+      font-size: 11px; padding: 2px 0; color: var(--dim); align-items: center;
+    }
+    .kid .kn { font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .kid .kv { font-family: var(--mono); text-align: right; color: var(--faint); white-space: nowrap; }
+    .kid.head { color: var(--ghost); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+    .kid.head .kv { color: var(--ghost); font-family: inherit; }
+    .more {
+      margin: 6px 0 0 28px; background: none; border: 1px solid var(--line); color: var(--dim);
+      font: inherit; font-size: 11.5px; padding: 3px 10px; border-radius: 6px; cursor: pointer;
+    }
+    .more:hover { color: var(--text); border-color: #3f3f46; }
+    footer { margin-top: 22px; font-size: 11px; color: var(--ghost); text-align: center; }
+
+    @media (max-width: 860px) {
+      .gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .main { grid-template-columns: 10px minmax(0, 1fr) 110px 100px 12px; gap: 10px; }
+    }
+    @media (max-width: 600px) {
+      .wrap { padding: 10px 12px 24px; }
+      .gauges { gap: 8px; }
+      .gauge { grid-template-columns: 46px minmax(0, 1fr); padding: 10px; gap: 2px 10px; }
+      .ring, .ring svg { width: 46px; height: 46px; }
+      .gv { font-size: 11.5px; }
+      .gs { font-size: 11px; }
+      #chartBox { height: 120px; }
+      .meta { margin-left: 0; width: 100%; }
+      .main {
+        grid-template-columns: 10px minmax(0, 1fr) minmax(0, 1fr) 12px;
+        grid-template-areas: "dot id id chev" ". cpu mem .";
+        gap: 4px 10px;
+      }
+      .main .dot { grid-area: dot; }
+      .main .id { grid-area: id; }
+      .main .chev { grid-area: chev; }
+      .main .cpu { grid-area: cpu; }
+      .main .mem { grid-area: mem; }
+      .m { grid-template-columns: 26px minmax(0, 1fr) 48px; gap: 6px; }
+      .gs { white-space: normal; }
+      .m .lab { display: block; font-size: 9.5px; color: var(--ghost); text-transform: uppercase; letter-spacing: .05em; }
+      .kids { padding-left: 20px; }
+      .kid { grid-template-columns: minmax(0, 1fr) 48px 60px 26px; gap: 6px; }
+      h2 .spark { display: none; }
+      .more { margin-left: 20px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a id="back" href="/" title="Back to the dashboard">← Dashboard</a>
+    <h1>Server <span id="host"></span></h1>
+    <span id="pressure" class="pill"><i></i><span class="pt">Loading…</span></span>
+    <span class="meta"><span class="live" id="live"></span><span id="updated">connecting</span><span id="uptime"></span></span>
+  </header>
+  <div id="stale" hidden></div>
+
+  <section class="gauges">
+    <div class="gauge" id="g-cpu" title="Share of all CPU cores in use, averaged over the last 5 seconds">
+      <div class="ring"><svg viewBox="0 0 36 36"><circle class="trk" cx="18" cy="18" r="15.5" fill="none" stroke-width="3.2"/><circle class="val" cx="18" cy="18" r="15.5" fill="none" stroke-width="3.2"/></svg><div class="gv">—</div></div>
+      <div class="gl">CPU</div><div class="gs">—</div>
+      <div class="cores"></div>
+    </div>
+    <div class="gauge" id="g-ram" title="Memory in use (everything except what the system can free right away)">
+      <div class="ring"><svg viewBox="0 0 36 36"><circle class="trk" cx="18" cy="18" r="15.5" fill="none" stroke-width="3.2"/><circle class="val" cx="18" cy="18" r="15.5" fill="none" stroke-width="3.2"/></svg><div class="gv">—</div></div>
+      <div class="gl">Memory</div><div class="gs">—</div>
+    </div>
+    <div class="gauge" id="g-disk" title="Disk space used on /">
+      <div class="ring"><svg viewBox="0 0 36 36"><circle class="trk" cx="18" cy="18" r="15.5" fill="none" stroke-width="3.2"/><circle class="val" cx="18" cy="18" r="15.5" fill="none" stroke-width="3.2"/></svg><div class="gv">—</div></div>
+      <div class="gl">Disk</div><div class="gs">—</div>
+    </div>
+    <div class="gauge" id="g-load" title="Load: how many tasks want a CPU at once, over 1 / 5 / 15 minutes. Above the core count means work is waiting.">
+      <div class="ring"><svg viewBox="0 0 36 36"><circle class="trk" cx="18" cy="18" r="15.5" fill="none" stroke-width="3.2"/><circle class="val" cx="18" cy="18" r="15.5" fill="none" stroke-width="3.2"/></svg><div class="gv">—</div></div>
+      <div class="gl">Load</div><div class="gs">—</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-h">
+      <h3>CPU over the last 15 minutes</h3>
+      <div class="legend" id="chartLeg"></div>
+    </div>
+    <div id="chartBox">
+      <svg id="chart" preserveAspectRatio="none"></svg>
+      <div id="chartTip" hidden></div>
+      <div id="chartEmpty" hidden>Collecting data…</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-h"><h3>Who uses the CPU right now</h3></div>
+    <div id="now"></div>
+    <div class="legend nowleg" id="nowLeg"></div>
+  </section>
+
+  <main id="groups"></main>
+  <footer id="foot"></footer>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const API = '/api/server';
+  const qs = new URLSearchParams(location.search);
+  const POLL = Math.max(250, parseInt(qs.get('poll') || '5000', 10) || 5000);
+  const LIMIT = 12;                       // rows shown per group before "Show more"
+  const GROUP_COLOR = { agents: '#818cf8', apps: '#2dd4bf', jobs: '#fbbf24', system: '#71717a' };
+  const KIND = { claude: 'agent', container: 'docker', service: 'service', pm2: 'pm2',
+                 job: 'job', kernel: 'kernel', system: 'misc' };
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const $ = s => document.querySelector(s);
+
+  let embedded = false;
+  try { embedded = window.top !== window.self; } catch (e) { embedded = true; }
+  document.body.classList.toggle('embedded', embedded);
+
+  let data = null, lastOk = 0;
+  const rows = new Map();                 // member id -> row element
+  const sections = new Map();             // group id -> section element
+  const open = new Set();                 // expanded member ids
+  const showAll = new Set();              // groups showing every row
+  const ema = new Map();                  // member id -> smoothed CPU (stable ordering)
+
+  // ── formatting ──
+  const cores = () => (data && data.host && data.host.cores) || 1;
+  const share = cpu => Math.max(0, cpu / cores());            // % of the whole machine
+  function fmtPct(v) {
+    if (!isFinite(v) || v <= 0) return '0%';
+    return v < 1 ? v.toFixed(1) + '%' : Math.round(v) + '%';
+  }
+  function fmtMem(mb) {
+    if (!isFinite(mb) || mb <= 0) return '0 MB';
+    return mb >= 1000 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
+  }
+  function fmtCores(cpu) { const c = cpu / 100; return (c >= 10 ? c.toFixed(0) : c.toFixed(c < 0.1 ? 2 : 1)) + ' cores'; }
+  function fmtUptime(s) {
+    const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+    return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+  }
+  function level(p) { return p >= 85 ? 'var(--red)' : p >= 60 ? 'var(--amber)' : 'var(--green)'; }
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function svg(tag, attrs) {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  // ── header + gauges ──
+  const CIRC = 2 * Math.PI * 15.5;
+  function ring(id, pct, color) {
+    const c = document.querySelector(`#${id} .val`);
+    c.setAttribute('stroke-dasharray', CIRC.toFixed(2));
+    c.setAttribute('stroke-dashoffset', (CIRC * (1 - Math.min(100, Math.max(0, pct)) / 100)).toFixed(2));
+    c.setAttribute('stroke', color || level(pct));
+  }
+  function setGs(id, parts) {           // parts: [[text, bold?], ...] -> no HTML parsing
+    const gs = document.querySelector(`#${id} .gs`);
+    gs.replaceChildren(...parts.map(([t, b]) => b ? el('b', null, t) : document.createTextNode(t)));
+  }
+  function renderHost(h) {
+    $('#host').textContent = h.hostname || '';
+    const p = $('#pressure');
+    p.className = 'pill ' + (h.pressure || '');
+    const word = { ok: 'Healthy', busy: 'Busy', overloaded: 'Overloaded' }[h.pressure] || h.pressure;
+    p.querySelector('.pt').replaceChildren(el('b', null, word),
+      document.createTextNode(h.pressure === 'ok' ? '' : ' · ' + (h.pressure_reason || '')));
+    p.title = h.pressure_reason || '';
+    $('#uptime').textContent = '· up ' + fmtUptime(h.uptime_s || 0);
+
+    document.querySelector('#g-cpu .gv').textContent = fmtPct(h.cpu_pct);
+    ring('g-cpu', h.cpu_pct);
+    setGs('g-cpu', [[String(h.cores), true], [' cores']]);
+    const coreBox = document.querySelector('#g-cpu .cores');
+    const per = h.cpu_per_core || [];
+    while (coreBox.children.length > per.length) coreBox.lastChild.remove();
+    while (coreBox.children.length < per.length) { const c = el('span', 'core'); c.appendChild(el('i')); coreBox.appendChild(c); }
+    per.forEach((v, i) => {
+      const bar = coreBox.children[i];
+      bar.title = `Core ${i + 1}: ${Math.round(v)}%`;
+      bar.firstChild.style.height = Math.max(4, v) + '%';
+      bar.firstChild.style.background = level(v);
+    });
+
+    document.querySelector('#g-ram .gv').textContent = fmtPct(h.ram_pct);
+    ring('g-ram', h.ram_pct);
+    setGs('g-ram', [[fmtMem(h.ram_used_mb), true], [' of ' + fmtMem(h.ram_total_mb)]]);
+
+    document.querySelector('#g-disk .gv').textContent = fmtPct(h.disk_pct);
+    ring('g-disk', h.disk_pct);
+    setGs('g-disk', [[Math.round(h.disk_used_gb) + ' GB', true], [' of ' + Math.round(h.disk_total_gb) + ' GB']]);
+
+    const load = h.load || [0, 0, 0];
+    const lp = load[0] / (h.cores || 1) * 100;
+    document.querySelector('#g-load .gv').textContent = load[0].toFixed(1);
+    ring('g-load', Math.min(100, lp), lp > 150 ? 'var(--red)' : lp > 100 ? 'var(--amber)' : 'var(--green)');
+    setGs('g-load', [['of ' + h.cores + ' cores', true], [` · 5m ${load[1].toFixed(1)} · 15m ${load[2].toFixed(1)}`]]);
+  }
+
+  // ── 15-minute chart ──
+  const ORDER = ['agents', 'apps', 'jobs', 'system'];
+  const TITLES = { agents: 'Agents', apps: 'Sites & apps', jobs: 'Background jobs', system: 'System' };
+  function renderLegend() {
+    const leg = $('#chartLeg');
+    if (leg.childElementCount) return;
+    for (const g of ORDER) {
+      const s = el('span'); const i = el('i'); i.style.background = GROUP_COLOR[g];
+      s.append(i, document.createTextNode(TITLES[g])); leg.appendChild(s);
+    }
+    const s = el('span'); s.append(el('i', 'line'), document.createTextNode('Memory')); leg.appendChild(s);
+  }
+  let chartPts = [];
+  function renderChart() {
+    const box = $('#chartBox'), chart = $('#chart');
+    const W = Math.max(100, box.clientWidth), H = Math.max(60, box.clientHeight);
+    chart.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    const pts = (data.history && data.history.points) || [];
+    chartPts = pts;
+    $('#chartEmpty').hidden = pts.length >= 2;
+    const nodes = [];
+    const padT = 6, padB = 14, plotH = H - padT - padB;
+    const y = v => padT + plotH * (1 - Math.min(100, Math.max(0, v)) / 100);
+    for (const v of [25, 50, 75, 100]) {
+      nodes.push(svg('line', { class: 'grid', x1: 0, x2: W, y1: y(v), y2: y(v) }));
+      const t = svg('text', { class: 'axis', x: 2, y: y(v) - 3 }); t.textContent = v + '%'; nodes.push(t);
+    }
+    const tEnd = pts.length ? pts[pts.length - 1].t : 0, span = 900;
+    const x = t => W * (1 - (tEnd - t) / span);
+    for (const [m, label] of [[15, '15 min ago'], [10, '10 min'], [5, '5 min'], [0, 'now']]) {
+      const t = svg('text', { class: 'axis', x: m === 0 ? W - 2 : x(tEnd - m * 60) + (m === 15 ? 2 : 0), y: H - 2,
+                              'text-anchor': m === 0 ? 'end' : m === 15 ? 'start' : 'middle' });
+      t.textContent = label; nodes.push(t);
+    }
+    if (pts.length >= 2) {
+      const n = cores();
+      const base = pts.map(() => 0);
+      for (const g of ORDER) {
+        const top = pts.map((p, i) => Math.min(100, base[i] + Math.max(0, ((p.g || {})[g] || 0) / n)));
+        let d = '';
+        pts.forEach((p, i) => { d += (i ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(top[i]).toFixed(1); });
+        for (let i = pts.length - 1; i >= 0; i--) d += 'L' + x(pts[i].t).toFixed(1) + ',' + y(base[i]).toFixed(1);
+        d += 'Z';
+        nodes.push(svg('path', { class: 'area', d, fill: GROUP_COLOR[g], 'fill-opacity': g === 'system' ? 0.55 : 0.72, 'data-group': g }));
+        top.forEach((v, i) => base[i] = v);
+      }
+      let d = '';
+      pts.forEach((p, i) => { d += (i ? 'L' : 'M') + x(p.t).toFixed(1) + ',' + y(p.ram).toFixed(1); });
+      nodes.push(svg('path', { class: 'ram', d, 'vector-effect': 'non-scaling-stroke' }));
+      nodes.push(svg('line', { class: 'cursor', x1: -10, x2: -10, y1: padT, y2: H - padB, id: 'cursor', visibility: 'hidden' }));
+    }
+    chart.replaceChildren(...nodes);
+  }
+  function chartHover(ev) {
+    if (chartPts.length < 2) return;
+    const box = $('#chartBox'), r = box.getBoundingClientRect();
+    const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left;
+    const W = r.width, tEnd = chartPts[chartPts.length - 1].t;
+    const t = tEnd - 900 * (1 - px / W);
+    let best = chartPts[0];
+    for (const p of chartPts) if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
+    const cx = W * (1 - (tEnd - best.t) / 900);
+    const cur = $('#cursor');
+    if (cur) { cur.setAttribute('x1', cx); cur.setAttribute('x2', cx); cur.setAttribute('visibility', 'visible'); }
+    const tip = $('#chartTip');
+    const ago = Math.round((tEnd - best.t) / 60 * 10) / 10;
+    const rowsEl = [el('div', null, ago <= 0 ? 'now' : `${ago} min ago`)];
+    rowsEl[0].style.color = 'var(--faint)';
+    const add = (name, val, color) => {
+      const d = el('div'); const n = el('span', null, name); if (color) n.style.color = color;
+      d.append(n, el('span', 'num', val)); rowsEl.push(d);
+    };
+    add('CPU', fmtPct(best.cpu));
+    for (const g of ORDER) add(TITLES[g], fmtPct(share((best.g || {})[g] || 0)), GROUP_COLOR[g]);
+    add('Memory', fmtPct(best.ram));
+    tip.replaceChildren(...rowsEl);
+    tip.hidden = false;
+    const tw = tip.offsetWidth;
+    tip.style.left = Math.min(W - tw - 4, Math.max(4, cx + 10 > W - tw ? cx - tw - 10 : cx + 10)) + 'px';
+  }
+  function chartLeave() {
+    $('#chartTip').hidden = true;
+    const cur = $('#cursor'); if (cur) cur.setAttribute('visibility', 'hidden');
+  }
+  $('#chartBox').addEventListener('mousemove', chartHover);
+  $('#chartBox').addEventListener('touchstart', chartHover, { passive: true });
+  $('#chartBox').addEventListener('touchmove', chartHover, { passive: true });
+  $('#chartBox').addEventListener('mouseleave', chartLeave);
+  $('#chartBox').addEventListener('touchend', () => setTimeout(chartLeave, 1500));
+
+  // ── who uses the CPU now ──
+  function renderNow() {
+    const segs = [];
+    const totals = {};
+    for (const g of data.groups) {
+      totals[g.id] = share(g.cpu_pct);
+      let rest = 0, i = 0;
+      const ms = g.members.filter(m => m.cpu_pct > 0).sort((a, b) => b.cpu_pct - a.cpu_pct);
+      for (const m of ms) {
+        const s = share(m.cpu_pct);
+        if (s >= 0.8 && i < 6) { segs.push({ g: g.id, w: s, t: `${m.name} — ${fmtPct(s)} of the server (${fmtCores(m.cpu_pct)})`, k: i++ }); }
+        else rest += s;
+      }
+      if (rest > 0.05) segs.push({ g: g.id, w: rest, t: `${g.title}: everything else — ${fmtPct(rest)}`, k: 5 });
+    }
+    let sum = segs.reduce((a, s) => a + s.w, 0);
+    // CPU the host counted but no live process holds: processes that started and
+    // ended between two samples, interrupts. Shown so the bar adds up honestly.
+    const untracked = Math.max(0, (data.host.cpu_pct || 0) - sum);
+    if (untracked >= 1) {
+      segs.push({ g: 'untracked', w: untracked, k: 0,
+                  t: `Short-lived processes and interrupts — ${fmtPct(untracked)} of the server` });
+      sum += untracked;
+    }
+    const scale = sum > 100 ? 100 / sum : 1;
+    const bar = $('#now');
+    bar.replaceChildren(...segs.map(s => {
+      const d = el('div', 'seg');
+      d.dataset.group = s.g;
+      d.style.width = (s.w * scale).toFixed(3) + '%';
+      d.style.background = s.g === 'untracked'
+        ? 'repeating-linear-gradient(135deg, #3f3f46 0 3px, #27272a 3px 6px)' : GROUP_COLOR[s.g];
+      d.style.opacity = String(Math.max(0.45, 1 - s.k * 0.11));
+      d.title = s.t;
+      return d;
+    }));
+    const leg = $('#nowLeg');
+    const items = ORDER.map(g => {
+      const s = el('span'); const i = el('i'); i.style.background = GROUP_COLOR[g];
+      s.append(i, document.createTextNode(TITLES[g] + ' '), el('b', null, fmtPct(totals[g] || 0)));
+      return s;
+    });
+    if (untracked >= 1) {
+      const u = el('span'); const ui = el('i');
+      ui.style.background = 'repeating-linear-gradient(135deg, #3f3f46 0 2px, #27272a 2px 4px)';
+      u.title = 'Processes that started and finished between two samples, and interrupts';
+      u.append(ui, document.createTextNode('Short-lived '), el('b', null, fmtPct(untracked)));
+      items.push(u);
+    }
+    const idle = Math.max(0, 100 - (data.host.cpu_pct || 0));
+    const s = el('span'); const i = el('i'); i.style.background = 'var(--s2)'; i.style.border = '1px solid var(--line)';
+    s.append(i, document.createTextNode('Idle '), el('b', null, fmtPct(idle)));
+    items.push(s);
+    leg.replaceChildren(...items);
+  }
+
+  // ── groups ──
+  function makeSection(g) {
+    const sec = el('section', 'group');
+    sec.dataset.group = g.id;
+    const h = el('h2');
+    const sw = el('span', 'sw'); sw.style.background = GROUP_COLOR[g.id] || '#71717a';
+    const sp = svg('svg', { class: 'spark', viewBox: '0 0 72 18', preserveAspectRatio: 'none' });
+    sp.appendChild(svg('path', { fill: GROUP_COLOR[g.id] || '#71717a', 'fill-opacity': 0.25, stroke: 'none' }));
+    sp.appendChild(svg('path', { fill: 'none', stroke: GROUP_COLOR[g.id] || '#71717a', 'stroke-width': 1.2, 'vector-effect': 'non-scaling-stroke' }));
+    h.append(sw, el('span', 'gt', g.title), el('span', 'gc'), sp, el('span', 'gsum'));
+    const list = el('div', 'list');
+    const more = el('button', 'more'); more.type = 'button'; more.hidden = true;
+    more.addEventListener('click', () => {
+      if (showAll.has(g.id)) showAll.delete(g.id); else showAll.add(g.id);
+      sec.classList.toggle('all', showAll.has(g.id));
+      fillMore(sec);
+    });
+    const empty = el('div', 'empty', 'Nothing here right now'); empty.hidden = true;
+    sec.append(h, list, empty, more);
+    return sec;
+  }
+  function fillMore(sec) {
+    const n = sec.querySelectorAll('.row.over').length;
+    const more = sec.querySelector('.more');
+    more.hidden = n === 0;
+    more.textContent = showAll.has(sec.dataset.group) ? 'Show less' : `Show ${n} more`;
+  }
+  function makeRow(m) {
+    const r = el('div', 'row');
+    r.dataset.id = m.id;
+    const main = el('div', 'main');
+    const id = el('div', 'id');
+    const nm = el('div', 'nm');
+    nm.append(el('span', 'name'), el('span', 'chip'), el('span', 'tag'));
+    id.append(nm, el('div', 'what'));
+    const cpu = el('div', 'm cpu'); cpu.append(el('span', 'lab', 'CPU'), el('div', 'bar'), el('span', 'v'));
+    cpu.querySelector('.bar').appendChild(el('i'));
+    const mem = el('div', 'm mem'); mem.append(el('span', 'lab', 'RAM'), el('div', 'bar'), el('span', 'v'));
+    mem.querySelector('.bar').appendChild(el('i'));
+    main.append(el('span', 'dot'), id, cpu, mem, el('span', 'chev', '›'));
+    const kids = el('div', 'kids'); kids.hidden = true;
+    main.addEventListener('click', () => {
+      if (r.classList.contains('nokids')) return;
+      if (open.has(m.id)) open.delete(m.id); else open.add(m.id);
+      syncOpen(r);
+    });
+    r.append(main, kids);
+    return r;
+  }
+  function syncOpen(r) {
+    const on = open.has(r.dataset.id) && !r.classList.contains('nokids');
+    r.classList.toggle('open', on);
+    r.querySelector('.kids').hidden = !on;
+  }
+  function fillRow(r, m, gid) {
+    const color = GROUP_COLOR[gid] || '#71717a';
+    r.className = 'row' + (m.status === 'stopped' ? ' stopped' : '') + (open.has(m.id) ? ' open' : '');
+    const dot = r.querySelector('.dot');
+    dot.className = 'dot ' + (m.status || 'running');
+    dot.title = { working: 'working (using CPU)', idle: 'idle', running: 'running', stopped: 'stopped' }[m.status] || m.status;
+    r.querySelector('.name').textContent = m.name;
+    r.querySelector('.name').title = m.name;
+    r.querySelector('.chip').textContent = KIND[m.kind] || m.kind || '';
+    let tag = '';
+    if (m.kind === 'claude' && m.terminal) tag = m.terminal.replace(/^cs-/, '');
+    else if (m.kind === 'container' && m.detail) tag = m.detail;
+    else if (m.count > 1) tag = m.count + ' processes';
+    r.querySelector('.tag').textContent = tag;
+    const what = r.querySelector('.what');
+    what.textContent = m.what || '';
+    what.title = m.what || '';
+    const s = share(m.cpu_pct);
+    r.querySelector('.cpu .v').textContent = fmtPct(s);
+    r.querySelector('.cpu').title = `${fmtPct(s)} of the server's CPU (${fmtCores(m.cpu_pct)})`;
+    const cb = r.querySelector('.cpu .bar i');
+    cb.style.width = Math.min(100, s) + '%';
+    cb.style.background = color;
+    const memPct = data.host.ram_total_mb ? m.rss_mb / data.host.ram_total_mb * 100 : 0;
+    r.querySelector('.mem .v').textContent = fmtMem(m.rss_mb);
+    r.querySelector('.mem').title = `${fmtMem(m.rss_mb)} — ${fmtPct(memPct)} of memory`;
+    r.querySelector('.mem .bar i').style.width = Math.min(100, memPct) + '%';
+    const kids = r.querySelector('.kids');
+    const ch = m.children || [];
+    r.classList.toggle('nokids', ch.length === 0);
+    if (ch.length) {
+      const head = el('div', 'kid head');
+      head.append(el('span', null, 'Process'), el('span', 'kv', 'CPU'), el('span', 'kv', 'RAM'), el('span', 'kv', ''));
+      kids.replaceChildren(head, ...ch.map(c => {
+        const k = el('div', 'kid');
+        const n = el('span', 'kn', c.name); n.title = c.name;
+        k.append(n, el('span', 'kv', fmtPct(share(c.cpu_pct))), el('span', 'kv', fmtMem(c.rss_mb)),
+                 el('span', 'kv', c.count > 1 ? '×' + c.count : ''));
+        return k;
+      }));
+    } else kids.replaceChildren();
+    syncOpen(r);
+  }
+  function renderGroups() {
+    const box = $('#groups');
+    const seen = new Set();
+    let prevSec = null;
+    for (const g of data.groups) {
+      let sec = sections.get(g.id);
+      if (!sec) { sec = makeSection(g); sections.set(g.id, sec); }
+      const ref = prevSec ? prevSec.nextSibling : box.firstChild;
+      if (sec !== ref) box.insertBefore(sec, ref);
+      prevSec = sec;
+      sec.classList.toggle('all', showAll.has(g.id));
+      sec.querySelector('.gc').textContent = g.members.length;
+      const sum = sec.querySelector('.gsum');
+      sum.replaceChildren(document.createTextNode('CPU '), el('b', null, fmtPct(share(g.cpu_pct))),
+                          document.createTextNode(' · RAM '), el('b', null, fmtMem(g.rss_mb)));
+      // spark from history
+      const pts = (data.history && data.history.points) || [];
+      const paths = sec.querySelectorAll('.spark path');
+      if (pts.length >= 2) {
+        const vals = pts.map(p => share((p.g || {})[g.id] || 0));
+        const mx = Math.max(2, ...vals) * 1.15;
+        let d = '';
+        vals.forEach((v, i) => { d += (i ? 'L' : 'M') + (i / (vals.length - 1) * 72).toFixed(1) + ',' + (17 - v / mx * 16).toFixed(1); });
+        paths[1].setAttribute('d', d);
+        paths[0].setAttribute('d', d + 'L72,18L0,18Z');
+      }
+      // stable order: smoothed CPU, stopped last, "Other" last
+      for (const m of g.members) ema.set(m.id, ema.has(m.id) ? ema.get(m.id) * 0.6 + m.cpu_pct * 0.4 : m.cpu_pct);
+      const ms = g.members.slice().sort((a, b) =>
+        ((a.status === 'stopped') - (b.status === 'stopped')) ||
+        ((a.id === 'sys:other') - (b.id === 'sys:other')) ||
+        (ema.get(b.id) - ema.get(a.id)) || (b.rss_mb - a.rss_mb) || a.id.localeCompare(b.id));
+      const list = sec.querySelector('.list');
+      let prev = null;
+      ms.forEach((m, i) => {
+        seen.add(m.id);
+        let r = rows.get(m.id);
+        if (!r) { r = makeRow(m); rows.set(m.id, r); }
+        fillRow(r, m, g.id);
+        r.classList.toggle('over', i >= LIMIT);
+        const ref = prev ? prev.nextSibling : list.firstChild;
+        if (r !== ref) list.insertBefore(r, ref);
+        prev = r;
+      });
+      sec.querySelector('.empty').hidden = ms.length > 0;
+      fillMore(sec);
+    }
+    for (const [id, r] of rows) if (!seen.has(id)) { r.remove(); rows.delete(id); ema.delete(id); }
+  }
+
+  function render() {
+    renderHost(data.host);
+    renderLegend();
+    renderChart();
+    renderNow();
+    renderGroups();
+    const c = data.collector || {};
+    $('#foot').textContent = `${c.processes || 0} processes · this page's sampler uses ${fmtPct(c.cpu_pct || 0)} of one core · updates every ${data.interval || 5} s`;
+  }
+
+  // ── polling ──
+  function showStale(kind) {
+    const s = $('#stale');
+    if (kind === 'login') {
+      s.replaceChildren(document.createTextNode('Your session has expired. '), Object.assign(el('a', null, 'Log in again'), { href: '/login' }));
+    } else {
+      s.textContent = data ? 'Offline — showing the last data, retrying…' : 'Cannot reach the server status API — retrying…';
+    }
+    s.hidden = false;
+  }
+  function tickUpdated() {
+    const u = $('#updated');
+    if (!lastOk) return;
+    const ago = Math.round((Date.now() - lastOk) / 1000);
+    u.textContent = ago < 2 ? 'live' : `updated ${ago}s ago`;
+  }
+  async function poll() {
+    try {
+      const r = await fetch(API, { cache: 'no-store', credentials: 'same-origin' });
+      const ct = r.headers.get('content-type') || '';
+      if (r.redirected && /\/login/.test(r.url)) { showStale('login'); return; }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!ct.includes('json')) { showStale('login'); return; }
+      const d = await r.json();
+      if (!d || !d.host || !Array.isArray(d.groups)) throw new Error('bad data');
+      data = d;
+      lastOk = Date.now();
+      $('#stale').hidden = true;
+      render();
+      const live = $('#live'); live.classList.remove('tick'); void live.offsetWidth; live.classList.add('tick');
+      tickUpdated();
+    } catch (e) {
+      showStale('offline');
+    } finally {
+      timer = setTimeout(loop, POLL);
+    }
+  }
+  let timer = null;
+  function loop() {
+    if (document.hidden) { timer = null; return; }       // resumes on visibilitychange
+    poll();
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && timer === null) poll();
+  });
+  setInterval(tickUpdated, 1000);
+  let rz = null;
+  window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => data && renderChart(), 120); });
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -1425,3 +1425,105 @@ def test_tasks_tab_at_400px(browser, site):
         pg.wait_for_function("() => !document.querySelector('#list .tasks-row')")
     finally:
         ctx.close()
+
+
+# ── Server status as an in-page tab (gauge button next to T) ────────────────
+SERVER_LINK = '.sidebar a[href="/server.html"]'
+
+
+def _open_server_ctx(browser, site, api, **kw):
+    ctx, pg = _open_tasks_ctx(browser, site, api, **kw)
+    pg.route(re.compile(r"/server\.html(\?|$)"),
+             lambda r: r.fulfill(status=200, content_type="text/html",
+                                 body="<html><body>server page stub</body></html>"))
+    return ctx, pg
+
+
+def test_server_link_is_in_both_pages_next_to_T():
+    for name in ("index-lib.html", "index.html"):
+        html = (WEB_DIR / name).read_text(encoding="utf-8")
+        m = re.search(r'<div class="header-add">(.*?)</div>', html, re.S)
+        assert m, name
+        block = m.group(1)
+        assert block.index('href="/tasks/"') < block.index('href="/server.html"'), name
+
+
+def test_server_button_opens_the_page_in_the_viewer(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open_server_ctx(browser, site, api)
+    try:
+        pg.evaluate("() => { try { localStorage.removeItem('lib-server-open');"
+                    " localStorage.removeItem('lib-tasks-open'); } catch {} }")
+        assert pg.get_attribute(SERVER_LINK, "target") is None
+        assert pg.get_attribute(SERVER_LINK, "aria-label")
+        n_pages = len(ctx.pages)
+        pg.click(SERVER_LINK)
+        pg.wait_for_selector("#wrap iframe")
+        assert pg.get_attribute("#wrap iframe", "src") == "/server.html"
+        assert len(ctx.pages) == n_pages
+        pg.wait_for_selector("#list .server-row")
+        assert "server-row" in _first_row_class(pg)
+        assert pg.inner_text("#list .server-row .proj") == "Server"
+        assert "sel" in pg.get_attribute("#list .server-row", "class")
+        assert pg.inner_text("#tNum") == "server"
+        assert pg.get_attribute("#list .server-row .server-close", "title") == "Close server status"
+        order = pg.evaluate("() => [...document.querySelector('#list .server-row .card-btns')"
+                            ".children].map(e => e.className)")
+        assert order == ["server-close", "dot idle"]
+        # with the task board open too: Tasks, Server, Command line
+        pg.click(TASKS_LINK)
+        pg.wait_for_selector("#list .tasks-row")
+        classes = pg.evaluate("() => [...document.querySelector('#list').children]"
+                              ".slice(0, 3).map(e => e.className)")
+        assert "tasks-row" in classes[0] and "server-row" in classes[1] and "shell-row" in classes[2]
+        assert "sel" not in pg.get_attribute("#list .server-row", "class")
+        pg.click("#list .server-row .proj")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/server.html'")
+        assert "sel" in pg.get_attribute("#list .server-row", "class")
+        shot(pg, "index-lib-server-tab.png")
+    finally:
+        ctx.close()
+
+
+def test_server_close_and_remembered_across_reload(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open_server_ctx(browser, site, api)
+    try:
+        pg.click(SERVER_LINK)
+        pg.wait_for_selector("#list .server-row")
+        pg.reload()
+        pg.wait_for_selector(".card[data-sid]")
+        pg.wait_for_selector("#list .server-row")
+        pg.click("#list .server-row .server-close")
+        pg.wait_for_function("() => !document.querySelector('#list .server-row')")
+        assert pg.query_selector("#wrap iframe") is None
+        assert pg.is_visible("#ph")
+        pg.reload()
+        pg.wait_for_selector(".card[data-sid]")
+        pg.wait_for_timeout(300)
+        assert pg.query_selector("#list .server-row") is None
+    finally:
+        ctx.close()
+
+
+def test_server_tab_at_400px(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open_server_ctx(browser, site, api, width=400, height=800, mobile=True)
+    try:
+        for sel in (TASKS_LINK, SERVER_LINK, "#sysStats", "#cmdBtn", "#newBtn"):
+            b = pg.eval_on_selector(sel, "e => { const r = e.getBoundingClientRect();"
+                                         " return [r.left, r.right, r.width]; }")
+            assert b[2] > 0 and b[0] >= 0 and b[1] <= 400.5, (sel, b)
+        pg.tap(SERVER_LINK)
+        pg.wait_for_selector("#list .server-row")
+        shot(pg, "index-lib-mobile-server-tab.png")
+        assert pg.get_attribute("#wrap iframe", "src") == "/server.html"
+        over = pg.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+        assert over <= 0
+        pg.tap("#list .server-row .server-close")
+        pg.wait_for_function("() => !document.querySelector('#list .server-row')")
+    finally:
+        ctx.close()

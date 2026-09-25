@@ -16,6 +16,7 @@ import unicodedata
 from urllib.parse import urlparse, parse_qs
 
 import library   # session registry (library.py next to this file)
+import server_status   # the Server page's collector (GET /api/server)
 
 SESSIONS = [
     {"id": "1",  "session": "claude-terminal",    "path": "terminal"},
@@ -818,7 +819,28 @@ def lib_delete(sid):
     return {"ok": True, "trashed": trashed}
 
 
+# ── Server page: GET /api/server (see server_status.py) ─────────────────────
+# The collector samples /proc every 5 s in a daemon thread (started in __main__);
+# a request only reads the latest snapshot. Same-origin only, never cached.
+SERVER_ROUTE = "/api/server"
+SERVER_COLLECTOR = server_status.Collector()
+
+
 class Handler(BaseHTTPRequestHandler):
+    def _server_get(self):
+        try:
+            snap = SERVER_COLLECTOR.snapshot() or SERVER_COLLECTOR.sample()
+            code, data = 200, snap
+        except Exception as e:
+            code, data = 500, {"error": str(e)[:200]}
+        body = json.dumps(data, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _route(self):
         return urlparse(getattr(self, "path", "/")).path.rstrip("/") or "/"
 
@@ -870,6 +892,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self._is_library():
             return self._library_get()
+        if self._route() == SERVER_ROUTE:
+            return self._server_get()
         if (urlparse(getattr(self, "path", "/")).path.rstrip("/") or "/") == "/telegram":
             body = tg_render().encode("utf-8")
             self.send_response(200)
@@ -1101,7 +1125,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        if self._is_library():        # no CORS preflight for the library API
+        if self._is_library() or self._route() == SERVER_ROUTE:   # no CORS preflight
             self.end_headers()
             return
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -1566,6 +1590,7 @@ class PasteHandler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     from threading import Thread
+    SERVER_COLLECTOR.start()  # /api/server: sample /proc every 5 s
     tg_autostart()  # bring the Telegram bridge back up if it was configured + enabled
     Thread(target=lambda: HTTPServer(("127.0.0.1", 3014), LiveHandler).serve_forever(), daemon=True).start()
     Thread(target=lambda: HTTPServer(("127.0.0.1", 3045), BufferHandler).serve_forever(), daemon=True).start()
