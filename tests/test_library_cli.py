@@ -156,6 +156,14 @@ class Deck:
             subprocess.run(["pkill", "-P", str(p.pid)], capture_output=True)
             p.kill()
         self.tmux("kill-server")
+        # anything the deck started that outlived its tmux server (seen: a fake
+        # `claude --session-id aaaaaaaa…` reparented to init, which made later runs'
+        # ensure answer "already running elsewhere"); all of them carry HOME=<deck home>
+        for pid in _procs_with_home(self.home):
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
         try:
             os.unlink(f"/tmp/tmux-{os.getuid()}/{self.socket}")
         except OSError:
