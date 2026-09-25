@@ -169,6 +169,14 @@
     /* The command line: pinned above the topics, no rename/archive/drag. */
     .card.shell-row { border-bottom: 1px solid rgba(255,255,255,0.10); }
     .card.shell-row .proj { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; }
+    .shell-close {
+      width: 18px; height: 18px; flex-shrink: 0; padding: 0;
+      border: 1px solid rgba(239,68,68,0.12); border-radius: 4px;
+      background: rgba(239,68,68,0.05); color: rgba(252,165,165,0.55);
+      font-size: 0.62rem; line-height: 16px; text-align: center; cursor: pointer;
+      transition: all 0.12s;
+    }
+    .shell-close:hover { background: rgba(239,68,68,0.16); color: #fecaca; border-color: rgba(239,68,68,0.32); }
 
     .card-top {
       display: flex;
@@ -524,6 +532,7 @@
       .arch-btn { order: 4; height: 20px; line-height: 18px; font-size: 0.64rem; padding: 0 5px; }
       .dot { order: 5; }
       .card-btn { visibility: visible; width: 20px; height: 20px; line-height: 18px; font-size: 0.8rem; }
+      .shell-close { order: 3; width: 20px; height: 20px; line-height: 18px; font-size: 0.7rem; }
       .task { display: none; }
       /* Compact header buttons on phone. */
       .header-add { gap: 3px; }
@@ -678,11 +687,38 @@
     shellRow.innerHTML = `
         <div class="card-top">
           <div class="proj">Command line</div>
-          <div class="card-btns"><span class="dot off"></span></div>
+          <div class="card-btns">
+            <button type="button" class="shell-close" title="Close command line" aria-label="Close command line">✕</button>
+            <span class="dot off"></span>
+          </div>
         </div>
         <div class="card-row2"><span class="sid">bash</span></div>`;
     shellRow.title = 'Command line (bash) — click to open';
-    shellRow.addEventListener('click', () => pickShell());
+    shellRow.addEventListener('click', e => {
+      if (e.target.closest('.shell-close')) return;
+      pickShell();
+    });
+    shellRow.querySelector('.shell-close').addEventListener('click', e => {
+      e.stopPropagation();
+      closeShell();
+    });
+
+    // ✕ on the row: one click, no confirm; the row goes at once, back on error
+    async function closeShell() {
+      const was = shellState;
+      shellState = {active: false, attached: false, status: 'off'};
+      mutSeq++;                                // a poll in flight still sees it running
+      if (sel === SHELL) showPlaceholder();
+      render();
+      try {
+        await jpost('/api/library/shell-close', {});
+      } catch (err) {
+        shellState = was;
+        mutSeq++;
+        render();
+        _toast('⚠️ Command line not closed: ' + String(err && err.message || err).slice(0, 60), 5000);
+      }
+    }
     document.getElementById('cmdBtn').addEventListener('click', () => pickShell());
     if (_isMobile) search.placeholder = 'Search';   // 16px font, ~130px wide on a phone
     // "Show archived" is remembered per browser (storage may be unavailable)
@@ -1100,8 +1136,27 @@
 
     // cmd button / "Command line" row: the server starts the shell if needed
     // and every tab attaches to the same one
+    let _shellSeenUp = false;  // the open shell frame's shell has been reported running
+
+    // back to "Pick a terminal on the left" (the shell was closed or exited)
+    function showPlaceholder() {
+      sel = null;
+      _shellSeenUp = false;
+      const wrap = document.getElementById('wrap');
+      const f = wrap.querySelector('iframe'); if (f) f.remove();
+      if (!document.getElementById('ph')) {
+        const ph = document.createElement('div');
+        ph.className = 'ph'; ph.id = 'ph'; ph.textContent = 'Pick a terminal on the left';
+        wrap.appendChild(ph);
+      }
+      document.getElementById('topbar').style.display = 'none';
+      _frameFocus = null;
+      syncSel();
+    }
+
     function pickShell() {
       sel = SHELL;
+      _shellSeenUp = !!(shellState && shellState.active);
       document.getElementById('topbar').style.display = 'flex';
       document.getElementById('tNum').textContent = 'cmd';
       syncSel();
@@ -1584,10 +1639,16 @@
         if (d && d._system) setSystem(d._system);
         else if (_sysTick++ % 2 === 0) pollSystem();
         const sh = d && d.shell;
-        shellState = sh && typeof sh === 'object'
+        if (seq === mutSeq) shellState = sh && typeof sh === 'object'
           ? {active: sh.active === true, attached: sh.attached === true,
              status: sh.status === 'working' ? 'working' : 'idle'}
           : null;
+        // the open shell ended (`exit` typed in it): drop its frame. Only once it
+        // had been seen running — right after cmd it is still starting.
+        if (seq === mutSeq && sel === SHELL) {
+          if (shellState && shellState.active) _shellSeenUp = true;
+          else if (_shellSeenUp) showPlaceholder();
+        }
         if (!d || !Array.isArray(d.sessions)) { render(); syncSel(); return; }
         if (seq !== mutSeq) return;              // a local change raced this poll — next one is fresh
         sessions = d.sessions

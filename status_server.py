@@ -631,6 +631,10 @@ def lib_post(route, body):
         return lib_rows([e], live={})[0]          # not started: nothing to ask tmux
     if route == "reorder":
         return lib_reorder(body.get("ids"))
+    if route == "shell-close":
+        # the "cmd" command line: exact name, configured socket; not running = ok
+        killed = lib_tmux("kill-session", "-t", "=" + library.SHELL_TMUX).returncode == 0
+        return {"ok": True, "killed": killed}
 
     sid = lib_id(body)
     if route == "rename":

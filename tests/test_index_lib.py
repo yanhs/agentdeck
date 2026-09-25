@@ -65,6 +65,7 @@ class FakeAPI:
         self.with_system = with_system
         self.fail_new = False
         self.fail_reorder = False
+        self.fail_shell_close = False
         self.shell = None          # top-level "shell" of GET /api/library (None = absent)
         self._n = 0
 
@@ -114,6 +115,12 @@ class FakeAPI:
                  "archived": False, "active": False, "attached": False, "status": "off"}
             self.sessions.append(e)
             return self._json(route, e)
+        if path == "/api/library/shell-close":
+            if self.fail_shell_close:
+                return self._json(route, {"error": "tmux gone"}, 500)
+            was = bool(self.shell and self.shell.get("active"))
+            self.shell = {"active": False, "attached": False, "status": "off"}
+            return self._json(route, {"ok": True, "killed": was})
         if path == "/api/library/reorder":
             sid = (body.get("ids") or [None])[0]
         else:
@@ -1043,3 +1050,104 @@ def test_cmd_and_shell_row_fit_at_400px(browser, site):
         assert over <= 1
     finally:
         ctx.close()
+
+
+# ── ✕ closes the command line ───────────────────────────────────────────────
+def test_shell_row_close_button_closes_it_without_opening(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.wait_for_selector("#list .shell-row")
+        btn = "#list .shell-row .shell-close"
+        assert pg.get_attribute(btn, "title") == "Close command line"
+        assert pg.inner_text(btn).strip() == "✕"
+        pg.click(btn)
+        pg.wait_for_function("() => !document.querySelector('#list .shell-row')")
+        assert pg.query_selector("#wrap iframe") is None           # the click did not open it
+        posts = api.posts("/api/library/shell-close")
+        assert len(posts) == 1 and posts[0][2] == {}
+        pg.wait_for_timeout(4600)                                  # a poll does not bring it back
+        assert shell_row(pg) is None
+    finally:
+        ctx.close()
+
+
+def test_closing_the_open_shell_clears_the_frame(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.wait_for_selector("#list .shell-row")
+        pg.click("#list .shell-row .proj")
+        pg.wait_for_selector("#wrap iframe")
+        pg.click("#list .shell-row .shell-close")
+        pg.wait_for_function("() => !document.querySelector('#list .shell-row')")
+        assert pg.query_selector("#wrap iframe") is None           # no dead terminal left showing
+        assert pg.is_visible("#ph")
+    finally:
+        ctx.close()
+
+
+def test_shell_close_error_brings_the_row_back_with_a_toast(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    api.fail_shell_close = True
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.wait_for_selector("#list .shell-row")
+        pg.click("#list .shell-row .shell-close")
+        pg.wait_for_selector("#_imgToast")
+        pg.wait_for_function("() => /command line/i.test(document.getElementById('_imgToast').textContent)")
+        pg.wait_for_selector("#list .shell-row")
+    finally:
+        ctx.close()
+
+
+def test_shell_close_button_fits_at_400px(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open(browser, site, api, width=400, height=800, mobile=True)
+    try:
+        pg.wait_for_selector("#list .shell-row")
+        r = pg.eval_on_selector("#list .shell-row .shell-close",
+                                "e => { const b = e.getBoundingClientRect(); return [b.width, b.right]; }")
+        assert r[0] > 0 and r[1] <= 400.5
+        pg.tap("#list .shell-row .shell-close")
+        pg.wait_for_function("() => !document.querySelector('#list .shell-row')")
+    finally:
+        ctx.close()
+
+
+# ── the shell ended (`exit`): its frame gives way to the placeholder ────────
+def test_shell_frame_replaced_by_placeholder_when_the_shell_ends(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.wait_for_selector("#list .shell-row")
+        pg.click("#cmdBtn")
+        pg.wait_for_selector("#wrap iframe")
+        api.shell = {"active": False, "attached": False, "status": "off"}
+        pg.wait_for_function("() => !document.querySelector('#wrap iframe')", timeout=6000)
+        assert pg.is_visible("#ph")
+        assert shell_row(pg) is None
+        # a topic's frame is never touched by the shell's state
+        pg.click(row("cccc0003") + " .proj")
+        pg.wait_for_selector("#wrap iframe")
+        pg.wait_for_timeout(4600)
+        assert pg.get_attribute("#wrap iframe", "src") == "/sess/?arg=cccc0003"
+    finally:
+        ctx.close()
+
+
+def test_starting_shell_frame_survives_polls_before_it_is_up(page, api):
+    page.click("#cmdBtn")                                # shell not running yet
+    page.wait_for_selector("#wrap iframe")
+    page.wait_for_timeout(4600)                           # polls still say inactive
+    assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=shell"
+    api.shell = dict(SHELL_ON)                            # it came up ...
+    page.wait_for_selector("#list .shell-row")
+    api.shell = {"active": False, "attached": False, "status": "off"}   # ... and was exited
+    page.wait_for_function("() => !document.querySelector('#wrap iframe')", timeout=6000)
+    assert page.is_visible("#ph")

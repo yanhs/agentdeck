@@ -51,7 +51,19 @@ if [ "$ID" = "shell" ]; then
     echo "не удалось открыть командную строку (library_cli: ${NAME:0:40})"
     done_with 1
   fi
-  exec "${TMUX_CMD[@]}" attach-session -t "=cmd-shell"
+  "${TMUX_CMD[@]}" attach-session -t "=cmd-shell"
+  rc=$?
+  # `exit` typed in the shell ends cmd-shell, attach returns and — if this script
+  # ended too — ttyd's page would reconnect, run us again and shell-ensure would
+  # start a NEW shell: `exit` would look like a restart. So when the shell is
+  # gone, keep this connection open (ttyd's SIGHUP on tab close ends the sleep).
+  # Topic ids never get here: their tabs keep ending and reconnecting as before.
+  if ! "${TMUX_CMD[@]}" has-session -t "=cmd-shell" 2>/dev/null; then
+    echo
+    echo "Command line closed — press cmd to open a new one."
+    exec sleep infinity
+  fi
+  exit "$rc"
 fi
 
 if [ "${DRY_RUN:-}" = "1" ]; then

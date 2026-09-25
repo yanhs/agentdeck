@@ -197,3 +197,83 @@ def test_reaper_watches_the_shell_when_it_exists(monkeypatch):
     assert len(w) == len(set(w))
     monkeypatch.setattr(reaper, "_tmux_session_names", lambda: [])
     assert "cmd-shell" not in reaper.watched_sessions()
+
+
+# ── POST /api/library/shell-close ───────────────────────────────────────────
+from tests.test_library_api import _alive, _raw_req, post  # noqa: E402
+
+
+def test_shell_close_kills_only_the_shell(api):  # noqa: F811
+    _seed(api, (API_U1, "тема", 10))
+    for n in (SHELL, "cmd-shellx", "cs-aaaa1111"):
+        _start(api, n)
+    code, out = post(api, "shell-close", {})
+    assert code == 200 and out == {"ok": True, "killed": True}
+    assert not _alive(api, SHELL)
+    assert _alive(api, "cmd-shellx") and _alive(api, "cs-aaaa1111")
+    assert get(api)[1]["shell"]["active"] is False
+
+
+def test_shell_close_is_idempotent(api):  # noqa: F811
+    code, out = post(api, "shell-close", {})                    # no tmux server at all
+    assert code == 200 and out == {"ok": True, "killed": False}
+    _start(api, "cs-aaaa1111")
+    code, out = post(api, "shell-close")
+    assert code == 200 and out == {"ok": True, "killed": False}
+    assert _alive(api, "cs-aaaa1111")
+
+
+def test_shell_close_has_the_same_csrf_checks(api, monkeypatch):  # noqa: F811
+    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    _start(api, SHELL)
+    code, _, _ = _raw_req(api, "POST", "/api/library/shell-close", b"{}",
+                          {"Content-Type": "text/plain"})
+    assert code == 415
+    code, _, _ = _raw_req(api, "POST", "/api/library/shell-close", b"{}",
+                          {"Content-Type": "application/json", "Origin": "https://evil.example"})
+    assert code == 403
+    assert _alive(api, SHELL)
+    code, _, out = _raw_req(api, "POST", "/api/library/shell-close", b"{}",
+                            {"Content-Type": "application/json",
+                             "Origin": "https://agents.reimake.com"})
+    assert code == 200 and out["killed"] is True and not _alive(api, SHELL)
+
+
+def test_shell_close_get_is_not_allowed(api):  # noqa: F811
+    _start(api, SHELL)
+    code, _ = get(api, "/api/library/shell-close")
+    assert code == 404 and _alive(api, SHELL)
+
+
+# ── `exit` in the command line closes it for good (no reconnect respawn) ────
+def _tab(deck, arg, out):
+    t = subprocess.Popen(["script", "-qfc", f"bash {SCRIPT} {arg}", str(out)],
+                         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, env=deck.env)
+    deck.clients.append(t)
+    return t
+
+
+def test_exit_in_the_shell_keeps_the_tab_open_and_does_not_respawn(deck, tmp_path):
+    out = tmp_path / "tab.log"
+    tab = _tab(deck, "shell", out)
+    assert wait_for(lambda: pane_pids(deck, SHELL))
+    assert wait_for(lambda: deck.tmux("list-panes", "-a", "-F",
+                                      "#{session_name}\t#{pane_current_command}")
+                    .stdout.splitlines().count(f"{SHELL}\tbash") == 1)
+    deck.tmux("send-keys", "-t", f"={SHELL}:", "exit", "Enter")
+    assert wait_for(lambda: not deck.has(SHELL))
+    assert wait_for(lambda: "Command line closed" in out.read_text(errors="replace"))
+    time.sleep(1.0)
+    assert tab.poll() is None, "the tab's connection ended: ttyd would reconnect and respawn"
+    assert not deck.has(SHELL), "a new cmd-shell was started"
+
+
+def test_topic_tab_still_ends_when_its_session_ends(deck, tmp_path):
+    e = deck.add("тема", uuid=U1)
+    tab = _tab(deck, e["id"], tmp_path / "tab.log")
+    assert wait_for(lambda: deck.has("cs-aaaaaaaa"))
+    time.sleep(0.3)
+    deck.tmux("kill-session", "-t", "=cs-aaaaaaaa")
+    assert wait_for(lambda: tab.poll() is not None), "topic tab must end (ttyd reconnects)"
+    assert "Command line closed" not in (tmp_path / "tab.log").read_text(errors="replace")
