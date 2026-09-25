@@ -350,6 +350,9 @@
       letter-spacing: 0.02em;
       white-space: nowrap;
     }
+    /* the code under the name opens that terminal's tasks (the rest of the row opens the terminal) */
+    .card .sid { flex: 0 1 auto; margin-right: auto; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+    .card .sid:hover { text-decoration: underline; color: var(--text, inherit); }
 
     .arch-btn {
       flex: none;
@@ -604,6 +607,7 @@
       .card-top, .card-btns, .card-row2 { display: contents; }
       .proj { order: 1; flex: 1; min-width: 0; font-size: 0.8rem; }
       .sid { order: 2; flex: none; font-size: 0.6rem; }
+      .card .sid { flex: none; margin-right: 0; }
       .card-btn.edit { order: 3; }
       .arch-btn { order: 4; height: 20px; line-height: 18px; font-size: 0.64rem; padding: 0 5px; }
       .dot { order: 5; }
@@ -909,7 +913,7 @@
           </div>
         </div>
         <div class="card-row2">
-          <span class="sid"></span>
+          <span class="sid" title="Show this terminal's tasks"></span>
           <button type="button" class="mv-btn up" title="Move up" aria-label="Move up">▲</button>
           <button type="button" class="mv-btn down" title="Move down" aria-label="Move down">▼</button>
           <button type="button" class="arch-btn">Archive</button>
@@ -919,6 +923,7 @@
       c.addEventListener('click', e => {
         if (e.target.closest('.card-btn, .arch-btn, .del-btn, .mv-btn, input')) return;
         if (Date.now() - _dragEndedAt < 300) return;     // the end of a drag is not a click
+        if (e.target.closest('.sid')) { openTasks(id); return; }   // code → its tasks (archived too)
         const s = byId(id);
         if (s && s.archived) { _toast('Archived terminal — click Restore to open it', 3000); return; }
         pick(id);
@@ -1339,6 +1344,35 @@
     document.getElementById('tNum').addEventListener('click', () => {
       if (ID_RE.test(sel || '')) openTasks(sel);
     });
+
+    // The task board (same origin, in our iframe or standalone via /?open=<id>)
+    // asks to open a terminal by its code. Same rule as a list click: a known,
+    // non-archived terminal opens even if the search hides its row.
+    function openTerminalById(id) {
+      if (!ID_RE.test(id || '')) return;
+      const s = byId(id);
+      if (!s) { _toast('Terminal ' + id + ' not found', 3000); return; }
+      if (s.archived) { _toast('Archived terminal — click Restore to open it', 3000); return; }
+      pick(id);
+    }
+    window.addEventListener('message', e => {
+      if (e.origin !== location.origin) return;
+      const d = e.data;
+      if (!d || typeof d !== 'object' || d.type !== 'agentdeck:open-terminal') return;
+      if (typeof d.id !== 'string' || !ID_RE.test(d.id)) return;
+      openTerminalById(d.id);
+    });
+    // ?open=<id>: honoured once the first list arrives, then dropped from the URL
+    let _pendingOpen = null;
+    try {
+      const u = new URL(location.href);
+      if (u.searchParams.has('open')) {
+        const v = u.searchParams.get('open') || '';
+        if (ID_RE.test(v)) _pendingOpen = v;
+        u.searchParams.delete('open');
+        history.replaceState(history.state, '', u.pathname + (u.search === '?' ? '' : u.search) + u.hash);
+      }
+    } catch {}
 
     function closeTasks() {
       tasksOpen = false;
@@ -1957,6 +1991,7 @@
           .map(s => Object.assign({}, s, {name: String(s.name ?? '')}));
         render();
         syncSel();
+        if (_pendingOpen) { const id = _pendingOpen; _pendingOpen = null; openTerminalById(id); }
       } catch {}
     }
     poll(); setInterval(poll, 4000);

@@ -655,3 +655,87 @@ def test_standalone_board_ignores_the_dashboard_theme(browser, board):
 
 def test_live_board_copy_matches_next():
     assert (TASKS_DIR / "static" / "index.html").read_text() == NEXT.read_text()
+
+
+# ---- a task's terminal code opens that terminal (owner, 2026-09-25)
+def _expanded(fr, tid):
+    return fr.get_attribute(f'.task[data-id="{tid}"] .task-row', "aria-expanded")
+
+
+def test_session_code_is_marked_clickable(page):
+    sess = page.locator('.task[data-id="pipeline-quality"] .t-sess')
+    assert sess.get_attribute("title").startswith("Open this terminal")
+    assert sess.evaluate("e => getComputedStyle(e).cursor") == "pointer"
+
+
+def test_framed_board_asks_the_dashboard_to_open_the_terminal(browser, board):
+    ctx, pg, fr = _embedded(browser, board, "dark")
+    try:
+        pg.evaluate("() => { window.__msgs = []; addEventListener('message',"
+                    " e => window.__msgs.push({data: e.data, origin: e.origin})); }")
+        fr.click('.task[data-id="pipeline-quality"] .t-sess')
+        pg.wait_for_function("() => window.__msgs.length > 0", timeout=3000)
+        msgs = pg.evaluate("window.__msgs")
+        origin = pg.evaluate("location.origin")
+        assert msgs == [{"data": {"type": "agentdeck:open-terminal", "id": "5e1f00ab"},
+                         "origin": origin}]
+        assert _expanded(fr, "pipeline-quality") == "false"      # no expand/collapse
+        assert fr.url.startswith(board.url)                      # the board stayed put
+        # the "Session" value in the open detail does the same
+        fr.click('.task[data-id="pipeline-quality"] .t-title')
+        det = '.task[data-id="pipeline-quality"] .task-detail .sess-link'
+        fr.wait_for_selector(det)
+        assert fr.get_attribute(det, "title").startswith("Open this terminal")
+        fr.click(det)
+        pg.wait_for_function("() => window.__msgs.length > 1", timeout=3000)
+        assert pg.evaluate("window.__msgs[1].data") == {"type": "agentdeck:open-terminal",
+                                                        "id": "5e1f00ab"}
+        assert _expanded(fr, "pipeline-quality") == "true"
+        assert fr.url.startswith(board.url)
+    finally:
+        ctx.close()
+
+
+def test_standalone_board_links_to_the_dashboard(page):
+    import re as _re
+    page.route(_re.compile(r"/\?open="), lambda r: r.fulfill(
+        status=200, content_type="text/html", body="<html><body>dashboard stub</body></html>"))
+    tid = "pipeline-quality"
+    page.click(f'.task[data-id="{tid}"] .t-title')
+    det = f'.task[data-id="{tid}"] .task-detail .sess-link'
+    page.wait_for_selector(det)
+    assert page.get_attribute(det, "href") == "/?open=5e1f00ab"
+    with page.expect_navigation():
+        page.click(f'.task[data-id="{tid}"] .t-sess')
+    assert page.url.endswith("/?open=5e1f00ab")
+    assert "dashboard stub" in page.inner_text("body")
+
+
+def test_standalone_detail_session_link_navigates(page):
+    import re as _re
+    page.route(_re.compile(r"/\?open="), lambda r: r.fulfill(
+        status=200, content_type="text/html", body="<html><body>dashboard stub</body></html>"))
+    page.click('.task[data-id="pipeline-quality"] .t-title')
+    with page.expect_navigation():
+        page.click('.task[data-id="pipeline-quality"] .task-detail .sess-link')
+    assert page.url.endswith("/?open=5e1f00ab")
+
+
+def test_non_hex_session_is_not_a_link(browser, board):
+    st = make_state(datetime.now(timezone.utc))
+    st["tasks"][1]["session"] = "not-hex!"
+    board.write(st)
+    ctx = browser.new_context(viewport={"width": 1280, "height": 900})
+    pg = ctx.new_page()
+    try:
+        pg.goto(board.url)
+        pg.wait_for_selector(".task")
+        s = pg.locator('.task[data-id="svetlota-fonts"] .t-sess')
+        assert s.inner_text() == "not-hex!"
+        assert not s.get_attribute("title").startswith("Open this terminal")
+        s.click()
+        pg.wait_for_timeout(200)
+        assert pg.url.startswith(board.url)
+        assert _expanded(pg, "svetlota-fonts") == "true"         # plain row click
+    finally:
+        ctx.close()

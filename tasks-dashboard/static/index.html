@@ -207,6 +207,8 @@
   .t-meta > * { min-width: 0; overflow-wrap: anywhere; }
   .t-agent { color: var(--text-2); }
   .t-sess { color: var(--text-3, var(--text-2)); }
+  .sess-link { cursor: pointer; color: inherit; text-decoration: none; border-radius: 3px; }
+  .sess-link:hover { text-decoration: underline; color: var(--text); }
   .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 500; padding: 0 7px;
     border-radius: 999px; line-height: 18px; max-width: 100%; }
   .badge i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
@@ -529,7 +531,9 @@ function detail(r) {
     <dl class="facts">
       <div><dt>Status</dt><dd>${esc(statusTxt)}${t.activity && t.status !== 'done' ? ' <span class="sub">(' + esc(t.activity) + ')</span>' : ''}</dd></div>
       <div><dt>Agent</dt><dd>${hl(t.agent || 'unknown', k)}</dd></div>
-      ${t.session ? `<div><dt>Session</dt><dd class="mono">${hl(t.session, k)}</dd></div>` : ''}
+      ${t.session ? `<div><dt>Session</dt><dd class="mono">${SESS_RE.test(t.session)
+        ? `<a class="sess-link" href="/?open=${esc(t.session)}" data-sess="${esc(t.session)}" title="${SESS_TIP}">${hl(t.session, k)}</a>`
+        : hl(t.session, k)}</dd></div>` : ''}
       <div><dt>Created</dt><dd>${absShort(r.created) || '—'} <span class="sub">${tm(r.created, '', 'Created')}</span></dd></div>
       <div><dt>Updated</dt><dd>${absShort(lastT) || '—'} <span class="sub">${tm(lastT, '', 'Updated')}</span></dd></div>
       <div><dt>${spanLbl}</dt><dd>${spanVal || '—'}</dd></div>
@@ -539,6 +543,17 @@ function detail(r) {
     ${r.items.length ? `<div class="dprog">${progress(r.nDone, r.items.length, true)}<span>${parts.join(' · ')}</span></div>
     <ol class="steps">${steps}</ol>` : '<p class="no-steps">No steps recorded.</p>'}
   </div>`;
+}
+// A task's terminal code opens that terminal: inside the dashboard (our iframe) by
+// asking the parent; standalone by going to the dashboard with ?open=<id>.
+const SESS_RE = /^[0-9a-f]{8}$/;
+const SESS_TIP = "Open this terminal — the agent's Claude session code, as in the terminal list";
+function openTerminal(id) {
+  if (!SESS_RE.test(id)) return;
+  let framed = false;
+  try { framed = window.parent !== window; } catch (_) { framed = true; }
+  if (framed) window.parent.postMessage({ type: 'agentdeck:open-terminal', id }, location.origin);
+  else location.href = '/?open=' + id;
 }
 function rowHTML(r, open) {
   const t = r.t, k = ui.toks, g = r.group;
@@ -551,7 +566,9 @@ function rowHTML(r, open) {
       <span class="st" title="${esc(t.status || '')}">${icon}</span>
       <span class="t-main">
         <span class="t-title">${hl(t.title || t.id, k)}</span>
-        <span class="t-meta"><span class="mono t-id">${hl(t.id, k)}</span><span class="t-agent">${hl(agentLabel(t.agent), k)}</span>${t.session ? `<span class="mono t-sess" title="Agent's Claude session id — the same code the terminal list shows">${hl(t.session, k)}</span>` : ''}${badge(t)}${r.created != null ? `<span>Created ${tm(r.created, 'created', 'Created')}</span>` : ''}</span>
+        <span class="t-meta"><span class="mono t-id">${hl(t.id, k)}</span><span class="t-agent">${hl(agentLabel(t.agent), k)}</span>${t.session ? (SESS_RE.test(t.session)
+          ? `<span class="mono t-sess sess-link" data-sess="${esc(t.session)}" title="${SESS_TIP}">${hl(t.session, k)}</span>`
+          : `<span class="mono t-sess" title="Agent's Claude session id — the same code the terminal list shows">${hl(t.session, k)}</span>`) : ''}${badge(t)}${r.created != null ? `<span>Created ${tm(r.created, 'created', 'Created')}</span>` : ''}</span>
         ${stepHit(r)}
       </span>
       <span class="t-prog">${n ? progress(r.nDone, n) + `<span class="frac">${r.nDone}/${n}</span>` : '<span class="frac">no steps</span>'}</span>
@@ -724,6 +741,13 @@ $('#board').addEventListener('click', e => {
     if (filtering(g)) ui.closedWhileFiltering[g] = !ui.closedWhileFiltering[g];
     else ui.open[g] = !ui.open[g];
     render(); return;
+  }
+  const sess = e.target.closest('[data-sess]');
+  if (sess) {
+    if (sess.tagName === 'A' && (e.ctrlKey || e.metaKey || e.shiftKey)) return;   // new tab/window: browser default
+    e.preventDefault();
+    openTerminal(sess.dataset.sess);
+    return;                                  // not a row toggle
   }
   const more = e.target.closest('button.more');
   if (more) { const g = more.closest('section.group').dataset.group; ui.limit[g] += PAGE; render(); return; }

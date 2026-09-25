@@ -1810,3 +1810,165 @@ def test_pinned_rows_are_one_line_without_subtitles(browser, site):
             assert max(tops) - min(tops) <= 4, (cls, tops)
     finally:
         ctx.close()
+
+
+# ── terminal code <-> its tasks (owner, 2026-09-25) ────────────────────────
+# The 8-hex code under a row's name opens that terminal's tasks (like the id in
+# the top bar); the task board sends a task's code back to open the terminal.
+def _tasks_stubbed(browser, site, api, url=None, **kw):
+    ctx, pg = _open_tasks_ctx(browser, site, api, **kw)
+    pg.route(re.compile(r"/tasks/\?session="),
+             lambda r: r.fulfill(status=200, content_type="text/html",
+                                 body="<html><body>filtered board stub</body></html>"))
+    return ctx, pg
+
+
+def _src(pg):
+    f = pg.query_selector("#wrap iframe")
+    return f.get_attribute("src") if f else None
+
+
+def test_clicking_the_code_in_the_list_shows_that_terminals_tasks(browser, site):
+    api = FakeAPI()
+    ctx, pg = _tasks_stubbed(browser, site, api)
+    try:
+        sid = row("cccc0003") + " .sid"
+        assert pg.eval_on_selector(sid, "e => getComputedStyle(e).cursor") == "pointer"
+        assert pg.get_attribute(sid, "title") == "Show this terminal's tasks"
+        pg.hover(sid)
+        assert "underline" in pg.eval_on_selector(sid, "e => getComputedStyle(e).textDecorationLine")
+        pg.click(sid)
+        pg.wait_for_function("() => (document.querySelector('#wrap iframe')||{}).getAttribute"
+                             " && document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/tasks/?session=cccc0003'")
+        assert pg.inner_text("#tNum") == "tasks"
+        pg.wait_for_selector("#list .tasks-row.sel")
+        # the rest of the row still opens the terminal
+        pg.click(row("aaaa0001") + " .proj")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=aaaa0001'")
+        assert api.posts("/api/library/reorder") == []           # a click is not a drag
+    finally:
+        ctx.close()
+
+
+def test_clicking_the_code_of_an_archived_row_shows_its_tasks(browser, site):
+    api = FakeAPI()
+    api.sessions.append(archived_session())
+    ctx, pg = _tasks_stubbed(browser, site, api)
+    try:
+        pg.click("#showArchived")
+        pg.wait_for_selector(row("ffff0005"))
+        pg.click(row("ffff0005") + " .sid")
+        pg.wait_for_function("() => (document.querySelector('#wrap iframe')||{}).getAttribute"
+                             " && document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/tasks/?session=ffff0005'")
+        assert api.posts("/api/library/archive") == []
+    finally:
+        ctx.close()
+
+
+def test_code_click_on_a_phone_shows_tasks_and_arrows_still_work(browser, site):
+    api = FakeAPI()
+    ctx, pg = _tasks_stubbed(browser, site, api, width=400, height=800, mobile=True)
+    try:
+        pg.click(row("cccc0003") + " .sid")
+        pg.wait_for_function("() => (document.querySelector('#wrap iframe')||{}).getAttribute"
+                             " && document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/tasks/?session=cccc0003'")
+        pg.click(row("aaaa0001") + " .mv-btn.down")
+        pg.wait_for_function("() => [...document.querySelectorAll('#list .card[data-sid]')]"
+                             ".map(e => e.dataset.sid).join() === "
+                             "'dddd0004,bbbb0002,cccc0003,aaaa0001'", timeout=3000)
+    finally:
+        ctx.close()
+
+
+def _board_frame(pg):
+    pg.click(TASKS_LINK)
+    pg.wait_for_selector("#wrap iframe")
+    pg.wait_for_function("() => window.frames.length > 0")
+    fr = pg.query_selector("#wrap iframe").content_frame()
+    fr.wait_for_selector("body")
+    return fr
+
+
+def test_board_message_from_the_same_origin_opens_the_terminal(browser, site):
+    api = FakeAPI()
+    ctx, pg = _tasks_stubbed(browser, site, api)
+    try:
+        fr = _board_frame(pg)
+        # cccc0003 is hidden by the search filter: still opens
+        pg.fill("#search", "свет")
+        fr.evaluate("() => parent.postMessage({type: 'agentdeck:open-terminal', id: 'cccc0003'},"
+                    " location.origin)")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=cccc0003'")
+        assert pg.inner_text("#tNum") == "cccc0003"
+    finally:
+        ctx.close()
+
+
+def test_board_message_for_an_unknown_terminal_only_toasts(browser, site):
+    api = FakeAPI()
+    ctx, pg = _tasks_stubbed(browser, site, api)
+    try:
+        fr = _board_frame(pg)
+        fr.evaluate("() => parent.postMessage({type: 'agentdeck:open-terminal', id: '12345678'},"
+                    " location.origin)")
+        pg.wait_for_function("() => ((document.getElementById('_imgToast')||{}).textContent||'')"
+                             ".includes('12345678')", timeout=3000)
+        assert "not found" in pg.inner_text("#_imgToast").lower()
+        assert _src(pg) == "/tasks/"
+        # garbage ids and other message types are ignored outright
+        fr.evaluate("() => { parent.postMessage({type: 'agentdeck:open-terminal', id: 'x\\');'},"
+                    " location.origin); parent.postMessage({type: 'other', id: 'cccc0003'},"
+                    " location.origin); }")
+        pg.wait_for_timeout(300)
+        assert _src(pg) == "/tasks/"
+    finally:
+        ctx.close()
+
+
+def test_foreign_origin_message_is_ignored(browser, site):
+    api = FakeAPI()
+    ctx, pg = _tasks_stubbed(browser, site, api)
+    try:
+        _board_frame(pg)
+        pg.evaluate("() => window.dispatchEvent(new MessageEvent('message', {origin:"
+                    " 'https://evil.example', data: {type: 'agentdeck:open-terminal',"
+                    " id: 'cccc0003'}}))")
+        pg.wait_for_timeout(300)
+        assert _src(pg) == "/tasks/"
+        # the same message from our own origin works (the check is the origin)
+        pg.evaluate("() => window.dispatchEvent(new MessageEvent('message', {origin:"
+                    " location.origin, data: {type: 'agentdeck:open-terminal', id: 'cccc0003'}}))")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=cccc0003'")
+    finally:
+        ctx.close()
+
+
+def test_open_param_on_load_opens_that_terminal_and_is_removed(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open(browser, site + "?open=cccc0003", api)
+    try:
+        pg.wait_for_function("() => (document.querySelector('#wrap iframe')||{}).getAttribute"
+                             " && document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=cccc0003'")
+        assert "open=" not in pg.url
+        assert pg.url.endswith("/index-lib.html")
+    finally:
+        ctx.close()
+
+
+def test_open_param_with_garbage_or_unknown_id_does_nothing(browser, site):
+    for q in ("?open=%3Cb%3E", "?open=12345678"):
+        api = FakeAPI()
+        ctx, pg = _open(browser, site + q, api)
+        try:
+            pg.wait_for_timeout(500)
+            assert pg.query_selector("#wrap iframe") is None, q
+            assert "open=" not in pg.url, q
+        finally:
+            ctx.close()
