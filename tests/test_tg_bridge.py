@@ -1674,3 +1674,28 @@ def test_loaded_topics_timeout_is_unknown_not_a_crash(monkeypatch):
     monkeypatch.setattr(tb.subprocess, "run", slow)
     assert tb.loaded_topics() is None
     assert tb.pane_is_claude("aaaa1111", "cs-aaaa1111") is False
+
+
+# ── migrated slot whose legacy terminal still runs (busy ones were left alone) ──
+def test_saved_selection_stays_on_the_running_legacy_terminal(world, monkeypatch):
+    # migration left busy claude-terminal-N running; its topic's ensure would
+    # refuse (exit 4, same conversation) — so the chat must keep typing there
+    world.add("app - PIPE", uuid=U1, legacy_slot=6)
+    monkeypatch.setattr(tb, "has_session", lambda s: s == "claude-terminal-6")
+    tb.set_current(CHAT, "6")
+    assert tb.resolve_current(CHAT) == "6"
+    assert tb.get_current(CHAT) == "6"
+
+
+def test_use_number_picks_the_running_legacy_terminal(world, monkeypatch):
+    world.add("app - PIPE", uuid=U1, legacy_slot=6)
+    monkeypatch.setattr(tb, "has_session", lambda s: s == "claude-terminal-6")
+    run_cmd(tb.cmd_use, ["6"])
+    assert tb.get_current(CHAT) == "6" and world.ensured() == []
+
+
+def test_start_session_accepts_a_running_migrated_legacy_slot(world, monkeypatch):
+    world.add("app - PIPE", uuid=U1, legacy_slot=6)
+    monkeypatch.setattr(tb, "has_session", lambda s: s == "claude-terminal-6")
+    ok, msg = tb.start_session("6")
+    assert ok and msg == "already running"

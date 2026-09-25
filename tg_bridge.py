@@ -154,13 +154,14 @@ def start_session(aid: str) -> tuple[bool, str]:
     session = SESSIONS.get(aid)
     if not session:
         return False, f"no terminal #{aid}"
+    if has_session(session):
+        # still running from before the migration (busy terminals were left alone)
+        return True, "already running"
     e = migrated_topic(aid)
     if e is not None:
         # its conversation now lives in the library: the old launch script would
         # start a SECOND Claude on the same uuid
         return False, f"слот #{aid} переехал в тему {topic_label(e)} — старый терминал не запускаю"
-    if has_session(session):
-        return True, "already running"
     script = "launch-claude.sh" if str(aid) == "1" else f"launch-claude-{aid}.sh"
     spath = os.path.join(GATE_DIR, script)
     if not os.path.exists(spath):
@@ -294,6 +295,13 @@ def target_label(key) -> str:
     return f"#{key}"
 
 
+def legacy_alive(slot) -> bool:
+    """The old claude-terminal-N of this slot is still running (migration left
+    busy terminals untouched until they unload)."""
+    session = SESSIONS.get(str(slot))
+    return bool(session) and has_session(session)
+
+
 def migrated_topic(slot: str) -> dict | None:
     """The topic migrated from legacy slot N (library.migrate_from_slots sets
     `legacy_slot`), archived ones included: once a slot has moved into the
@@ -425,7 +433,7 @@ def resolve_current(chat_id: int) -> str | None:
     cur = get_current(chat_id)
     if cur and not is_topic(cur):
         e = migrated_topic(cur)     # archived too: ensure then refuses, never the old slot
-        if e is not None:
+        if e is not None and not legacy_alive(cur):
             set_current(chat_id, e["id"])
             return e["id"]
     return cur
@@ -1313,6 +1321,10 @@ async def _use_number(chat_id: int, aid: str) -> str:
     """`/use N` during the transition: the topic migrated from slot N if there
     is one, else the old claude-terminal-N."""
     e = migrated_topic(aid)
+    if e is not None and legacy_alive(aid):
+        # the migration left this busy terminal running: its topic would refuse
+        # (same conversation), so keep talking to the terminal itself
+        return await _apply_use(chat_id, aid)
     if e is not None:
         if e.get("archived"):
             # never fall back to the old launch script: it would start a second
