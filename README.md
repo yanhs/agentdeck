@@ -200,6 +200,27 @@ sets a `ScheduleWakeup`, the terminal is marked busy until 10 minutes after the 
 time (a `CronCreate` or `Monitor`: for 6 hours), so neither the memory limit nor the idle
 reaper unloads it and kills the timer.
 
+**Optional — guard hooks that keep agents honest about the task board.** Two Claude Code
+hooks in `hooks/`, both plain Python with no dependencies:
+
+- `guard_task_board.py` blocks the first file edit of a session until the work is on the
+  task board (any `tracker.py` call). For a genuinely trivial change the agent runs
+  `NO_BOARD=1 true` instead, which leaves a visible trace. Temp directories and `~/.claude/`
+  are never blocked.
+- `guard_dont_stop.py` stops an agent from ending its turn in the middle of a task it put on
+  the board with nothing scheduled to wake it up again. It lets the turn end once there is a
+  background command, a timer (`CronCreate` / `ScheduleWakeup`), a `Monitor` or a sub-agent
+  from the last 10 minutes, or once the task is closed or marked `stopped`. Only tasks this
+  session created or moved count, and it never blocks more than twice in a row.
+
+To enable them, copy the `hooks` block from `hooks/settings.example.json` into your
+project's `.claude/settings.json` and replace `/path/to/agentdeck` with where you cloned the
+repo. Settings you can change with environment variables: `TRACKER_STATE` (the board file, same default as
+`tracker.py`), `AGENTDECK_TRACKER` (path to `tracker.py`), `AGENTDECK_BOARD_URL` (a board
+link to show in the messages) and `AGENTDECK_BOARD_MARKS` / `AGENTDECK_STOP_MARKS`
+(per-session marker folders, default under `$TMPDIR`). If a hook hits an error of its own,
+it lets the action through.
+
 Create the login credentials the gate checks against:
 
 ```bash
@@ -351,6 +372,7 @@ sessions.pm2.config.js   PM2 app for that ttyd
 idle_reaper.py           unloads idle terminals (cron, every minute)
 migrate_library.py       moves old numbered slots into the library
 hooks/hold_on_timer.py   Claude Code hook: a pending timer keeps its terminal loaded
+hooks/guard_*.py         Claude Code hooks: board before edits, no silent mid-task stop
 status_server.py         login gate + library/status/buffer/paste APIs + Telegram page
 web/index.html           dashboard front-end
 tg_bridge.py             Telegram ⇄ tmux bridge

@@ -1,0 +1,32 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_task_board.py" },
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_dont_stop.py" }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_task_board.py" }
+        ]
+      },
+      {
+        "matcher": "CronCreate|ScheduleWakeup|Monitor|Agent|Task",
+        "hooks": [
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_dont_stop.py" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_dont_stop.py" }
+        ]
+      }
+    ]
+  }
+}

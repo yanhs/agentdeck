@@ -2,6 +2,15 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## Unreleased
+
+- **Guard hooks.** `hooks/guard_task_board.py` blocks the first file edit of a session until
+  the task is on the board (or the agent runs `NO_BOARD=1 true` for a trivial change).
+  `hooks/guard_dont_stop.py` blocks ending a turn while this session's board task is still
+  active and no background command, timer, monitor or sub-agent will resume it. Both give way
+  if they hit an error of their own. Settings are environment variables. Copy the wiring from
+  `hooks/settings.example.json`. Tests: `tests/test_guard_hooks.py`.
+
 ## v1.4.0 — named terminals instead of numbered slots
 
 The fixed row of numbered terminals (1–8, later 1–12) is gone. Terminals are now a
