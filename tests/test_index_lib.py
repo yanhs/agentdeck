@@ -857,7 +857,10 @@ def test_topbar_tasks_and_stats_are_kept(page):
         "() => document.getElementById('cpuVal').textContent === '12%'", timeout=6000)
     assert page.inner_text("#ramVal") == "6400/16000M"
     page.click(row("dddd0004") + " .proj")
-    for bid in ("tPasteImg", "tOpen", "tEsc", "tTg", "tChpw", "tLogout"):
+    for bid in ("tPasteImg", "tOpen", "tEsc", "tMenu"):
+        assert page.is_visible("#" + bid), bid
+    page.click("#tMenu")                     # Telegram / Password / Logout live in the menu
+    for bid in ("tTg", "tChpw", "tLogout"):
         assert page.is_visible("#" + bid), bid
 
 
@@ -1151,3 +1154,91 @@ def test_starting_shell_frame_survives_polls_before_it_is_up(page, api):
     api.shell = {"active": False, "attached": False, "status": "off"}   # ... and was exited
     page.wait_for_function("() => !document.querySelector('#wrap iframe')", timeout=6000)
     assert page.is_visible("#ph")
+
+
+# ── header: Esc first; Telegram / Password / Logout in one menu ─────────────
+def _topbar_order(pg):
+    return pg.evaluate("""() => [...document.querySelectorAll('#topbar > .btn, #topbar > .acct > .btn')]
+        .filter(e => e.offsetParent !== null).map(e => e.id)""")
+
+
+def _menu_open(pg):
+    return pg.evaluate("() => !document.getElementById('tMenuList').hidden")
+
+
+def test_esc_is_first_and_account_links_are_in_one_menu(page):
+    page.click(row("dddd0004") + " .proj")
+    page.wait_for_selector("#topbar:visible")
+    assert _topbar_order(page) == ["tEsc", "tPasteImg", "tOpen", "tMenu"]
+    for bid in ("tTg", "tChpw", "tLogout"):                # hidden until the menu opens
+        assert not page.is_visible("#" + bid), bid
+    assert page.get_attribute("#tTg", "href") == "/telegram"
+    assert page.get_attribute("#tChpw", "href") == "/change-password"
+    assert page.get_attribute("#tLogout", "href") == "/logout"
+    assert page.get_attribute("#tMenu", "aria-haspopup") == "menu"
+    assert page.get_attribute("#tMenu", "aria-expanded") == "false"
+    shot(page, "index-lib-topbar.png")
+
+
+def test_account_menu_opens_and_closes(page):
+    page.click(row("dddd0004") + " .proj")
+    page.click("#tMenu")
+    assert _menu_open(page) and page.get_attribute("#tMenu", "aria-expanded") == "true"
+    shot(page, "index-lib-account-menu.png")
+    items = page.eval_on_selector_all("#tMenuList [role=menuitem]", "els => els.map(e => e.id)")
+    assert items == ["tTg", "tChpw", "tLogout"]
+    for bid in items:
+        assert page.is_visible("#" + bid)
+    # the menu is drawn above the terminal, not clipped under it
+    hit = page.evaluate("""() => { const r = document.getElementById('tLogout').getBoundingClientRect();
+        return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2).id; }""")
+    assert hit == "tLogout"
+    page.click("#tMenu")                                    # toggles shut
+    assert not _menu_open(page)
+    page.click("#tMenu")
+    page.click(".sidebar-header")                           # outside click
+    assert not _menu_open(page)
+    page.click("#tMenu")
+    page.keyboard.press("Escape")
+    assert not _menu_open(page)
+    assert page.evaluate("document.activeElement.id") == "tMenu"
+
+
+def test_account_menu_keyboard(page):
+    page.click(row("dddd0004") + " .proj")
+    page.focus("#tMenu")
+    page.keyboard.press("Enter")
+    assert _menu_open(page)
+    assert page.evaluate("document.activeElement.id") == "tTg"   # focus moves into the menu
+    page.keyboard.press("ArrowDown")
+    assert page.evaluate("document.activeElement.id") == "tChpw"
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("ArrowDown")                            # wraps
+    assert page.evaluate("document.activeElement.id") == "tTg"
+    page.keyboard.press("ArrowUp")
+    assert page.evaluate("document.activeElement.id") == "tLogout"
+    page.keyboard.press("Tab")                                  # leaving the menu closes it
+    assert not _menu_open(page)
+
+
+def test_account_menu_at_400px(browser, site):
+    api = FakeAPI()
+    ctx, pg = _open(browser, site, api, width=400, height=800, mobile=True)
+    try:
+        pg.tap(row("dddd0004") + " .proj")
+        pg.wait_for_selector("#topbar:visible")
+        assert _topbar_order(pg)[0] == "tEsc"
+        over = pg.eval_on_selector(".topbar", "e => e.scrollWidth - e.clientWidth")
+        assert over <= 1
+        pg.tap("#tMenu")
+        shot(pg, "index-lib-mobile-account-menu.png")
+        for bid in ("tTg", "tChpw", "tLogout"):
+            b = pg.eval_on_selector("#" + bid, "e => { const r = e.getBoundingClientRect();"
+                                               " return [r.left, r.right, r.width]; }")
+            assert b[2] > 0 and b[0] >= 0 and b[1] <= 400.5, (bid, b)
+        over = pg.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+        assert over <= 0
+        pg.tap("#tInfo")
+        assert not _menu_open(pg)
+    finally:
+        ctx.close()

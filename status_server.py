@@ -1258,12 +1258,8 @@ def _pw_verify(pw):
         return False
 
 
-def _check_password(user, pw):
-    if not pw or len(pw) > 256:
-        return False
-    if PASSFILE:                       # standalone mode: one password, username ignored
-        return _pw_verify(pw)
-    if not re.match(r'^[A-Za-z0-9_.-]{1,32}$', user or ''):
+def _htpasswd_verify(user, pw):
+    if not pw or len(pw) > 256 or not re.match(r'^[A-Za-z0-9_.-]{1,32}$', user or ''):
         return False
     try:
         r = subprocess.run(["htpasswd", "-vb", HTPASSWD_FILE, user, pw],
@@ -1271,6 +1267,37 @@ def _check_password(user, pw):
         return r.returncode == 0
     except Exception:
         return False
+
+
+def _pw_seedable():
+    """Passfile mode, passfile still empty, but the old nginx htpasswd exists:
+    migrate on the next successful login instead of offering an open 'set a
+    password' form (the first stranger to arrive would own the dashboard)."""
+    return bool(PASSFILE) and not _pw_is_set() and os.path.exists(HTPASSWD_FILE)
+
+
+def _login_verify(user, pw):
+    """Login check; in the seedable state a correct htpasswd login also moves the
+    password into the dashboard's own passfile (nobody has to retype it anywhere)."""
+    if _pw_seedable():
+        if _htpasswd_verify(user, pw):
+            _pw_store(pw)
+            return True
+        return False
+    return _check_password(user, pw)
+
+
+def _verify_current(user, pw):
+    """'Current password' on /change-password: the passfile once seeded, else htpasswd."""
+    return _htpasswd_verify(user, pw) if _pw_seedable() else _pw_verify(pw)
+
+
+def _check_password(user, pw):
+    if not pw or len(pw) > 256:
+        return False
+    if PASSFILE:                       # standalone mode: one password, username ignored
+        return _pw_verify(pw)
+    return _htpasswd_verify(user, pw)
 
 
 LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -1370,7 +1397,7 @@ class AuthHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_login(self, error=False):
-        if PASSFILE and not _pw_is_set():
+        if PASSFILE and not _pw_is_set() and not _pw_seedable():
             return self._html(_setup_form("Passwords must match (6+ chars)" if error else ""),
                               401 if error else 200)
         html = LOGIN_HTML.replace("__ERR__", '<p class="err">Invalid username or password</p>' if error else '')
@@ -1428,7 +1455,7 @@ class AuthHandler(BaseHTTPRequestHandler):
                 return self._redirect("/login")
             cur = form.get("cur", [""])[0]
             new, new2 = form.get("pass", [""])[0], form.get("pass2", [""])[0]
-            if not _pw_verify(cur):
+            if not _verify_current(self._user(), cur):
                 return self._html(_change_form(error="Current password is wrong"))
             if len(new) < 6 or new != new2:
                 return self._html(_change_form(error="New passwords must match (6+ chars)"))
@@ -1436,7 +1463,7 @@ class AuthHandler(BaseHTTPRequestHandler):
             return self._html(_change_form(ok="Password changed."))
 
         # /login — FIRST RUN (passfile mode, no password yet) sets it; otherwise verify
-        if PASSFILE and not _pw_is_set():
+        if PASSFILE and not _pw_is_set() and not _pw_seedable():
             new, new2 = form.get("pass", [""])[0], form.get("pass2", [""])[0]
             if len(new) < 6 or new != new2:
                 return self._html(_setup_form("Passwords must match (6+ chars)"))
@@ -1445,7 +1472,7 @@ class AuthHandler(BaseHTTPRequestHandler):
 
         user = (form.get("user", [""])[0]).strip()
         pw = form.get("pass", [""])[0]
-        if _check_password(user, pw):
+        if _login_verify(user, pw):
             self._login_cookie(user)
         else:
             self._send_login(error=True)

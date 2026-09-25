@@ -410,6 +410,30 @@
     .add-btn:active { transform: scale(0.96); }
     .add-btn.disabled { pointer-events: none; opacity: 0.45; }
 
+    /* ⋯ account menu: Telegram / Password / Logout */
+    .topbar { position: relative; z-index: 20; }
+    .acct { position: relative; flex: none; display: flex; }
+    .acct-btn { font-weight: 600; letter-spacing: 0.04em; }
+    .acct-btn[aria-expanded="true"] { color: #e4e4e7; border-color: rgba(129,140,248,0.6); background: rgba(99,102,241,0.16); }
+    .acct-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 110px;
+      padding: 4px;
+      background: #111114;
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 6px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.55);
+    }
+    .acct-menu[hidden] { display: none; }
+    .acct-menu .btn { display: block; text-align: left; padding: 0.3rem 0.5rem; }
+    .acct-menu .btn:focus-visible { outline: 1px solid #818cf8; outline-offset: 0; }
+
     .btn-logout { color: #fca5a5; border-color: rgba(239,68,68,0.28); }
     .btn-logout:hover { color: #fecaca; border-color: rgba(239,68,68,0.5); background: rgba(239,68,68,0.12); }
 
@@ -628,12 +652,17 @@
     <div class="topbar" id="topbar" style="display:none">
       <span class="topbar-lbl" id="tNum"></span>
       <div class="topbar-info" id="tInfo"></div>
+      <button class="btn" id="tEsc">Esc</button>
       <button class="btn" id="tPasteImg" title="Paste image from clipboard">📎 Image</button>
       <a class="btn" id="tOpen" href="#" target="_blank">Open in tab</a>
-      <button class="btn" id="tEsc">Esc</button>
-      <a class="btn" id="tTg" href="/telegram" title="Set up the Telegram bot">Telegram</a>
-      <a class="btn" id="tChpw" href="/change-password" title="Change the dashboard password">Password</a>
-      <a class="btn btn-logout" id="tLogout" href="/logout" title="Log out">Logout</a>
+      <div class="acct" id="tAcct">
+        <button type="button" class="btn acct-btn" id="tMenu" aria-haspopup="menu" aria-expanded="false" aria-controls="tMenuList" title="Account: Telegram, password, log out">⋯</button>
+        <div class="acct-menu" id="tMenuList" role="menu" aria-labelledby="tMenu" hidden>
+          <a class="btn" role="menuitem" id="tTg" href="/telegram" title="Set up the Telegram bot">Telegram</a>
+          <a class="btn" role="menuitem" id="tChpw" href="/change-password" title="Change the dashboard password">Password</a>
+          <a class="btn btn-logout" role="menuitem" id="tLogout" href="/logout" title="Log out">Logout</a>
+        </div>
+      </div>
     </div>
     <div class="wrap" id="wrap">
       <div class="ph" id="ph">Pick a terminal on the left</div>
@@ -1244,6 +1273,52 @@
         el.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true}));
       } catch(e) {}
     });
+
+    /* ── ⋯ account menu: opens on click/Enter/Space, closes on outside click,
+       Esc (focus back to ⋯), Tab out of it, or when focus goes into the terminal. ── */
+    (function accountMenu() {
+      const btn = document.getElementById('tMenu');
+      const menu = document.getElementById('tMenuList');
+      const items = () => [...menu.querySelectorAll('[role=menuitem]')];
+      const isOpen = () => !menu.hidden;
+      function open(focusFirst) {
+        menu.hidden = false;
+        btn.setAttribute('aria-expanded', 'true');
+        if (focusFirst) items()[0].focus();
+      }
+      function close(refocus) {
+        if (!isOpen()) return;
+        menu.hidden = true;
+        btn.setAttribute('aria-expanded', 'false');
+        if (refocus) btn.focus();
+      }
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (isOpen()) close(false);
+        else open(e.detail === 0);            // keyboard "click" (Enter/Space) → focus first item
+      });
+      btn.addEventListener('keydown', e => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); open(true); }
+      });
+      menu.addEventListener('keydown', e => {
+        const list = items(), i = list.indexOf(document.activeElement);
+        if (e.key === 'Escape') { e.preventDefault(); close(true); }
+        else if (e.key === 'ArrowDown') { e.preventDefault(); list[(i + 1) % list.length].focus(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); list[(i - 1 + list.length) % list.length].focus(); }
+        else if (e.key === 'Home') { e.preventDefault(); list[0].focus(); }
+        else if (e.key === 'End') { e.preventDefault(); list[list.length - 1].focus(); }
+      });
+      document.getElementById('tAcct').addEventListener('focusout', e => {
+        if (!e.relatedTarget || !document.getElementById('tAcct').contains(e.relatedTarget)) close(false);
+      });
+      document.addEventListener('click', e => {
+        if (isOpen() && !document.getElementById('tAcct').contains(e.target)) close(false);
+      });
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && isOpen()) close(true);
+      });
+      window.addEventListener('blur', () => close(false));   // focus went into the terminal iframe
+    })();
 
     /* ── 📎 Image: the reliable path — read the clipboard image directly on a
        button click (no fragile paste-event interception inside the ttyd iframe). ── */
