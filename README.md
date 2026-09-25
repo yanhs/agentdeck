@@ -69,6 +69,18 @@ working reference you adapt, not a turn-key installer.
   tracking multi-step work across all agents. The **T** button opens it as a tab inside
   the dashboard. Search, status and agent filters, sorting, dates and times, and the
   session code of the agent behind each task.
+- **A terminal's tasks in one click.** Click the 8-character code in the top bar of an open
+  terminal and the Tasks tab opens filtered to that terminal (a chip shows the filter; ✕
+  clears it).
+- **Server status page.** The gauge button next to **T** opens a **Server** tab: CPU and
+  memory over the last 15 minutes, split into agents, sites & apps (Docker containers,
+  systemd services), background jobs and the system. Each row expands into its processes,
+  so you see which agent is running the tests or which build is eating the CPU.
+- **Dark and light theme.** Switch in the **⋯** menu; the Tasks and Server tabs follow.
+  Terminals stay dark.
+- **Guard hooks (optional).** Two Claude Code hooks keep agents honest about the task board:
+  no edits before the work is on the board, no silent stop in the middle of a task — see
+  [Manual setup](#-manual-setup-without-docker).
 
 ## 📸 Screenshots
 
@@ -79,6 +91,14 @@ working reference you adapt, not a turn-key installer.
 | Task board | Task board (dark) | Telegram bridge |
 |---|---|---|
 | ![Task board with search, filters and sorting](docs/screenshots/task-board.png) | ![Task board in dark mode](docs/screenshots/task-board-dark.png) | ![Telegram](docs/screenshots/telegram.png) |
+
+| Server status | Light theme | A terminal's tasks |
+|---|---|---|
+| ![The Server tab: CPU and memory of agents, sites & apps, jobs and system over 15 minutes](docs/screenshots/server.png) | ![The dashboard in the light theme; the terminal stays dark](docs/screenshots/light-theme.png) | ![Tasks filtered to one terminal after clicking its code in the top bar](docs/screenshots/tasks-filtered.png) |
+
+The **Server** tab shows what is using the machine now and over the last 15 minutes: each
+agent with the processes it started (tests, builds), every site and service, and background
+jobs.
 
 The dashboard works on a phone too:
 

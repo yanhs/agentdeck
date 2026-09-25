@@ -44,7 +44,7 @@ SESSIONS = [
     ("3f9a1c07", "Auth: refresh tokens", True, "working", 60, False),
     ("8b2e4d10", "Docs: API reference", True, "idle", 600, False),
     ("c41d9e2a", "Data pipeline backfill", True, "working", 120, False),
-    ("5d07b3f8", "Landing page redesign", True, "idle", 1800, False),
+    ("5d07b3f8", "Landing page redesign", True, "working", 240, False),
     ("7c1f0b2e", "Flaky CI: checkout e2e", True, "working", 300, False),
     ("a9e61c34", "Scraper rate limits", False, "off", 3 * 3600, False),
     ("17fc8e05", "Research: vector DBs", False, "off", 26 * 3600, False),
@@ -65,7 +65,7 @@ def library_payload(with_archived: bool) -> dict:
                     "attached": False, "status": status})
     return {"max_active": 12, "sessions": out,
             "shell": {"active": True, "attached": False, "status": "idle"},
-            "_system": {"cpu_pct": 34, "ram_pct": 46, "ram_used_mb": 7420, "ram_total_mb": 16000}}
+            "_system": {"cpu_pct": 66, "ram_pct": 46, "ram_used_mb": 7420, "ram_total_mb": 16000}}
 
 
 def iso(dt: datetime) -> str:
@@ -138,12 +138,134 @@ def board_state() -> dict:
         ("Cache product images at the edge", "claude · infra", 7), ("Onboarding email sequence", "claude · web", 8),
         ("Password reset flow", "claude · api", 9), ("Weekly metrics report", "claude · data", 10),
     ]
+    # the auth terminal's earlier tasks: tasks-filtered.png shows them under its chip
+    auth_done = {"Sentry alerts for 5xx spikes", "CSV export for invoices", "Password reset flow"}
     for i, (title, agent, d) in enumerate(done):
-        tasks.append({"id": re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "title": title,
-                      "agent": agent, "status": "done", "created": ago(days=d, hours=3),
-                      "updated": ago(days=d, minutes=i * 7),
-                      "items": [it("Implement + tests", "done", "", days=d)]})
+        t = {"id": re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "title": title,
+             "agent": agent, "status": "done", "created": ago(days=d, hours=3),
+             "updated": ago(days=d, minutes=i * 7),
+             "items": [it("Implement + tests", "done", "", days=d)]}
+        if title in auth_done:
+            t["session"] = "3f9a1c07"
+        tasks.append(t)
     return {"title": "Task board", "updated": ago(minutes=1), "tasks": tasks}
+
+
+# ─────────────────────────────────────────── server status (GET /api/server) ──
+CORES = 8
+
+
+def _m(mid, name, kind, status, cpu, rss, what, children=(), **kw):
+    """One member, shaped like server_status.Collector._totals() output."""
+    d = {"id": mid, "name": name, "kind": kind, "status": status, "cpu_pct": cpu, "rss_mb": rss,
+         "count": 1 + sum(c[3] if len(c) > 3 else 1 for c in children), "what": what,
+         "children": [{"name": c[0], "cpu_pct": c[1], "rss_mb": c[2], "count": c[3] if len(c) > 3 else 1}
+                      for c in children]}
+    d.update(kw)
+    return d
+
+
+def server_payload() -> dict:
+    """A plausible 8-core box at ~65% CPU with a filled 15-minute history."""
+    import math
+    import random
+
+    groups = [
+        ("agents", "Agents", [
+            _m("agent:41822", "Auth: refresh tokens", "claude", "working", 118.4, 812,
+               "Claude Code in ~/work/api · running pytest",
+               [("pytest", 96.2, 310), ("node mcp-server.js", 3.1, 74), ("redis-cli", 0.4, 6)],
+               terminal="cs-3f9a1c07"),
+            _m("agent:40517", "Data pipeline backfill", "claude", "working", 86.9, 1240,
+               "Claude Code in ~/work/data · running python3 backfill.py",
+               [("python3 backfill.py --month 11", 81.5, 902)], terminal="cs-c41d9e2a"),
+            _m("agent:43390", "Flaky CI: checkout e2e", "claude", "working", 71.3, 1480,
+               "Claude Code in ~/work/shop · running npx playwright test",
+               [("npx playwright test", 38.0, 260), ("chromium", 29.6, 910, 6)], terminal="cs-7c1f0b2e"),
+            _m("agent:39904", "Landing page redesign", "claude", "working", 57.8, 1010,
+               "Claude Code in ~/work/site · running npm run build",
+               [("npm run build", 52.1, 640), ("node", 3.2, 110)], terminal="cs-5d07b3f8"),
+            _m("agent:38211", "Docs: API reference", "claude", "idle", 1.2, 402,
+               "Claude Code in ~/work/docs", terminal="cs-8b2e4d10"),
+            _m("agent:37650", "Nightly code review", "claude", "idle", 0.8, 356,
+               "Claude Code in ~/work/api · no terminal · started by nightly-review.service"),
+        ]),
+        ("apps", "Sites & apps", [
+            _m("docker:web-prod", "web-prod", "container", "working", 46.3, 1320,
+               "Storefront (Next.js), production", [("next-server", 41.8, 980), ("node", 4.5, 340)],
+               detail="Up 3 days"),
+            _m("docker:postgres", "postgres", "container", "working", 37.9, 1640,
+               "Docker container (postgres:16)", [("postgres", 37.9, 1640, 14)], detail="Up 3 weeks"),
+            _m("docker:api-staging", "api-staging", "container", "working", 21.7, 690,
+               "Public API (FastAPI), staging", [("uvicorn app:api", 17.2, 480), ("python3 worker.py", 4.5, 210)],
+               detail="Up 5 hours"),
+            _m("unit:embedder.service", "Embedder", "service", "running", 8.6, 820,
+               "Text embeddings for search (ONNX)", [("python3 embed_server.py", 8.6, 820)],
+               detail="embedder.service"),
+            _m("unit:nginx.service", "nginx", "service", "running", 3.1, 48,
+               "Web server and reverse proxy for every site", [("nginx", 3.1, 48, 5)],
+               detail="nginx.service"),
+            _m("unit:redis-server.service", "redis", "service", "running", 1.9, 96,
+               "In-memory cache and job queue", [("redis-server", 1.9, 96)], detail="redis-server.service"),
+            _m("unit:telegram-bot.service", "Telegram bot", "service", "running", 0.6, 88,
+               "Telegram bridge to the terminals", [("python3 tg_bridge.py", 0.6, 88)],
+               detail="telegram-bot.service"),
+            _m("unit:backup-s3.service", "Backups to S3", "service", "stopped", 0, 0,
+               "Nightly database backup (runs at 03:00)", detail="backup-s3.service", count=0),
+        ]),
+        ("jobs", "Background jobs", [
+            _m("job:52210", "python3 import_catalog.py", "job", "working", 47.2, 610,
+               "Started from ssh session · in ~/work/shop", owner="ssh session"),
+            _m("job:51877", "rsync -a media/ backup:/media", "job", "running", 5.8, 42,
+               "Started from detached · in ~/work/site", owner="detached"),
+        ]),
+        ("system", "System", [
+            _m("sys:kernel", "Kernel threads", "kernel", "running", 4.1, 0, "Linux kernel workers", count=148),
+            _m("sys:other", "Other", "system", "running", 7.4, 430,
+               "92 small processes: shells, daemons, tmux",
+               [("sshd", 1.6, 18, 3), ("tmux", 1.2, 24), ("containerd", 2.1, 71), ("systemd-journald", 0.9, 64)]),
+        ]),
+    ]
+    gs = [{"id": gid, "title": title, "count": len(ms), "members": ms,
+           "cpu_pct": round(sum(x["cpu_pct"] for x in ms), 1),
+           "rss_mb": round(sum(x["rss_mb"] for x in ms), 1)} for gid, title, ms in groups]
+    now_g = {g["id"]: g["cpu_pct"] for g in gs}
+
+    # 15 minutes at 5 s: agents ramp up as the tests start, the catalog import
+    # kicks in ~6 minutes ago, a build spike around 9 minutes ago.
+    rnd = random.Random(20260925)
+    n, pts, t_end = 180, [], float(NOW)
+    walk = {k: 0.0 for k in now_g}
+    for i in range(n):
+        f = i / (n - 1)
+        for k in walk:
+            walk[k] = walk[k] * 0.93 + rnd.gauss(0, 0.35)
+        agents = now_g["agents"] * (0.55 + 0.45 * f) + 14 * walk["agents"] \
+            + 90 * math.exp(-((i - 72) / 7) ** 2)
+        apps = now_g["apps"] * (0.9 + 0.1 * math.sin(i / 9)) + 6 * walk["apps"]
+        jobs = (now_g["jobs"] if i > 108 else 6.0) + 4 * walk["jobs"]
+        system = now_g["system"] + 2 * walk["system"]
+        if i == n - 1:
+            agents, apps, jobs, system = now_g["agents"], now_g["apps"], now_g["jobs"], now_g["system"]
+        g = {"agents": round(max(5, agents), 1), "apps": round(max(20, apps), 1),
+             "jobs": round(max(0, jobs), 1), "system": round(max(3, system), 1)}
+        cpu = min(100.0, sum(g.values()) / CORES + 1.5)
+        pts.append({"t": t_end - (n - 1 - i) * 5, "cpu": round(cpu, 1),
+                    "ram": round(44.5 + 2.2 * f + 0.4 * walk["apps"], 1), "g": g})
+    host_cpu = pts[-1]["cpu"]
+    return {
+        "ts": t_end, "interval": 5,
+        "host": {"hostname": "build-box", "cores": CORES, "load": [5.9, 5.4, 4.7], "cpu_pct": host_cpu,
+                 "cpu_per_core": [88, 81, 76, 71, 64, 58, 52, 37],
+                 "ram_total_mb": 16000, "ram_used_mb": 7420, "ram_available_mb": 8580, "ram_pct": 46.4,
+                 "swap_total_mb": 0, "swap_used_mb": 0,
+                 "disk_total_gb": 240.0, "disk_used_gb": 131.6, "disk_free_gb": 108.4, "disk_pct": 54.8,
+                 "uptime_s": 23 * 86400 + 5 * 3600 + 17 * 60,
+                 "pressure": "busy", "pressure_reason": f"CPU at {round(host_cpu)}%"},
+        "groups": gs,
+        "history": {"interval": 5, "points": pts},
+        "collector": {"sample_ms": 38, "cpu_pct": 0.7, "processes": 412},
+    }
 
 
 # ───────────────────────────────────────────────────── mock terminal ──
@@ -301,7 +423,7 @@ def save(pg, name: str, **kw) -> None:
 
 
 def open_dashboard(browser, base, *, width, height, mobile=False, tasks_open=True,
-                   show_archived=False, color_scheme="dark"):
+                   show_archived=False, color_scheme="dark", theme="dark"):
     ctx = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=SCALE,
                               is_mobile=mobile, has_touch=mobile, color_scheme=color_scheme)
     ctx.set_default_timeout(15000)
@@ -309,6 +431,8 @@ def open_dashboard(browser, base, *, width, height, mobile=False, tasks_open=Tru
         localStorage.setItem('lib-tasks-open', '{1 if tasks_open else 0}');
         localStorage.setItem('lib-show-archived', '{1 if show_archived else 0}');
         localStorage.removeItem('stats-hidden');
+        localStorage.setItem('lib-server-open', '0');
+        localStorage.setItem('agentdeck-theme', '{theme}');
     }} catch (e) {{}}""")
     pg = ctx.new_page()
     errors: list[str] = []
@@ -331,6 +455,9 @@ def open_dashboard(browser, base, *, width, height, mobile=False, tasks_open=Tru
                                  body=json.dumps({"_system": library_payload(False)["_system"]})))
     pg.route(re.compile(r"/api/page-version"), lambda r: r.abort())
     pg.route(re.compile(r"/sess/"), sess)
+    server_json = json.dumps(server_payload())
+    pg.route(re.compile(r"/api/server(\?|$)"),
+             lambda r: r.fulfill(status=200, content_type="application/json", body=server_json))
     pg.goto(base + "/index.html")
     pg.wait_for_selector(".card[data-sid]")
     pg.wait_for_timeout(400)
@@ -437,6 +564,7 @@ body{width:420px;font:14.5px/1.38 -apple-system,'Segoe UI',Roboto,'Helvetica Neu
 def main() -> int:
     from playwright.sync_api import sync_playwright
 
+    only = set(sys.argv[1:])            # optional: regenerate just these names
     OUT.mkdir(parents=True, exist_ok=True)
     tmp = Path(tempfile.mkdtemp(prefix="agentdeck-shots-"))
     state_path = tmp / "state.json"
@@ -444,76 +572,161 @@ def main() -> int:
     base = start_server(state_path)
     print("serving", base, "state", state_path)
 
-    with sync_playwright() as p:
-        b = p.chromium.launch()
+    def want(name):
+        return not only or name in only
 
-        # 1. dashboard.png — a working terminal selected
-        print("dashboard.png")
-        ctx, pg, errs = open_dashboard(b, base, width=1440, height=820)
-        pg.click('#list .card[data-sid="3f9a1c07"] .proj')
+    def done(ctx, errs, name):
+        ctx.close()
+        PROBLEMS.extend(f"{name}: pageerror {e}" for e in errs)
+
+    def open_terminal(pg, sid="3f9a1c07"):
+        pg.click(f'#list .card[data-sid="{sid}"] .proj')
         pg.wait_for_selector("#wrap iframe")
         pg.frame_locator("#wrap iframe").locator(".box").wait_for()
-        settle(pg)
-        save(pg, "dashboard.png")
-        ctx.close()
-        PROBLEMS.extend(f"dashboard: pageerror {e}" for e in errs)
 
-        # 2. tasks-tab.png — the Tasks row selected, the board inside the viewer
-        print("tasks-tab.png")
-        ctx, pg, errs = open_dashboard(b, base, width=1440, height=820)
+    def open_tasks_tab(pg):
         pg.click("#list .tasks-row .proj")
         pg.wait_for_selector("#wrap iframe")
         fr = pg.frame_locator("#wrap iframe")
         fr.locator(".task").first.wait_for()
         fr.locator('.task[data-id="auth-rotation"] .task-row').click()
-        settle(pg)
-        save(pg, "tasks-tab.png")
-        ctx.close()
 
-        # 4. archive.png — "Show archived" on
-        print("archive.png")
-        ctx, pg, errs = open_dashboard(b, base, width=1440, height=820, tasks_open=False)
-        pg.click("#showArchived")
-        pg.wait_for_selector('#list .card.archived[data-sid="0b7d2e91"]')
-        pg.click('#list .card[data-sid="8b2e4d10"] .proj')
-        pg.wait_for_selector("#wrap iframe")
-        settle(pg)
-        pg.hover('#list .card[data-sid="0b7d2e91"]')
-        pg.wait_for_timeout(300)
-        save(pg, "archive.png")
-        ctx.close()
+    def open_server_tab(pg, expand=("agent:41822",)):
+        pg.click("#serverBtn")
+        pg.wait_for_selector("#list .server-row.sel")
+        fr = pg.frame_locator("#wrap iframe")
+        fr.locator(".row[data-id]").first.wait_for()
+        for mid in expand:
+            fr.locator(f'.row[data-id="{mid}"] .main').click()
 
-        # 5. mobile.png — the phone list
-        print("mobile.png")
-        ctx, pg, errs = open_dashboard(b, base, width=390, height=844, mobile=True, tasks_open=False)
-        pg.tap('#list .card[data-sid="3f9a1c07"] .proj')
-        pg.wait_for_selector("#wrap iframe")
-        pg.frame_locator("#wrap iframe").locator(".box").wait_for()
-        settle(pg)
-        save(pg, "mobile.png")
-        ctx.close()
+    with sync_playwright() as p:
+        b = p.chromium.launch()
 
-        # 3. task-board.png (+ dark) — the board alone
-        for scheme, name in (("light", "task-board.png"), ("dark", "task-board-dark.png")):
+        # dashboard.png — a working terminal selected
+        if want("dashboard.png"):
+            print("dashboard.png")
+            ctx, pg, errs = open_dashboard(b, base, width=1440, height=820)
+            open_terminal(pg)
+            settle(pg)
+            save(pg, "dashboard.png")
+            done(ctx, errs, "dashboard.png")
+
+        # tasks-tab.png — the Tasks row selected, the board inside the viewer
+        if want("tasks-tab.png"):
+            print("tasks-tab.png")
+            ctx, pg, errs = open_dashboard(b, base, width=1440, height=820)
+            open_tasks_tab(pg)
+            settle(pg)
+            save(pg, "tasks-tab.png")
+            done(ctx, errs, "tasks-tab.png")
+
+        # tasks-filtered.png — the terminal's id in the top bar clicked: its tasks only
+        if want("tasks-filtered.png"):
+            print("tasks-filtered.png")
+            ctx, pg, errs = open_dashboard(b, base, width=1440, height=820)
+            open_terminal(pg)
+            pg.click("#tNum.link")
+            pg.wait_for_selector("#list .tasks-row.sel")
+            fr = pg.frame_locator("#wrap iframe")
+            fr.locator("#sess-chip:not([hidden])").wait_for()
+            fr.locator('.task[data-id="auth-rotation"] .task-row').click()
+            fr.locator('section.group[data-group="done"] .group-head').click()   # its finished tasks too
+            settle(pg)
+            save(pg, "tasks-filtered.png")
+            done(ctx, errs, "tasks-filtered.png")
+
+        # server.png — the Server tab (gauge button), one agent expanded
+        if want("server.png"):
+            print("server.png")
+            ctx, pg, errs = open_dashboard(b, base, width=1440, height=820)
+            open_server_tab(pg)
+            settle(pg)
+            save(pg, "server.png")
+            done(ctx, errs, "server.png")
+
+        # server-mobile.png — the same page on a phone
+        if want("server-mobile.png"):
+            print("server-mobile.png")
+            ctx, pg, errs = open_dashboard(b, base, width=390, height=844, mobile=True, tasks_open=False)
+            pg.tap("#serverBtn")
+            pg.wait_for_selector("#wrap iframe")
+            pg.frame_locator("#wrap iframe").locator(".row[data-id]").first.wait_for()
+            settle(pg)
+            save(pg, "server-mobile.png")
+            done(ctx, errs, "server-mobile.png")
+
+        # light-theme.png — the light theme, a terminal open (the terminal stays dark)
+        if want("light-theme.png"):
+            print("light-theme.png")
+            ctx, pg, errs = open_dashboard(b, base, width=1440, height=820, theme="light",
+                                           color_scheme="light")
+            open_terminal(pg)
+            settle(pg)
+            save(pg, "light-theme.png")
+            done(ctx, errs, "light-theme.png")
+
+        # light-tasks.png — the Tasks tab in the light theme
+        if want("light-tasks.png"):
+            print("light-tasks.png")
+            ctx, pg, errs = open_dashboard(b, base, width=1440, height=820, theme="light",
+                                           color_scheme="light")
+            open_tasks_tab(pg)
+            settle(pg)
+            save(pg, "light-tasks.png")
+            done(ctx, errs, "light-tasks.png")
+
+        # archive.png — "Show archived" on
+        if want("archive.png"):
+            print("archive.png")
+            ctx, pg, errs = open_dashboard(b, base, width=1440, height=820, tasks_open=False)
+            pg.click("#showArchived")
+            pg.wait_for_selector('#list .card.archived[data-sid="0b7d2e91"]')
+            pg.click('#list .card[data-sid="8b2e4d10"] .proj')
+            pg.wait_for_selector("#wrap iframe")
+            settle(pg)
+            pg.hover('#list .card[data-sid="0b7d2e91"]')
+            pg.wait_for_timeout(300)
+            save(pg, "archive.png")
+            done(ctx, errs, "archive.png")
+
+        # mobile.png — the phone list
+        if want("mobile.png"):
+            print("mobile.png")
+            ctx, pg, errs = open_dashboard(b, base, width=390, height=844, mobile=True, tasks_open=False)
+            pg.tap('#list .card[data-sid="3f9a1c07"] .proj')
+            pg.wait_for_selector("#wrap iframe")
+            pg.frame_locator("#wrap iframe").locator(".box").wait_for()
+            settle(pg)
+            save(pg, "mobile.png")
+            done(ctx, errs, "mobile.png")
+
+        # task-board.png (+ dark) — the board alone
+        for theme, name in (("light", "task-board.png"), ("dark", "task-board-dark.png")):
+            if not want(name):
+                continue
             print(name)
             ctx = b.new_context(viewport={"width": 1440, "height": 900}, device_scale_factor=SCALE,
-                                color_scheme=scheme)
+                                color_scheme=theme)
+            ctx.add_init_script(f"try {{ localStorage.setItem('agentdeck-theme', '{theme}'); }} catch (e) {{}}")
             pg = ctx.new_page()
+            errs: list[str] = []
+            pg.on("pageerror", lambda e, errs=errs: errs.append(str(e)))
             pg.goto(base + "/tasks/")
             pg.wait_for_selector(".task")
             pg.click('.task[data-id="auth-rotation"] .task-row')
             settle(pg)
             save(pg, name, full_page=True)
-            ctx.close()
+            done(ctx, errs, name)
 
-        # 6. telegram.png — the bridge, with its real reply formats (in English)
-        print("telegram.png")
-        ctx = b.new_context(viewport={"width": 420, "height": 800}, device_scale_factor=SCALE)
-        pg = ctx.new_page()
-        pg.set_content(tg_html())
-        pg.wait_for_timeout(300)
-        save(pg, "telegram.png", full_page=True)
-        ctx.close()
+        # telegram.png — the bridge, with its real reply formats (in English)
+        if want("telegram.png"):
+            print("telegram.png")
+            ctx = b.new_context(viewport={"width": 420, "height": 800}, device_scale_factor=SCALE)
+            pg = ctx.new_page()
+            pg.set_content(tg_html())
+            pg.wait_for_timeout(300)
+            save(pg, "telegram.png", full_page=True)
+            ctx.close()
         b.close()
 
     print("\nPROBLEMS:" if PROBLEMS else "\nall shots OK")
