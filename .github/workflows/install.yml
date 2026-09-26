@@ -38,7 +38,8 @@ jobs:
       - name: smoke test (login, new terminal, board, server tab)
         run: python3 tests/install/smoke.py http://127.0.0.1:8765 --password "$PW" --first-run --new-terminal --id-file /tmp/sid
       - name: claude runs in the new terminal
-        run: TMUX_TMPDIR=$PWD/.sessions/tmux tmux list-panes -a -F '#{session_name} #{pane_current_command}' | tee /dev/stderr | grep -Eq "^cs-$(cat /tmp/sid) (claude|node)"
+        run: |
+          TMUX_TMPDIR=$PWD/.sessions/tmux tmux list-panes -a -F '#{session_name} #{pane_current_command}' | tee /dev/stderr | grep -Eq "^cs-$(cat /tmp/sid) (claude|node)"
       - name: re-run is idempotent
         run: |
           systemctl list-units 'agentdeck*' --all --no-legend --plain | awk '{print $1}' > /tmp/u1

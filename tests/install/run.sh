@@ -43,7 +43,7 @@ expect() {  # expect "name" cmd...
 
 # other containers (immappeal-*, sparkaide-*, 3x-ui, …) must all still be there afterwards;
 # parallel runs of this harness (agentdeck-install-test-*) are left out of the comparison
-docker ps -a --format '{{.Names}}' | grep -v "^agentdeck-install-test-" | sort > "$WORK/ps-before"
+docker ps -a --format '{{.Names}}' | { grep -v "^agentdeck-install-test-" || true; } | sort > "$WORK/ps-before"
 
 cleanup() {
   local rc=$?
