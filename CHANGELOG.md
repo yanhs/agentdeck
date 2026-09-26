@@ -4,6 +4,49 @@ All notable changes to AgentDeck. Newest first.
 
 ## Unreleased
 
+### Install on your own server (`install.sh`)
+- **One command; agents get the whole server.**
+  `curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash` (or
+  `./install.sh` from a clone) on Ubuntu 22.04 / 24.04 or Debian 12 (x86_64, aarch64):
+  apt basics, ttyd + Caddy binaries, Node.js 22 when needed, Claude Code (the Dockerfile's
+  pinned version), the repo in `~/agentdeck`, guard hooks merged into `~/.claude`, and
+  systemd services running as you (status server, task board, the sessions ttyd, Caddy for
+  the login and HTTPS, an idle-reaper timer) that start at boot. Options: `--https [domain]`,
+  `--http`, `--uninstall [--purge]`, `--check`, `--yes`, `--telegram`.
+  Refuses root (unless `AGENTDECK_ALLOW_ROOT=1`) and unsupported systems without changing
+  anything; re-running upgrades and repairs, and restarts never kill running agents. The
+  agents get a tmux server of their own (`TMUX_TMPDIR=~/agentdeck/.sessions/tmux`), so
+  `--uninstall` stops only that one and never your own tmux sessions; `--purge` deletes only
+  a folder the installer cloned itself (recorded in `~/.config/agentdeck/install.env`, with a
+  marker inside) and refuses anything else.
+- **HTTPS by default, never a password in clear text.** The one-liner serves
+  `https://<your-ip-with-dashes>.sslip.io` with a free Let's Encrypt certificate when ports
+  80 and 443 are free (80 redirects; `:8765` isn't served); with 443 taken, the same
+  certificate on `:8443` (or the next free port up to 8453); with 80 taken, no public IP, or
+  no certificate within ~120 s (a cloud firewall…) — HTTPS with a self-signed certificate on
+  `:8765` (the browser warns once). It waits for the certificate itself and says in plain
+  words which case you got, why, and how to get a trusted one (`install.sh --https`, with a
+  Caddy log excerpt when Let's Encrypt failed). `--https` insists on a trusted certificate
+  (it stops if port 80 is busy); `--https your-domain.com` (or
+  `AGENTDECK_SITE=your-domain.com`) uses your own domain instead of sslip.io. Plain http only
+  with an explicit `--http`. The mode is recorded in `~/.config/agentdeck/install.env` and
+  kept on re-runs; an install from the earlier http-by-default installer moves to HTTPS on
+  its next run. Test-only switches: `AGENTDECK_TLS_INTERNAL=1`, `AGENTDECK_ACME_CA`,
+  `AGENTDECK_CERT_WAIT`.
+- **New terminals open in `~/projects`,** not the whole home (Claude asks to trust that
+  folder only). The installer creates it; `AGENTDECK_WORKDIR=/path` at install time picks
+  another one, recorded and kept on re-runs. The Docker sandbox keeps `/work`.
+- **Installer tests.** `tests/test_install_sh.py` (preflight, OS/arch, units, every HTTPS
+  case and message, uninstall and purge rules — fast; it runs a copy of install.sh in a tmp
+  sandbox where every outside command is a shim and any write outside the sandbox fails the
+  test) and `tests/install/run.sh <distro>` (systemd containers: install, login, new
+  terminal, reboot, re-run, uninstall); `SCENARIO=` picks the HTTPS case it meets
+  (`cert-timeout`, `port80-busy`, `internal`, `internal-alt`, `http`), and `smoke.py` logs in
+  and attaches to a terminal over https too (`--insecure`, `--connect`).
+  `.github/workflows/install.yml` runs them on every push, plus `./install.sh --yes` on real
+  Ubuntu 22.04 / 24.04 VMs.
+
+### Terminals
 - **Terminals keep ultracode (and max effort) across a restart:** AgentDeck reads from the
   terminal's transcript the effort it ended at and relaunches with it; other levels already
   persist through Claude Code's own default. The newest evidence wins: an `/effort` or
@@ -15,45 +58,25 @@ All notable changes to AgentDeck. Newest first.
 - **Terminals in folders with emoji or very long paths resume their conversation** instead
   of starting a new one: the transcript folder name now follows Claude Code's own rule
   (UTF-16 code units; names over 200 characters are cut and get a hash suffix).
-- **`install.sh`: HTTPS by default, never a password in clear text.** The one-liner now
-  serves `https://<your-ip>.sslip.io` with a free Let's Encrypt certificate when ports 80
-  and 443 are free (80 redirects; `:8765` isn't served); with 443 taken, the same
-  certificate on `:8443`; with 80 taken, no public IP, or no certificate within ~120 s (a
-  cloud firewall…) — HTTPS with a self-signed certificate on `:8765` (the browser warns once).
-  It waits for the certificate itself and says in plain words which case you got, why, and
-  how to get a trusted one (`install.sh --https`, with a Caddy log excerpt when Let's
-  Encrypt failed). Plain http only with an explicit `--http`. The mode is recorded in
-  `~/.config/agentdeck/install.env` and kept on re-runs. Test-only switches:
-  `AGENTDECK_TLS_INTERNAL=1`, `AGENTDECK_ACME_CA`, `AGENTDECK_CERT_WAIT`.
-- **`install.sh`: new terminals open in `~/projects`,** not the whole home (Claude asks to
-  trust that folder only). The installer creates it; `AGENTDECK_WORKDIR=/path` at install
-  time picks another one, recorded and kept on re-runs. The Docker sandbox keeps `/work`.
-- **`tests/install/run.sh SCENARIO=…`** covers each HTTPS case in the systemd containers
-  (`cert-timeout`, `port80-busy`, `internal`, `internal-alt`, `http`); `smoke.py` logs in and
-  attaches to a terminal over https too (`--insecure`, `--connect`).
-- **`install.sh` — install on your own server in one command; agents get the whole server.**
-  `curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash` (or
-  `./install.sh` from a clone) on Ubuntu 22.04 / 24.04 or Debian 12 (x86_64, aarch64):
-  apt basics, ttyd + Caddy binaries, Node.js 22 when needed, Claude Code (the Dockerfile's
-  pinned version), the repo in `~/agentdeck`, guard hooks merged into `~/.claude`, and
-  systemd services running as you (status server, task board, the sessions ttyd, Caddy on
-  `:8765`, an idle-reaper timer) that start at boot. `--https [domain]` serves HTTPS on
-  80/443 (no domain → `<ip>.sslip.io`), `--uninstall [--purge]`, `--check`, `--yes`.
-  Refuses root (unless `AGENTDECK_ALLOW_ROOT=1`) and unsupported systems without changing
-  anything; re-running upgrades and repairs, and restarts never kill running agents. The
-  agents get a tmux server of their own (`TMUX_TMPDIR=~/agentdeck/.sessions/tmux`), so
-  `--uninstall` stops only that one and never your own tmux sessions; `--purge` deletes only
-  a folder the installer cloned itself (recorded in `~/.config/agentdeck/install.env`, with a
-  marker inside) and refuses anything else.
-- **README: full control or a sandbox.** "Try it in a minute" is the one-line install (full
-  control of the server, best on a dedicated VPS); "Try it in a sandbox" is Docker, with its
-  limits spelled out. Quick start has both, in that order.
-- **Installer tests.** `tests/test_install_sh.py` (preflight, OS/arch, units, uninstall and
-  purge rules — fast; it runs a copy of install.sh in a tmp sandbox where every outside
-  command is a shim and any write outside the sandbox fails the test) and
-  `tests/install/run.sh <distro>` (systemd containers: install, login, new terminal, reboot,
-  re-run, uninstall); `.github/workflows/install.yml` runs them on every push.
-- **`./https.sh` — HTTPS in one command, no domain needed.** Uses a free `<ip>.sslip.io` name (or `./https.sh your-domain.com`), writes `AGENTDECK_SITE` + a ports override into `.env`, checks 80/443 are free, waits for the Let's Encrypt certificate; `--off` reverts. The placeholder `you@example.com` ACME email is now dropped (Let's Encrypt refuses it).
+- **Mouse selection copies like a desktop terminal on a fresh install.** AgentDeck now ships
+  its own `tmux.conf` (mouse mode, copy into tmux's buffer on mouse release — what the
+  dashboard's copy reads — a 50,000-line scrollback, right click left to the browser); it
+  used to live only in the author's `~/.tmux.conf`. Every tmux server AgentDeck starts reads
+  it (`tmux -f <repo>/tmux.conf`, the Telegram bridge too); one that was already running
+  gets it once. Your own `~/.tmux.conf` is sourced at the end, so it still applies on top.
+- **"Copied · Ctrl+Shift+V to paste".** After a mouse selection in a terminal actually
+  reaches the clipboard, a small chip in the terminal's top-right corner confirms it for
+  ~1.5 s (⌘V on a Mac). After 5 copies in a browser it just says "Copied". Terminals only,
+  not the Tasks or Server tabs.
+- **A terminal waiting on its own timer stays loaded.** `install_guards.py` now also wires
+  `hooks/hold_on_timer.py` (PostToolUse on `ScheduleWakeup`/`CronCreate`/`Monitor`), so the
+  idle reaper no longer unloads an agent before its timer fires.
+
+### Docker
+- **`./https.sh` — HTTPS in one command, no domain needed.** Uses a free `<ip>.sslip.io` name
+  (or `./https.sh your-domain.com`), writes `AGENTDECK_SITE` + a ports override into `.env`,
+  checks 80/443 are free, waits for the Let's Encrypt certificate; `--off` reverts. The
+  placeholder `you@example.com` ACME email is now dropped (Let's Encrypt refuses it).
 - **Guard hooks on by default in Docker.** The container start merges
   `hooks/guard_task_board.py` + `hooks/guard_dont_stop.py` into the agents'
   `~/.claude/settings.json` (idempotent; other settings and your own hooks kept) and writes a
@@ -61,7 +84,21 @@ All notable changes to AgentDeck. Newest first.
   agent takes on goes on the board, and it keeps working while the task is open. Opt out:
   `AGENTDECK_GUARDS=0`. `start.sh` leaves your own `~/.claude` alone unless
   `AGENTDECK_GUARDS=1`. New `hooks/install_guards.py` (install / `--remove` / `--check`).
-- **A terminal waiting on its own timer stays loaded.** `install_guards.py` now also wires `hooks/hold_on_timer.py` (PostToolUse on `ScheduleWakeup`/`CronCreate`/`Monitor`), so the idle reaper no longer unloads an agent before its timer fires.
+
+### README
+- **Full control or a sandbox.** "Try it in a minute" is the one-line install (full
+  control of the server, best on a dedicated VPS); "Try it in a sandbox (server control
+  isn't available in this mode)" is Docker, with its limits spelled out. Quick start has
+  both, in that order.
+- **Leads with a demo animation** (`docs/demo.gif`, `docs/demo.mp4`), then **Why AgentDeck**
+  — including "Sessions survive restarts" (browser close, AgentDeck restart, server reboot;
+  ultracode included) and "Copy & paste like a desktop terminal" — a one-minute try, and an
+  honest comparison table. Social preview image `docs/social-preview.png`.
+
+### Tests
+- The whole test run gets a private tmux server (`TMUX_TMPDIR` set in `tests/conftest.py`),
+  so no test can list, kill or type into running terminals, and the run stops at once if a
+  test deletes the session registry (`.sessions/library.json`).
 
 ## v1.6.0 — archive that frees memory, Telegram menu with the archive
 

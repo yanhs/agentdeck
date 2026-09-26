@@ -51,15 +51,16 @@ Full control of the server — best on a dedicated VPS (Ubuntu 22.04 / 24.04, De
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash
-# → https://<your-ip>.sslip.io — the first visit sets the password
+# → https://<your-ip-with-dashes>.sslip.io — the first visit sets the password
 ```
 
 It comes up on **HTTPS automatically** — no domain needed: a trusted Let's Encrypt
-certificate for `https://<your-ip-with-dashes>.sslip.io` when ports 80/443 are free,
-otherwise still encrypted, with a self-signed certificate on `https://<your-ip>:8765` that
-the browser warns about once. Your password never travels in clear text. Then
-**＋ New terminal** (it opens in `~/projects`), sign in to Claude once, and give the agent a
-task. Details: [Quick start](#-quick-start).
+certificate for `https://<your-ip-with-dashes>.sslip.io` when port 80 is free (on 443, or
+on `:8443` when another web server holds 443); otherwise still encrypted, with a
+self-signed certificate on `https://<your-ip>:8765` that the browser warns about once.
+Plain http only if you ask for it (`--http`), so your password never travels in clear
+text. Then **＋ New terminal** (it opens in `~/projects`), sign in to Claude once, and give
+the agent a task. Details: [Quick start](#-quick-start).
 
 ## Try it in a sandbox (server control isn't available in this mode)
 
@@ -117,8 +118,12 @@ on one VPS.
   2 minutes). A terminal with an open tab, a pending timer or a running background task is
   never unloaded. An unloaded terminal is greyed in the list — one click loads it back.
 - **Browser terminals, no SSH.** Every agent is a full interactive terminal in the browser
-  through `ttyd` — type, scroll, **copy & paste**, run anything (copy needs HTTPS or localhost,
-  per browser clipboard rules).
+  through `ttyd` — type, scroll, **copy & paste**, run anything. Select with the mouse and
+  it's copied: a small "Copied · Ctrl+Shift+V to paste" chip confirms it (⌘V on a Mac; after
+  five copies just "Copied"). Copy needs HTTPS or localhost, per browser clipboard rules —
+  `install.sh` serves HTTPS by default. AgentDeck brings its own `tmux.conf` (mouse mode,
+  copy on mouse release, long scrollback), so this works on a fresh server; your own
+  `~/.tmux.conf` is read after it and still applies.
 - **Live status dashboard.** Loaded terminals sit at the top with a working/idle dot;
   unloaded ones follow, greyed.
 - **`cmd` command line.** One plain `bash` shell in the browser, next to the agents.
@@ -149,11 +154,11 @@ on one VPS.
   so you see which agent is running the tests or which build is eating the CPU.
 - **Dark and light theme.** Switch in the **⋯** menu; the Tasks and Server tabs follow.
   Terminals stay dark.
-- **Guard hooks — on by default in Docker.** Two Claude Code hooks keep agents on the task
-  board: no edits before the work is on the board, no silent stop in the middle of a task.
-  A third keeps a terminal loaded while it waits on its own timer. Opt out with
-  `AGENTDECK_GUARDS=0`; without Docker, `AGENTDECK_GUARDS=1 ./start.sh` turns them on —
-  see [Manual setup](#-manual-setup-without-docker).
+- **Guard hooks — on by default in Docker and with `install.sh`.** Two Claude Code hooks
+  keep agents on the task board: no edits before the work is on the board, no silent stop
+  in the middle of a task. A third keeps a terminal loaded while it waits on its own timer.
+  Opt out with `AGENTDECK_GUARDS=0`; with `./start.sh`, `AGENTDECK_GUARDS=1 ./start.sh`
+  turns them on — see [Manual setup](#-manual-setup-without-docker).
 
 ## 📸 Screenshots
 
@@ -245,7 +250,8 @@ your whole home); `AGENTDECK_WORKDIR=/path` at install time changes it, and re-r
     resolves to your IP) with a Let's Encrypt certificate, renewed automatically; http on
     80 redirects there; `:8765` isn't served at all;
   - 443 taken by another web server, 80 free → the same trusted certificate on
-    `https://<name>:8443`;
+    `https://<name>:8443` (or the next free port up to 8453); http on 80 answers
+    Let's Encrypt and redirects there;
   - 80 taken, no public IP, or the certificate doesn't arrive within ~2 minutes (usually a
     cloud firewall / security group blocking 80 and 443) → HTTPS with a **self-signed**
     certificate on `https://<your-ip>:8765`: the browser warns once ("not secure /
@@ -373,9 +379,9 @@ sets a `ScheduleWakeup`, the terminal is marked busy until 10 minutes after the 
 time (a `CronCreate` or `Monitor`: for 6 hours), so neither the memory limit nor the idle
 reaper unloads it and kills the timer.
 
-**Guard hooks that keep agents honest about the task board** (on by default in Docker;
-opt out with `AGENTDECK_GUARDS=0`). Two Claude Code hooks in `hooks/`, both plain Python
-with no dependencies:
+**Guard hooks that keep agents honest about the task board** (on by default in Docker and
+with `install.sh`; opt out with `AGENTDECK_GUARDS=0`). Two Claude Code hooks in `hooks/`,
+both plain Python with no dependencies:
 
 - `guard_task_board.py` blocks the first file edit of a session until the work is on the
   task board (any `tracker.py` call). For a genuinely trivial change the agent runs
@@ -392,7 +398,8 @@ with no dependencies:
 
 In Docker the container start merges them into the agents' `~/.claude/settings.json`
 (your other settings and hooks are kept) and writes a short default `~/.claude/CLAUDE.md`
-with the board commands if there is none. Without Docker they would go into your own
+with the board commands if there is none; `install.sh` does the same in your own `~/.claude`
+(`--uninstall` takes them out again). With `./start.sh` they would go into your own
 `~/.claude/settings.json`, which every Claude Code session on the machine reads, so
 `start.sh` only prints a hint; run `AGENTDECK_GUARDS=1 ./start.sh` (or
 `python3 hooks/install_guards.py`) to install them, `python3 hooks/install_guards.py --remove`
@@ -428,9 +435,9 @@ For production, run `status_server.py` and `tg_bridge.py` as systemd services �
 | Telegram bridge | `.env` | copy from `.env.example` |
 | Auth credentials | `/etc/nginx/.htpasswd_agents` or `AGENTDECK_PASSFILE` | htpasswd, or the dashboard's own password file |
 | Reverse proxy / TLS | `nginx/agents-subdomain.conf` | swap the domain for your own |
-| Guard hooks (task board before edits, no silent mid-task stop) | `AGENTDECK_GUARDS` env | Docker: on by default, `0` turns them off; `start.sh`: `1` installs them into `~/.claude/settings.json` |
+| Guard hooks (task board before edits, no silent mid-task stop) | `AGENTDECK_GUARDS` env | Docker: on by default, `0` turns them off; `install.sh`: on by default, `0` skips them; `start.sh`: `1` installs them into `~/.claude/settings.json` |
 | Pretty project names | `PROJECT_MAP` in `status_server.py` | optional, cosmetic |
-| Working directory | `$AGENTDECK_WORKDIR` env | where agents start; defaults to the directory above the repo |
+| Working directory | `$AGENTDECK_WORKDIR` env | where new terminals start; `install.sh`: `~/projects` (set it when installing to change it; re-runs keep it), Docker: `/work`, otherwise the directory above the repo |
 | Pasted images (📎 Image / Ctrl+V) | `AGENTDECK_PASTE_DIR`, `AGENTDECK_PASTE_URL` env | default `.sessions/paste`, no public URL; the terminal gets the file's path either way |
 
 ## 🤖 Create & connect a Telegram bot
@@ -547,7 +554,7 @@ Nothing is deleted. `--apply --rollback-dashboard` puts the old page back.
 ## 🧪 Tests
 
 ```bash
-python3 -m pytest -q        # 682 tests
+python3 -m pytest -q        # 1190 tests
 ```
 
 The session library (registry, API, loading/unloading, migration), the idle reaper, the
@@ -563,12 +570,16 @@ re-runs the installer and uninstalls. `SCENARIO=` picks the HTTPS case it meets 
 certificate can't be issued in a container): `cert-timeout` (default: no certificate in
 time → self-signed fallback), `port80-busy`, `internal` / `internal-alt` (the trusted-HTTPS
 path on 443 / 8443 with Caddy's own CA, `AGENTDECK_TLS_INTERNAL=1`) and `http`. GitHub runs
-it on every push, plus `./install.sh --yes` on real Ubuntu 22.04 / 24.04 VMs
+it on every push (Debian 12, and the refusal on Fedora 40), plus `./install.sh --yes` on real
+Ubuntu 22.04 / 24.04 VMs and the installer's unit tests, `tests/test_install_sh.py`
 (`.github/workflows/install.yml`).
 
 ## 🗂️ Project layout
 
 ```
+install.sh               one-command install on your own server (systemd services, HTTPS)
+https.sh                 HTTPS for the Docker sandbox in one command
+tmux.conf                AgentDeck's tmux settings (mouse, copy); your ~/.tmux.conf applies after it
 library.py               session library: the list of named terminals
 library_cli.py           loads/unloads terminals in tmux (used by ttyd and the bridge)
 open-session.sh          the one ttyd entry point: /sess/?arg=<code>
