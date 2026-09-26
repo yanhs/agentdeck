@@ -2,7 +2,7 @@
 
 All notable changes to AgentDeck. Newest first.
 
-## Unreleased
+## v1.7.0 — HTTPS by default, copy & paste like a desktop terminal, ultracode survives restarts
 
 ### Install on your own server (`install.sh`)
 - **One command; agents get the whole server.**
