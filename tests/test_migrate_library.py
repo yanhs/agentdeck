@@ -40,6 +40,7 @@ AGENTS = {"1": {"project": "Terminal"}, "2": {"project": "app - PIPE"},
           "3": {"project": "Instagram"}, "_order": ["2", "1", "3"]}
 
 MODULES = ["library.py", "library_cli.py", "idle_reaper.py", "open-session.sh",
+           "convo_sync.py",                     # library_cli follows conversation switches
            "bin/agentdeck-pane"]                # what tmux runs in a new pane
 SCRIPTS = {1: "launch-claude.sh", 2: "launch-claude-2.sh", 3: "launch-claude-3.sh",
            4: "launch-claude-4.sh", 10: "launch-claude-10.sh"}

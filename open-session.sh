@@ -76,9 +76,11 @@ if [ "$rc" -ne 0 ]; then
   [ "$rc" -eq 3 ] && echo "Try again later: reload the page or press Enter."
   done_with "$rc"
 fi
-if [ "$NAME" != "cs-$ID" ]; then
+# cs-$ID, or — for an old number of a terminal whose conversation changed (Claude's
+# consent relaunch, /clear, /resume) — the terminal's name now: attach there
+if ! [[ "$NAME" =~ ^cs-[0123456789abcdef]{8}$ ]]; then
   echo "couldn't open topic $ID (library_cli said: ${NAME:0:40})"
   done_with 1
 fi
 
-exec "${TMUX_CMD[@]}" attach-session -t "=cs-$ID"
+exec "${TMUX_CMD[@]}" attach-session -t "=$NAME"

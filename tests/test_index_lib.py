@@ -2309,3 +2309,75 @@ def test_copied_chip_survives_broken_storage(browser, site):
         assert errors == [], errors
     finally:
         ctx.close()
+
+
+# ── one number per terminal: the page follows a terminal's number ──────────
+# When the conversation live in a terminal changes (Claude's consent relaunch,
+# /clear, /resume), the server gives the terminal the new conversation's number:
+# the row carries `prev_id` (the number it had), `switched_at`, and — when the old
+# number never was a conversation — `aliases` (old numbers that lead to it).
+def _src_is(pg, sid, timeout=10000):
+    pg.wait_for_function("id => ((document.querySelector('#wrap iframe') || {}).getAttribute"
+                         " && document.querySelector('#wrap iframe').getAttribute('src'))"
+                         " === '/sess/?arg=' + id", arg=sid, timeout=timeout)
+
+
+def _after_next_poll(pg, api):
+    n = len(api.gets())
+    for _ in range(100):
+        pg.wait_for_timeout(100)
+        if len(api.gets()) > n:
+            pg.wait_for_timeout(200)          # let the page apply it
+            return
+    raise AssertionError("no poll within 10 s")
+
+
+def test_open_link_with_a_vanished_number_opens_its_terminal(browser, site):
+    api = FakeAPI()
+    s = next(x for x in api.sessions if x["id"] == "dddd0004")
+    s.update(aliases=["9999aaaa"], prev_id="9999aaaa", switched_at=1000)
+    ctx, pg = _open(browser, site + "?open=9999aaaa", api)
+    try:
+        _src_is(pg, "dddd0004")
+        assert pg.inner_text("#tNum") == "dddd0004"
+        assert "sel" in pg.get_attribute(row("dddd0004"), "class")
+        # the task board's "open this terminal" with the old number, too
+        pg.click(row("cccc0003") + " .proj")
+        _src_is(pg, "cccc0003")
+        pg.evaluate("() => window.dispatchEvent(new MessageEvent('message', {origin:"
+                    " location.origin, data: {type: 'agentdeck:open-terminal', id: '9999aaaa'}}))")
+        _src_is(pg, "dddd0004")
+    finally:
+        ctx.close()
+
+
+def test_open_terminal_follows_a_switch_and_not_back(page, api):
+    page.click(row("dddd0004") + " .proj")
+    _src_is(page, "dddd0004")
+    # /clear in it: the terminal goes on as eeee0009; dddd0004 stays as an earlier row
+    old = next(s for s in api.sessions if s["id"] == "dddd0004")
+    api.sessions.append(dict(old, id="eeee0009", prev_id="dddd0004", switched_at=2000))
+    old.update(name=old["name"] + " (earlier)", active=False, attached=False, status="off")
+    _src_is(page, "eeee0009")
+    assert page.inner_text("#tNum") == "eeee0009"
+    assert page.get_attribute("#tOpen", "href") == "/sess/?arg=eeee0009"
+    assert "sel" in page.get_attribute(row("eeee0009"), "class")
+    # opening the earlier conversation on purpose: the page does not jump back
+    page.click(row("dddd0004") + " .proj")
+    _src_is(page, "dddd0004")
+    _after_next_poll(page, api)
+    _after_next_poll(page, api)
+    assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=dddd0004"
+    assert page.inner_text("#tNum") == "dddd0004"
+
+
+def test_open_terminal_follows_when_its_number_is_taken_over(page, api):
+    # the consent case: the old number simply was never a conversation — gone
+    page.click(row("bbbb0002") + " .proj")
+    _src_is(page, "bbbb0002")
+    s = next(x for x in api.sessions if x["id"] == "bbbb0002")
+    s.update(id="eeee0010", aliases=["bbbb0002"], prev_id="bbbb0002", switched_at=3000)
+    _src_is(page, "eeee0010")
+    assert page.inner_text("#tNum") == "eeee0010"
+    assert page.query_selector(row("bbbb0002")) is None
+    assert "sel" in page.get_attribute(row("eeee0010"), "class")

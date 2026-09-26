@@ -61,6 +61,7 @@ import uuid as _uuid
 import status_server as ss  # same dir: SESSIONS, strip_ansi, is_junk
 import library              # topic registry (.sessions/library.json)
 import library_cli          # tmux socket choice, transcript path of a topic
+import convo_sync           # a terminal takes the number of its live conversation
 
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
@@ -244,8 +245,9 @@ def visible(session: str) -> str:
 
 
 # the foreground command of a pane running Claude Code: "claude" (the process
-# name), or its version when Claude sets the process title to it ("2.1.87")
-_CLAUDE_CMD = re.compile(r"claude|\d+\.\d+\.\d+")
+# name; "claude.exe" from the npm package), or its version when Claude sets the
+# process title to it ("2.1.87")
+_CLAUDE_CMD = re.compile(r"claude(?:\.exe)?|\d+\.\d+\.\d+")
 
 
 def is_claude_command(cmd) -> bool:
@@ -306,9 +308,11 @@ def is_topic(key) -> bool:
 
 
 def topic_entry(sid: str, include_archived: bool = False) -> dict | None:
+    """The terminal `sid` names: its entry, or — for an old number that a terminal
+    took over (convo_sync) — that terminal's."""
     if not is_topic(sid):
         return None
-    e = library.find(_load_lib(), sid)
+    e = library.find_or_alias(_load_lib(), sid)
     if e is None or (e.get("archived") and not include_archived):
         return None
     return e
@@ -565,15 +569,55 @@ async def _load_topic(sid: str) -> tuple[str | None, str, int]:
     return name, msg, 0
 
 
+def sync_numbers() -> None:
+    """Terminals take the numbers of the conversations live in them (convo_sync:
+    Claude's consent relaunch, /clear, /resume) — before the chat's selection is
+    read, so a message right after a /clear sent through the bot goes to the
+    terminal, not to its earlier conversation loaded anew. Never raises."""
+    try:
+        convo_sync.sync(run=_tmux, lib_file=_lib_file(), lock="try")
+    except Exception as ex:  # noqa: BLE001 — the bot goes on with what is there
+        log.info("SYNC failed: %s", _clip(ex, 200))
+
+
+def _followed(chat_id: int, cur: str) -> str | None:
+    """The terminal the chat's topic `cur` became, or None: an old number that is
+    now an alias; or a switch away from `cur` since the chat picked it (the same
+    second counts: both are whole seconds). A /clear leaves the earlier
+    conversation in the list — picking that one on purpose afterwards sticks."""
+    try:
+        lib = _load_lib()
+    except LIB_ERRORS:
+        return None
+    if library.find(lib, cur) is None:
+        e = library.find_or_alias(lib, cur)
+        return e["id"] if e is not None else None
+    picked = (load_state().get("_picked") or {}).get(str(chat_id)) or 0
+    nxt = [e for e in lib["sessions"] if e.get("prev_id") == cur and e["id"] != cur
+           and isinstance(e.get("switched_at"), (int, float)) and e["switched_at"] >= picked]
+    return max(nxt, key=lambda e: e["switched_at"])["id"] if nxt else None
+
+
 def resolve_current(chat_id: int) -> str | None:
     """The chat's selection; a legacy slot that has since been migrated into a
-    topic is switched to that topic (and saved)."""
+    topic is switched to that topic (and saved), and so is a topic whose terminal
+    took a new number (see _followed)."""
     cur = get_current(chat_id)
     if cur and not is_topic(cur):
         e = migrated_topic(cur)     # archived too: ensure then refuses, never the old slot
         if e is not None and not legacy_alive(cur):
             set_current(chat_id, e["id"])
             return e["id"]
+    if cur and is_topic(cur):
+        sync_numbers()
+        for _ in range(8):                         # a chain of switches, bounded
+            nxt = _followed(chat_id, cur)
+            if nxt is None or nxt == cur:
+                break
+            log.info("FOLLOW chat=%s %s -> %s (the terminal's conversation changed)",
+                     chat_id, cur, nxt)
+            cur = nxt
+            set_current(chat_id, cur)
     return cur
 
 
@@ -943,8 +987,13 @@ def get_current(chat_id: int) -> str | None:
 
 
 def set_current(chat_id: int, agent_id: str) -> None:
+    """Also remembers when (`_picked`): a terminal's later number change is
+    followed, an earlier one is not (resolve_current)."""
     state = load_state()
     state[str(chat_id)] = str(agent_id)
+    picked = state.get("_picked")
+    state["_picked"] = picked = picked if isinstance(picked, dict) else {}
+    picked[str(chat_id)] = int(time.time())       # whole seconds, like switched_at
     save_state(state)
 
 

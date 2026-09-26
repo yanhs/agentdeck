@@ -44,6 +44,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import library  # noqa: E402  (hold markers)
+import convo_sync  # noqa: E402  (a terminal follows its conversation's number)
 IDLE_SECONDS = int(os.getenv("REAPER_IDLE_SECONDS", "7200"))        # 2 hours
 BG_MAX_SECONDS = int(os.getenv("REAPER_BG_MAX_SECONDS", "86400"))   # 24 hours
 # Archived terminals must not stay in RAM (owner, 2026-09-25): once idle by the
@@ -225,9 +226,28 @@ def save_state(state):
 
 
 # ── main sweep ──────────────────────────────────────────────────────────────
+def sync_conversations(state):
+    """Before deciding: a terminal whose Claude now runs another conversation takes
+    its number (convo_sync — tmux cs-A becomes cs-B), and what we remember about
+    cs-A (when a tab was last seen on it) goes with it. A failure is logged and the
+    sweep goes on with the names as they are."""
+    try:
+        switched = convo_sync.sync(run=lambda *a: _tmux(list(a)),
+                                   lib_file=os.getenv("AGENTDECK_LIBRARY") or library.LIB_FILE)
+    except Exception as ex:  # noqa: BLE001 — never stop the sweep over it
+        convo_sync.log(f"sync failed: {str(ex)[:200]}")
+        return
+    for a, b in switched:
+        old, new = library.tmux_name(a), library.tmux_name(b)
+        if old in state:
+            state[new] = max(state.pop(old), state.get(new) or 0)
+
+
 def sweep(now=None, dry_run=False):
     now = now if now is not None else time.time()
     state = load_state()
+    if not dry_run:
+        sync_conversations(state)
     actions = []
     archived = archived_ids()
     for s in watched_sessions():

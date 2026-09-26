@@ -5,6 +5,31 @@ All notable changes to AgentDeck. Newest first.
 ## Unreleased
 
 ### Terminals
+- **One number per terminal: a terminal and its conversation always share one number.**
+  Claude can change the conversation under a running terminal: its "allow bypass
+  permissions?" prompt, answered yes on a fresh install, restarts Claude without the
+  session id AgentDeck gave it; `/clear` starts a new conversation; `/resume` switches to
+  another. The dashboard used to keep the old number while the task board (and Claude
+  itself) used the new one, and a restart opened an empty conversation under the old
+  number. Now the terminal takes the new conversation's number: the new `convo_sync.py`
+  reads the file Claude keeps per running process (`~/.claude/sessions/<pid>.json`), finds
+  each terminal's Claude through the process tree (not by the file's tmux name, which goes
+  stale after a rename), moves the registry entry and renames tmux `cs-<old>` to
+  `cs-<new>` — an open tab stays attached, the process is not touched, a pending-timer hold
+  moves along, and a restart resumes the live conversation. It runs on every list refresh,
+  before close / archive / delete / rename, in `library_cli.py ensure` and `active`, in the
+  idle reaper, and before the Telegram bridge reads a chat's terminal. The old number: when
+  it never held a conversation (the permissions prompt), it disappears and old links
+  (`/?open=`, the task board, `/sess/?arg=`, `/use`) still land on the terminal; when it
+  has messages (`/clear` after work), it stays in the list as its own unloaded terminal,
+  "… (earlier)", and opens on its own. A conversation open in two terminals at once
+  (`/resume` of one that another terminal has open) is left as it is and logged — nothing
+  is merged or killed. The open page and a Telegram chat follow their terminal to its new
+  number, but not back to an earlier conversation picked on purpose. The pending-timer
+  hook and `library_cli.py hold -` use the conversation live now, not the number the pane
+  was started with. A Claude on a terminal of its own inside a pane (`script -c claude`)
+  is not mistaken for the terminal's, and the npm package's `claude.exe` counts as Claude.
+  Claude's permissions prompt itself is left as it is.
 - **A careless `pkill -f grep` elsewhere on the server can no longer take down every
   terminal:** a tmux server keeps, as its own command line, the command line of the tmux
   call that started it, and that used to be `tmux … new-session … -c <folder> bash -lic

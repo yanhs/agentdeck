@@ -890,6 +890,28 @@
 
     function byId(id) { return sessions.find(s => s.id === id); }
 
+    /* One number per terminal: when the conversation in a terminal changes
+       (Claude's consent relaunch, /clear, /resume) the terminal takes the new
+       conversation's number. Its row then carries prev_id (the number it had),
+       switched_at, and aliases — old numbers that were never a conversation of
+       their own, so an old link (?open=, the task board) still finds it. */
+    function byIdOrAlias(id) {
+      return byId(id) || sessions.find(s => Array.isArray(s.aliases) && s.aliases.includes(id));
+    }
+    // the latest row that took over from terminal `id`, or null
+    function switchedFrom(id) {
+      let best = null;
+      for (const s of sessions) {
+        if (s.prev_id === id && typeof s.switched_at === 'number' && s.id !== id
+            && (!best || s.switched_at > best.switched_at)) best = s;
+      }
+      return best;
+    }
+    // switched_at of the last switch away from the open terminal already seen:
+    // a switch newer than that is followed; opening an earlier row on purpose
+    // (a /clear leaves the old conversation in the list) does not jump back
+    let _selSwitchSeen = 0;
+
     function norm(q) { return (q || '').trim().toLocaleLowerCase(); }
 
     // same rule as library.search: name substring (any case) or code prefix
@@ -1329,6 +1351,8 @@
     function pick(id) {
       if (!ID_RE.test(id)) return;
       sel = id;
+      const sw = switchedFrom(id);
+      _selSwitchSeen = sw ? sw.switched_at : 0;
       document.getElementById('topbar').classList.remove('no-term');
       setLabel(id, true);
       syncSel();
@@ -1398,10 +1422,10 @@
     // restored first.
     function openTerminalById(id) {
       if (!ID_RE.test(id || '')) return;
-      const s = byId(id);
+      const s = byIdOrAlias(id);
       if (!s) { _toast('Terminal ' + id + ' not found', 3000); return; }
-      if (s.archived) { restoreAndOpen(id); return; }
-      pick(id);
+      if (s.archived) { restoreAndOpen(s.id); return; }
+      pick(s.id);
     }
     window.addEventListener('message', e => {
       if (e.origin !== location.origin) return;
@@ -2080,6 +2104,12 @@
           .map(s => Object.assign({}, s, {name: String(s.name ?? '')}));
         render();
         syncSel();
+        // the open terminal took a new number: follow it (a tmux re-attach —
+        // the terminal's process is not touched)
+        if (ID_RE.test(sel || '')) {
+          const sw = switchedFrom(sel);
+          if (sw && sw.switched_at > _selSwitchSeen) pick(sw.id);
+        }
         if (_pendingOpen) { const id = _pendingOpen; _pendingOpen = null; openTerminalById(id); }
       } catch {}
     }

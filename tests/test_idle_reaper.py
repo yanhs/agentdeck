@@ -16,6 +16,9 @@ import importlib.util
 import os
 import subprocess
 import time
+import types
+
+import pytest
 
 _spec = importlib.util.spec_from_file_location(
     "idle_reaper", os.path.join(os.path.dirname(__file__), "..", "idle_reaper.py"))
@@ -329,3 +332,61 @@ def test_archived_ids_read_the_registry(monkeypatch, tmp_path):
     assert reaper.archived_ids() == {"aaaaaaaa"}
     lib.write_text("{broken")
     assert reaper.archived_ids() == set()                     # never guess towards killing
+
+
+# ── one number per terminal: the sweep syncs first (convo_sync) ─────────────
+@pytest.fixture
+def switched(monkeypatch, tmp_path):
+    """A real private tmux server with terminal cs-a1a1a1a1 whose Claude now runs
+    conversation b2b2b2b2 (Claude's pid file says so); temp registry, pid-file dir
+    and reaper state."""
+    import json as _json
+    sock = f"agentdeck-test-reaper-sync-{os.getpid()}"
+    reg = tmp_path / "reg" / "library.json"
+    sessions = tmp_path / "claude-sessions"
+    sessions.mkdir()
+    for k, v in (("AGENTDECK_TMUX_SOCKET", sock), ("AGENTDECK_LIBRARY", str(reg)),
+                 ("AGENTDECK_CLAUDE_SESSIONS", str(sessions)),
+                 ("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))):
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.setattr(reaper, "STATE_FILE", str(tmp_path / "state.json"))
+    monkeypatch.setattr(reaper.library, "LIB_FILE", str(reg))
+    with reaper.library.update(str(reg)) as L:
+        reaper.library.create(L, "Deploy", cwd=str(tmp_path), now=1,
+                              uuid="a1a1a1a1-1111-4111-8111-111111111111")
+    tmux = ["tmux", "-L", sock, "-f", "/dev/null"]
+    subprocess.run([*tmux, "new-session", "-d", "-s", "cs-a1a1a1a1", "sleep", "600"], check=True)
+    try:
+        out = subprocess.run([*tmux, "list-panes", "-a", "-F", "#{pane_pid}"],
+                             capture_output=True, text=True).stdout
+        pid = int(out.split()[0])
+        with open(f"/proc/{pid}/stat") as f:
+            start = f.read().rsplit(")", 1)[1].split()[19]
+        (sessions / f"{pid}.json").write_text(_json.dumps(
+            {"pid": pid, "sessionId": "b2b2b2b2-2222-4222-8222-222222222222",
+             "procStart": start, "kind": "interactive", "entrypoint": "cli",
+             "tmux": "cs-a1a1a1a1:@0.%0"}))
+        yield types.SimpleNamespace(reg=str(reg), names=lambda: subprocess.run(
+            [*tmux, "list-sessions", "-F", "#{session_name}"],
+            capture_output=True, text=True).stdout.split())
+    finally:
+        subprocess.run([*tmux, "kill-server"], capture_output=True)
+
+
+def test_sweep_syncs_first_and_carries_the_seen_attached_clock(switched):
+    # a tab was on the terminal 100 s ago (state keyed by its tmux name); the
+    # conversation switch renames it, and the clock must go with it — else the
+    # renamed terminal looks idle since its last output and is unloaded
+    now = time.time() + reaper.IDLE_SECONDS + 50
+    reaper.save_state({"cs-a1a1a1a1": now - 100})
+    assert reaper.sweep(now=now) == []
+    assert switched.names() == ["cs-b2b2b2b2"]
+    assert reaper.load_state() == {"cs-b2b2b2b2": now - 100}
+    assert [e["id"] for e in reaper.library.load(switched.reg)["sessions"]] == ["b2b2b2b2"]
+
+
+def test_dry_run_switches_nothing(switched):
+    reaper.sweep(now=time.time(), dry_run=True)
+    assert switched.names() == ["cs-a1a1a1a1"]
+    assert [e["id"] for e in reaper.library.load(switched.reg)["sessions"]] == ["a1a1a1a1"]

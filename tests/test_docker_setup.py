@@ -165,7 +165,7 @@ def test_dockerfile_ships_the_library_runtime():
 def test_dockerignore_keeps_the_library_files():
     patterns = [l for l in code_lines(ROOT / ".dockerignore") if not l.startswith("!")]
     needed = ["open-session.sh", "library.py", "library_cli.py", "idle_reaper.py",
-              "status_server.py", "tg_bridge.py", "_agent_config.py",
+              "convo_sync.py", "status_server.py", "tg_bridge.py", "_agent_config.py",
               "tasks-dashboard/server.py", "web/index.html", "docker/entrypoint.sh",
               "docker/Caddyfile"]
     for f in needed:

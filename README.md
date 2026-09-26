@@ -101,7 +101,14 @@ on one VPS.
 
 - **Named terminals, no slot numbers.** Each terminal has a name and an 8-character code —
   the start of its Claude session id, so the dashboard, the tmux session (`cs-<code>`), the
-  logs and the transcript file all match. **＋ New terminal**, rename (✎), drag to reorder,
+  logs, the task board, Telegram and the transcript file all match. A terminal *is* its
+  conversation: one number, always. When the conversation in a running terminal changes —
+  Claude's "allow bypass permissions?" prompt restarts Claude with a new session id,
+  `/clear` starts a new conversation, `/resume` switches to another — the terminal takes the
+  new conversation's number (the tmux session is renamed, an open tab stays attached). An
+  old number that never held a conversation (the permissions prompt case) still opens the
+  terminal; after `/clear` the earlier conversation stays in the list as its own terminal,
+  "… (earlier)". **＋ New terminal**, rename (✎), drag to reorder,
   **Archive** (also unloads the terminal right away — unless it is working, then it unloads
   once it finishes), and **Delete** (archived only; the transcript goes to
   `.sessions/trash/`, never erased). Search finds terminals by name or code, archived ones
@@ -206,6 +213,12 @@ The dashboard works on a phone too:
 
 - **`library.py`** — the session library: the list of terminals in
   `.sessions/library.json` (name, code, Claude session id, order, archived).
+- **`convo_sync.py`** — keeps a terminal's number equal to the conversation live in it:
+  reads the file Claude keeps per running process (`~/.claude/sessions/<pid>.json`), finds
+  each terminal's Claude through the process tree, and after a `/clear`, `/resume` or the
+  permissions-prompt restart moves the registry entry and renames `cs-<old>` to
+  `cs-<new>`. The status server (every list refresh), `library_cli.py` and the idle reaper
+  run it before they act on a terminal.
 - **`open-session.sh` + `library_cli.py`** — one `ttyd` serves every terminal. The page
   `/sess/?arg=<code>` checks the code, loads the terminal into `tmux` if needed (unloading
   an idle one at the limit), and attaches the tab. `/sess/?arg=shell` is the `cmd` line.
@@ -587,6 +600,7 @@ install.sh               one-command install on your own server (systemd service
 https.sh                 HTTPS for the Docker sandbox in one command
 tmux.conf                AgentDeck's tmux settings (mouse, copy); your ~/.tmux.conf applies after it
 library.py               session library: the list of named terminals
+convo_sync.py            a terminal keeps the number of the conversation live in it (/clear, /resume)
 library_cli.py           loads/unloads terminals in tmux (used by ttyd and the bridge)
 bin/agentdeck-pane       what tmux runs in a new terminal (keeps the tmux server's command line neutral)
 open-session.sh          the one ttyd entry point: /sess/?arg=<code>

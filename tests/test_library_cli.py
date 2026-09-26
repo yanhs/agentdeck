@@ -83,7 +83,10 @@ class Deck:
         self.bin.mkdir()
         (self.bin / "claude").symlink_to(self.claude)
         self.clients = []
-        env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+        # not TMUX, and not the conversation of a Claude that runs this suite: `hold -`
+        # reads CLAUDE_CODE_SESSION_ID (a pane's live conversation)
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("TMUX", "CLAUDE_CODE_SESSION_ID")}
         env.update(PATH=f"{self.bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
                    HOME=str(self.home), AGENTDECK_LIBRARY=self.lib,
                    AGENTDECK_TMUX_SOCKET=self.socket, CLAUDE_BIN=str(self.claude),
@@ -725,3 +728,142 @@ def test_ensure_pane_start_command_is_claudes(deck):
     with open(f"/proc/{pid}/cmdline", "rb") as f:                      # what runs: claude itself
         argv = f.read().split(b"\0")
     assert argv[0] == b"claude" and U1.encode() in argv, argv
+
+
+# ── one number per terminal (convo_sync): ensure / active follow the conversation ──
+# Claude writes ~/.claude/sessions/<pid>.json (here: the deck's HOME) with the
+# conversation live in the process. After the consent relaunch, /clear or /resume
+# it names another conversation than the terminal's number; ensure and active
+# sync first, so the terminal carries the live conversation's number.
+def pane_pid(deck, name):
+    r = deck.tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}")
+    for line in r.stdout.splitlines():
+        n, _, pid = line.partition("\t")
+        if n == name and pid.isdigit():
+            return int(pid)
+    return None
+
+
+def live_file(deck, pid, u):
+    """Claude's pid file: process `pid` runs conversation `u` now."""
+    with open(f"/proc/{pid}/stat") as f:
+        start = f.read().rsplit(")", 1)[1].split()[19]
+    d = deck.home / ".claude" / "sessions"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{pid}.json").write_text(json.dumps(
+        {"pid": pid, "sessionId": u, "procStart": start, "kind": "interactive",
+         "entrypoint": "cli", "tmux": "cs-stale:@0.%0", "cwd": str(deck.work)}))
+
+
+def with_messages(deck, e):
+    p = deck.transcript(e)
+    p.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}) + "\n")
+    return p
+
+
+def running(deck, sid):
+    """cs-<sid> is up and its pane runs the (fake) claude; returns the pane pid."""
+    pid = wait_for(lambda: pane_pid(deck, "cs-" + sid))
+    assert pid and wait_for(lambda: open(f"/proc/{pid}/cmdline", "rb").read().startswith(b"claude"))
+    return pid
+
+
+def test_ensure_syncs_first_and_starts_no_second_claude(deck):
+    e = deck.add("Deploy", uuid=U1)
+    assert deck.cli("ensure", e["id"]).returncode == 0
+    live_file(deck, running(deck, "aaaaaaaa"), U2)        # consent relaunch: now U2
+    r = deck.cli("ensure", "aaaaaaaa")                    # an old link to the terminal
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "cs-bbbbbbbb"
+    assert deck.has("cs-bbbbbbbb") and not deck.has("cs-aaaaaaaa")
+    assert len(deck.calls()) == 1                          # no second claude
+    L = library.load(deck.lib)
+    assert [x["id"] for x in L["sessions"]] == ["bbbbbbbb"]
+    assert L["sessions"][0]["aliases"] == ["aaaaaaaa"] and L["sessions"][0]["name"] == "Deploy"
+
+
+def test_ensure_by_alias_prints_the_renamed_session(deck):
+    deck.add("Deploy", uuid=U1)
+    with library.update(deck.lib) as L:
+        library.switch(L, "aaaaaaaa", U2, False, now=1)
+    r = deck.cli("ensure", "aaaaaaaa")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "cs-bbbbbbbb"
+    wait_for(deck.calls)
+    assert f"--session-id {U2}" in deck.calls()[0]
+    assert deck.cli("ensure", "aaaaaaaa").stdout.strip() == "cs-bbbbbbbb"   # running: same
+    assert len(deck.calls()) == 1
+
+
+def test_active_lists_the_terminal_under_its_live_number(deck):
+    e = deck.add("Deploy", uuid=U1)
+    assert deck.cli("ensure", e["id"]).returncode == 0
+    live_file(deck, running(deck, "aaaaaaaa"), U2)
+    assert set(deck.active()) == {"bbbbbbbb"}
+
+
+def test_ensure_exit_4_when_live_map_shows_the_uuid_outside_tmux(deck):
+    # a claude /resume'd onto U1 outside AgentDeck: nothing on its command line says
+    # U1, only its pid file does
+    e = deck.add("A", uuid=U1)
+    p = subprocess.Popen(["bash", "-c", "exec -a claude sleep 600"], env=deck.env,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deck.clients.append(p)
+    assert wait_for(lambda: open(f"/proc/{p.pid}/cmdline", "rb").read().startswith(b"claude"))
+    live_file(deck, p.pid, U1)
+    r = deck.cli("ensure", e["id"])
+    assert r.returncode == 4, (r.stdout, r.stderr)
+    assert str(p.pid) in r.stderr and not deck.has("cs-aaaaaaaa")
+
+
+def test_earlier_conversation_opens_while_its_old_process_runs_the_new_one(deck):
+    # /clear after work in cs-aaaaaaaa: its claude (still `--resume U1` on the command
+    # line) now runs U2. The terminal becomes cs-bbbbbbbb; the earlier conversation
+    # U1 stays in the list and opens on its own — the old process no longer runs it
+    e = deck.add("Deploy", uuid=U1)
+    with_messages(deck, e)
+    assert deck.cli("ensure", e["id"]).returncode == 0
+    old = running(deck, "aaaaaaaa")
+    assert f"--resume\x00{U1}".encode() in open(f"/proc/{old}/cmdline", "rb").read()
+    live_file(deck, old, U2)
+    r = deck.cli("ensure", "aaaaaaaa")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "cs-aaaaaaaa"
+    assert deck.has("cs-bbbbbbbb") and pane_pid(deck, "cs-bbbbbbbb") == old
+    wait_for(lambda: len(deck.calls()) == 2)
+    assert f"--resume {U1}" in deck.calls()[1]
+    earlier = library.find(library.load(deck.lib), "aaaaaaaa")
+    assert earlier["name"] == "Deploy (earlier)"
+    assert library.find(library.load(deck.lib), "bbbbbbbb")["name"] == "Deploy"
+
+
+def test_pane_cmd_after_switch_resumes_the_live_uuid(deck):
+    deck.add("Deploy", uuid=U1)
+    with library.update(deck.lib) as L:
+        b = dict(library.switch(L, "aaaaaaaa", U2, False, now=1))
+    deck.transcript(b)
+    for asked in ("bbbbbbbb", "aaaaaaaa"):
+        r = deck.cli("pane-cmd", asked)
+        assert r.returncode == 0, r.stderr
+        assert f"--resume {U2}" in r.stdout and U1 not in r.stdout
+        assert "AGENTDECK_SESSION=bbbbbbbb" in r.stdout
+
+
+def test_hold_dash_prefers_the_live_conversation(deck):
+    # AGENTDECK_SESSION is the number the pane had at launch; after a switch the
+    # terminal is the conversation Claude runs now (CLAUDE_CODE_SESSION_ID)
+    r = deck.cli("hold", "-", "60", AGENTDECK_SESSION="aaaaaaaa", CLAUDE_CODE_SESSION_ID=U2)
+    assert r.returncode == 0, r.stderr
+    assert library.hold_until("bbbbbbbb", lib_file=deck.lib) > time.time()
+    assert library.hold_until("aaaaaaaa", lib_file=deck.lib) is None
+    r = deck.cli("hold", "-", "60", AGENTDECK_SESSION="aaaaaaaa", CLAUDE_CODE_SESSION_ID="x/../y")
+    assert r.returncode == 0, r.stderr
+    assert library.hold_until("aaaaaaaa", lib_file=deck.lib) > time.time()
+
+
+def test_pane_is_claude_accepts_the_npm_binary_name(deck):
+    # the npm package's binary is claude.exe; after the consent relaunch the pane
+    # may show that name
+    deck.add("A", uuid=U1)
+    deck.tmux("new-session", "-d", "-s", "cs-aaaaaaaa", "bash -c 'exec -a claude.exe sleep 600'")
+    assert wait_for(lambda: deck.cli("pane-is-claude", "aaaaaaaa").returncode == 0)

@@ -408,3 +408,186 @@ def test_reorder_unknown_id_raises_and_changes_nothing():
     with pytest.raises(KeyError):
         lib.reorder(L, ["aaaaaaaa", "deadbeef"])
     assert all("pos" not in e for e in L["sessions"])
+
+
+# ── one number per terminal: the terminal follows its conversation ─────────
+# When the conversation live in terminal A becomes B (Claude's bypass-consent
+# relaunch, /clear, /resume), the terminal becomes B. What happens to A depends
+# on whether A ever held a conversation (a transcript with messages).
+UA = "a1a1a1a1-1111-4111-8111-111111111111"
+UB = "b2b2b2b2-2222-4222-8222-222222222222"
+
+
+def _terminal(L, name="Deploy", now=100, u=UA, pos=None, archived=False):
+    e = lib.create(L, name, cwd="/home/ubuntu/pr", now=now, uuid=u)
+    if pos is not None:
+        e["pos"] = pos
+    e["archived"] = archived
+    return e
+
+
+def test_switch_without_messages_moves_the_terminal_to_the_new_number():
+    # the consent case: A never held a conversation, so A simply was never one
+    L = lib.empty()
+    _terminal(L, pos=3)
+    L["sessions"][0]["last_used"] = 150
+    e = lib.switch(L, "a1a1a1a1", UB, False, now=500)
+    assert [x["id"] for x in L["sessions"]] == ["b2b2b2b2"]
+    assert e is L["sessions"][0]
+    assert e["uuid"] == UB and e["id"] == lib.id_from_uuid(e["uuid"])
+    assert e["name"] == "Deploy" and e["cwd"] == "/home/ubuntu/pr"
+    assert e["created"] == 100 and e["last_used"] == 150 and e["pos"] == 3
+    assert e["archived"] is False
+    assert e["aliases"] == ["a1a1a1a1"] and e["prev_id"] == "a1a1a1a1" and e["switched_at"] == 500
+    assert lib.find(L, "a1a1a1a1") is None
+
+
+def test_switch_without_messages_keeps_earlier_aliases_once():
+    L = lib.empty()
+    e = _terminal(L)
+    e["aliases"] = ["0000aaaa"]
+    lib.switch(L, "a1a1a1a1", UB, False, now=500)
+    UC = "c3c3c3c3-3333-4333-8333-333333333333"
+    e = lib.switch(L, "b2b2b2b2", UC, False, now=600)
+    assert e["id"] == "c3c3c3c3" and e["aliases"] == ["0000aaaa", "a1a1a1a1", "b2b2b2b2"]
+    assert e["prev_id"] == "b2b2b2b2" and e["switched_at"] == 600
+
+
+def test_switch_with_messages_keeps_the_old_conversation_as_an_earlier_row():
+    # /clear after work: A is a real conversation; the terminal (name, place in
+    # the list, archive state) goes on as B, A stays as its own unloaded row
+    L = lib.empty()
+    a = _terminal(L, pos=2)
+    a["aliases"] = ["0000aaaa"]
+    b = lib.switch(L, "a1a1a1a1", UB, True, now=500)
+    assert b["id"] == "b2b2b2b2" and b["uuid"] == UB
+    assert b["name"] == "Deploy" and b["cwd"] == "/home/ubuntu/pr" and b["created"] == 100
+    assert b["last_used"] == 100 and b["archived"] is False and b["pos"] == 2
+    assert b["prev_id"] == "a1a1a1a1" and b["switched_at"] == 500
+    assert "aliases" not in b                     # A still exists: no alias to it
+    a = lib.find(L, "a1a1a1a1")
+    assert a["uuid"] == UA and a["name"] == "Deploy (earlier)" and "pos" not in a
+    assert a["aliases"] == ["0000aaaa"]
+    for e in L["sessions"]:
+        assert e["id"] == lib.id_from_uuid(e["uuid"])
+
+
+def test_switch_with_messages_cuts_a_long_name_before_the_suffix():
+    L = lib.empty()
+    _terminal(L, name="x" * 200)
+    lib.switch(L, "a1a1a1a1", UB, True, now=500)
+    assert lib.find(L, "a1a1a1a1")["name"] == "x" * 190 + " (earlier)"
+    assert lib.find(L, "b2b2b2b2")["name"] == "x" * 200
+
+
+def test_switch_to_a_conversation_already_in_the_library():
+    # /resume of a terminal's conversation that sits archived in the list:
+    # B comes back (keeps its own name), A goes or stays by its transcript
+    for a_msgs in (False, True):
+        L = lib.empty()
+        a = _terminal(L, name="Scratch", now=100)
+        a["aliases"] = ["0000aaaa"]
+        _terminal(L, name="Taxes", now=50, u=UB, archived=True)
+        b = lib.switch(L, "a1a1a1a1", UB, a_msgs, now=700)
+        assert b is lib.find(L, "b2b2b2b2")
+        assert b["name"] == "Taxes" and b["archived"] is False
+        assert b["prev_id"] == "a1a1a1a1" and b["switched_at"] == 700 and b["last_used"] == 700
+        if a_msgs:
+            assert lib.find(L, "a1a1a1a1")["name"] == "Scratch"      # unchanged
+            assert "aliases" not in b
+        else:
+            assert lib.find(L, "a1a1a1a1") is None
+            assert b["aliases"] == ["a1a1a1a1", "0000aaaa"]
+
+
+def test_switch_refuses_an_8hex_collision_with_another_uuid():
+    L = lib.empty()
+    _terminal(L)
+    other = "b2b2b2b2-9999-4999-8999-999999999999"        # same 8 hex, other conversation
+    _terminal(L, name="Other", u=other)
+    before = json.dumps(L, sort_keys=True)
+    with pytest.raises(ValueError):
+        lib.switch(L, "a1a1a1a1", UB, False, now=500)
+    with pytest.raises(ValueError):
+        lib.switch(L, "a1a1a1a1", "not-a-uuid", False, now=500)
+    with pytest.raises(KeyError):
+        lib.switch(L, "deadbeef", UB, False, now=500)
+    assert json.dumps(L, sort_keys=True) == before
+
+
+def test_find_or_alias_and_resolve_follow_a_vanished_number():
+    L = lib.empty()
+    _terminal(L)
+    lib.switch(L, "a1a1a1a1", UB, False, now=500)
+    assert lib.find(L, "a1a1a1a1") is None                  # find() stays exact
+    assert lib.find_or_alias(L, "a1a1a1a1")["id"] == "b2b2b2b2"
+    assert lib.find_or_alias(L, "b2b2b2b2")["id"] == "b2b2b2b2"
+    assert lib.find_or_alias(L, "deadbeef") is None
+    assert [e["id"] for e in lib.resolve(L, "a1a1a1a1")] == ["b2b2b2b2"]
+    # an exact id wins over someone's alias
+    _terminal(L, name="New", u="a1a1a1a1-5555-4555-8555-555555555555")
+    assert lib.find_or_alias(L, "a1a1a1a1")["name"] == "New"
+
+
+def test_create_never_draws_a_number_that_is_an_alias(monkeypatch):
+    L = lib.empty()
+    _terminal(L)
+    lib.switch(L, "a1a1a1a1", UB, False, now=500)
+    draws = iter([UA, "c3c3c3c3-3333-4333-8333-333333333333"])
+    monkeypatch.setattr(lib._uuid, "uuid4", lambda: next(draws))
+    e = lib.create(L, "fresh", cwd="/", now=600)
+    assert e["id"] == "c3c3c3c3"
+
+
+def test_has_messages(tmp_path):
+    p = tmp_path / "t.jsonl"
+    assert lib.has_messages(str(p)) is False                 # no file
+    p.write_text('{"type":"summary","summary":"x"}\n'
+                 '{"type":"file-history-snapshot","snapshot":{}}\n')
+    assert lib.has_messages(str(p)) is False
+    p.write_text(p.read_text() + "not json\n"
+                 '{"type":"user","message":{"role":"user","content":"hi"}}\n')
+    assert lib.has_messages(str(p)) is True
+    q = tmp_path / "a.jsonl"
+    q.write_text('{"parentUuid":null,"type":"assistant","message":{"content":[]}}\n')
+    assert lib.has_messages(str(q)) is True
+    # a mention inside some other record is not a message
+    r = tmp_path / "r.jsonl"
+    r.write_text('{"type":"summary","summary":"\\"type\\":\\"user\\""}\n')
+    assert lib.has_messages(str(r)) is False
+    assert lib.has_messages(str(tmp_path)) is False          # a directory
+
+
+def test_a_conversation_holding_only_slash_commands_has_no_messages(tmp_path):
+    # what Claude Code 2.1.283 writes right after /clear (seen on a live probe)
+    p = tmp_path / "t.jsonl"
+    p.write_text("\n".join(json.dumps(d) for d in [
+        {"type": "user", "isMeta": True, "message": {"role": "user", "content":
+            "<local-command-caveat>Caveat: The messages below were generated by the user"
+            " while running local commands.</local-command-caveat>"}},
+        {"type": "user", "message": {"role": "user", "content":
+            "<command-name>/clear</command-name>\n <command-message>clear</command-message>"}},
+        {"type": "user", "message": {"role": "user", "content":
+            "<local-command-stdout></local-command-stdout>"}},
+        {"type": "assistant", "message": {"model": "<synthetic>", "content": []}},
+        {"type": "attachment", "attachment": {"type": "hook_success"}},
+    ]) + "\n")
+    assert lib.has_messages(str(p)) is False
+    with open(p, "a") as f:                                    # a prompt makes it one
+        f.write(json.dumps({"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "deploy it"}]}}) + "\n")
+    assert lib.has_messages(str(p)) is True
+
+
+def test_move_hold_carries_the_hold_to_the_new_number(tmp_path):
+    reg = str(tmp_path / "library.json")
+    lib.set_hold("a1a1a1a1", 5000, lib_file=reg)
+    lib.move_hold("a1a1a1a1", "b2b2b2b2", lib_file=reg)
+    assert lib.hold_until("b2b2b2b2", lib_file=reg) == 5000
+    assert not (tmp_path / "hold-a1a1a1a1").exists()
+    lib.set_hold("b2b2b2b2", 9000, lib_file=reg)               # a later one is kept
+    lib.set_hold("c3c3c3c3", 100, lib_file=reg)
+    lib.move_hold("c3c3c3c3", "b2b2b2b2", lib_file=reg)
+    assert lib.hold_until("b2b2b2b2", lib_file=reg) == 9000
+    lib.move_hold("deadbeef", "b2b2b2b2", lib_file=reg)        # none: nothing happens
+    assert lib.hold_until("b2b2b2b2", lib_file=reg) == 9000

@@ -3,7 +3,8 @@
 page (open-session.sh) and the Telegram bridge.
 
     library_cli.py ensure <id>     print cs-<id> once it runs (already did, or
-                                   started now, detached). Exit 0; 2 = unknown or
+                                   started now, detached); for an old number of a
+                                   terminal, the terminal's cs-<number now>. Exit 0; 2 = unknown or
                                    archived id; 3 = all MAX_ACTIVE loaded ones are
                                    busy, nothing could be unloaded; 4 = this
                                    conversation's uuid already runs in another
@@ -17,7 +18,9 @@ page (open-session.sh) and the Telegram bridge.
                                    right now (the bridge asks before typing text).
     library_cli.py hold <id|-> <seconds>
                                    keep the session counted as working until now +
-                                   seconds (`-` = $AGENTDECK_SESSION); a longer
+                                   seconds (`-` = this pane's terminal: the live
+                                   conversation, $CLAUDE_CODE_SESSION_ID, inside a
+                                   library pane, $AGENTDECK_SESSION); a longer
                                    existing hold is kept.
     library_cli.py shell-ensure    print cmd-shell once the dashboard's one plain
                                    command line runs (`bash -l` in WORKDIR, mouse
@@ -29,6 +32,13 @@ The id arrives from a URL (/sess/?arg=<id>), so it is checked before anything
 else: 8 hex chars, present in the registry, not archived, and its uuid must be a
 real uuid that starts with the id. Only those checked pieces reach the pane
 command; the topic name (free text) never does.
+
+One number per terminal: a terminal's number is the conversation live in it. When
+Claude switches the conversation under a running terminal (its bypass-permissions
+consent relaunch, /clear, /resume) convo_sync renames cs-A to cs-B and moves the
+registry entry; ensure and active sync first. An old number that never was a
+conversation of its own is an alias of the terminal that took it over: `ensure A`
+prints cs-B.
 
 At the limit (library.MAX_ACTIVE) the least recently used session that is idle
 (no screen output for AGENTDECK_WORKING_SECONDS, default 1800, no live
@@ -61,6 +71,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import convo_sync  # noqa: E402  (a terminal follows its conversation's number)
 import idle_reaper  # noqa: E402  (background-task detection, pure /proc walk)
 import library  # noqa: E402
 
@@ -173,13 +184,14 @@ def live_sessions(now=None, working_seconds=None):
 
 
 def pane_is_claude(sid):
-    """True only if cs-<sid>'s pane is running claude now (not a bare shell)."""
+    """True only if cs-<sid>'s pane is running claude now (not a bare shell). The
+    npm package's binary is claude.exe (a consent relaunch re-executes that)."""
     name = library.tmux_name(sid)
     r = _tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}")
     if r.returncode != 0:
         return False
     cmds = [c for n, _, c in (l.partition("\t") for l in r.stdout.splitlines()) if n == name]
-    return bool(cmds) and all(c == "claude" for c in cmds)
+    return bool(cmds) and all(c in convo_sync.CLAUDE_NAMES for c in cmds)
 
 
 # ── one claude per conversation ─────────────────────────────────────────────
@@ -203,7 +215,7 @@ def _runs_uuid(argv, u):
     """argv is a claude started on conversation u: argv[0] is claude itself (a
     shell or the tmux server carrying `claude --resume u` as text is not), and
     the uuid follows --resume / --session-id (or is joined with `=`)."""
-    if not argv or os.path.basename(argv[0]) != "claude":
+    if not argv or os.path.basename(argv[0]) not in convo_sync.CLAUDE_NAMES:
         return False
     for i, a in enumerate(argv[1:], 1):
         if a in ("--resume", "-r", "--session-id") and i + 1 < len(argv) and argv[i + 1] == u:
@@ -214,10 +226,17 @@ def _runs_uuid(argv, u):
 
 
 def claude_processes(u):
-    """[(pid, tmux session name or None)] of every running claude on uuid u."""
+    """[(pid, tmux session name or None)] of every running claude on uuid u.
+
+    A claude with a live pid file (~/.claude/sessions, convo_sync.live_files) runs
+    the conversation that file names — after /clear or /resume its command line
+    (`--resume <old>`) is stale; only a claude without one is judged by its
+    command line (--resume / --session-id)."""
     me = os.getpid()
+    live = {f["pid"]: f["uuid"] for f in convo_sync.live_files()}
     pids = [int(p) for p in os.listdir("/proc") if p.isdigit() and int(p) != me]
-    hits = [p for p in pids if _runs_uuid(_cmdline(p), u)]
+    hits = [p for p in pids
+            if (live[p] == u if p in live else _runs_uuid(_cmdline(p), u))]
     if not hits:
         return []
     panes = {}
@@ -243,7 +262,20 @@ def claude_elsewhere(u, own_session):
     return [(p, w) for p, w in claude_processes(u) if w != own_session]
 
 
+def sync(lock=True):
+    """convo_sync.sync on our tmux and registry; lock=False inside _ensure_lock.
+    A failure other than a corrupt registry is reported and ignored."""
+    try:
+        return convo_sync.sync(run=_tmux, lib_file=library.LIB_FILE, lock=lock)
+    except library.CorruptRegistry:
+        raise
+    except Exception as ex:  # noqa: BLE001 — never stop an open over it
+        _say(f"couldn't check which conversation each terminal runs: {_clean(ex)}")
+        return []
+
+
 def active():
+    sync()
     return [{k: s[k] for k in ("id", "attached", "working", "last_output")}
             for s in live_sessions()]
 
@@ -473,6 +505,8 @@ def pane_command(e, home=None, claude_bin=None):
     oauth = shlex.quote(os.path.join(home, ".claude", "oauth.env"))
     return ('for v in $(env | cut -d= -f1 | grep -i CLAUDE); do unset "$v"; done; '
             f"[ -r {oauth} ] && . {oauth}; "
+            # the number the terminal has at launch; after a conversation switch
+            # the live one is CLAUDE_CODE_SESSION_ID (see hold(), hold_on_timer)
             f"export AGENTDECK_SESSION={sid}; "
             # exec: when claude exits the pane closes; a leftover shell prompt
             # would run whatever text the bridge types next as commands
@@ -511,10 +545,11 @@ def _clean(text):
 
 
 def _lookup(sid):
-    """Registry entry for a usable id, else None. Read-only: never creates the file."""
+    """Registry entry for a usable id (or an old number of it: an alias), else None.
+    Read-only: never creates the file."""
     if not library.valid_id(sid):
         return None
-    e = library.find(library.load(library.LIB_FILE), sid)
+    e = library.find_or_alias(library.load(library.LIB_FILE), sid)
     if e is None or e.get("archived"):
         return None
     return e
@@ -584,12 +619,18 @@ def ensure(sid, now=None):
     except ValueError:
         _say(f"unknown session {sid}: library entry is corrupt (uuid).")
         return EXIT_UNKNOWN
-    name = library.tmux_name(sid)
     limit = library.MAX_ACTIVE
     with _ensure_lock():
+        sync(lock=False)                           # terminals carry their live numbers
         e = _lookup(sid)                           # may have been archived meanwhile
         if e is None:
             return _unknown(sid)
+        try:
+            sid, _ = checked_entry(e)              # an old number: the terminal's own
+        except ValueError:
+            _say(f"unknown session {sid}: library entry is corrupt (uuid).")
+            return EXIT_UNKNOWN
+        name = library.tmux_name(sid)
         ensure_tmux_conf()
         if not _has(name):
             other = claude_elsewhere(e["uuid"], name)
@@ -640,11 +681,23 @@ def shell_ensure():
 
 
 # ── hold ────────────────────────────────────────────────────────────────────
+def pane_session():
+    """`hold -`: the terminal this runs in. Only inside a library pane
+    (AGENTDECK_SESSION, exported at launch); its number is the conversation live
+    now — CLAUDE_CODE_SESSION_ID, which Claude sets for every shell it starts —
+    unless that is missing or malformed."""
+    pane = os.getenv("AGENTDECK_SESSION", "")
+    if not library.valid_id(pane):
+        return ""
+    u = os.getenv("CLAUDE_CODE_SESSION_ID", "")
+    return library.id_from_uuid(u) if _UUID.fullmatch(u) else pane
+
+
 def hold(sid, seconds, now=None):
     if sid == "-":
-        sid = os.getenv("AGENTDECK_SESSION", "")
+        sid = pane_session()
     if not library.valid_id(sid):
-        _say("hold: needs an 8-character topic id (or '-' with AGENTDECK_SESSION).")
+        _say("hold: needs an 8-character topic id (or '-' inside a topic's pane).")
         return EXIT_UNKNOWN
     try:
         secs = int(seconds)

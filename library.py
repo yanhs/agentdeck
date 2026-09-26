@@ -112,6 +112,18 @@ def find(lib, sid):
     return None
 
 
+def find_or_alias(lib, sid):
+    """The entry with this id, else the one that took this number over (its
+    `aliases`: numbers of conversations that never were one — see switch())."""
+    e = find(lib, sid)
+    if e is not None:
+        return e
+    for e in lib["sessions"]:
+        if sid in (e.get("aliases") or ()):
+            return e
+    return None
+
+
 def _get(lib, sid):
     e = find(lib, sid)
     if e is None:
@@ -125,7 +137,7 @@ def default_name(now):
 
 def create(lib, name, cwd, now, uuid=None):
     u = uuid or str(_uuid.uuid4())
-    while uuid is None and find(lib, id_from_uuid(u)):      # fresh uuid collided: redraw
+    while uuid is None and find_or_alias(lib, id_from_uuid(u)):   # collided: redraw
         u = str(_uuid.uuid4())
     sid = id_from_uuid(u)
     if find(lib, sid):
@@ -165,6 +177,108 @@ def delete(lib, sid):
     e = _get(lib, sid)
     lib["sessions"].remove(e)
     return e
+
+
+# ── one number per terminal ─────────────────────────────────────────────────
+# A terminal and its conversation are one thing with one number. When the
+# conversation live in terminal A becomes B — Claude's bypass-permissions consent
+# relaunches Claude without --session-id, /clear starts a new conversation,
+# /resume switches to another — the terminal becomes B (convo_sync.py notices and
+# calls switch(); the tmux session cs-A is renamed cs-B).
+ALIASES_MAX = 20
+EARLIER = " (earlier)"
+
+
+def _with_aliases(e, ids):
+    have = [a for a in (e.get("aliases") or []) if valid_id(a)]
+    for a in ids:
+        if valid_id(a) and a != e["id"] and a not in have:
+            have.append(a)
+    if have:
+        e["aliases"] = have[-ALIASES_MAX:]
+
+
+def switch(lib, old, new_uuid, old_has_messages, now):
+    """Terminal `old` now runs conversation `new_uuid` (number B). Returns B's entry.
+
+    - B unknown, A never held a conversation (the consent relaunch): A's entry
+      itself becomes B — name, folder, place in the list, archive state kept;
+      A's number stays reachable as an alias of B (old links).
+    - B unknown, A has messages (/clear after work): a new entry B carries the
+      terminal on (A's name, folder, created, last_used, archived, place); A stays
+      as its own row, "… (earlier)", out of the manual order.
+    - B already in the library (/resume of a listed conversation): B is brought
+      back (out of the archive) with its own name; A goes (its number becomes an
+      alias of B) when it never held a conversation, else stays as it is.
+    B's number taken by another conversation (an 8-hex collision) -> ValueError,
+    nothing changed. Every entry keeps id == uuid[:8]."""
+    if not (isinstance(new_uuid, str) and _UUID.fullmatch(new_uuid)):
+        raise ValueError(f"bad uuid {new_uuid!r}")
+    a = _get(lib, old)
+    new = id_from_uuid(new_uuid)
+    b = find(lib, new)
+    if b is not None and b.get("uuid") != new_uuid:
+        raise ValueError(f"number {new} is already another conversation ({b.get('uuid')})")
+    if b is a:
+        return a                                    # nothing switched
+    moved = {"prev_id": old, "switched_at": now}
+    if b is None and not old_has_messages:
+        a.update(id=new, uuid=new_uuid, **moved)
+        _with_aliases(a, [old])
+        return a
+    if b is None:
+        b = {"id": new, "uuid": new_uuid, **{k: a[k] for k in (
+            "name", "cwd", "created", "last_used", "archived") if k in a}, **moved}
+        if _has_pos(a):
+            b["pos"] = a.pop("pos")
+        a["name"] = a["name"][:200 - len(EARLIER)] + EARLIER
+        lib["sessions"].insert(lib["sessions"].index(a), b)
+        return b
+    b.update(archived=False, last_used=now, **moved)
+    if not old_has_messages:
+        lib["sessions"].remove(a)
+        _with_aliases(b, [old] + list(a.get("aliases") or []))
+    return b
+
+
+TRANSCRIPT_SCAN_MAX = 4 * 1024 * 1024
+# What Claude Code 2.1.283 writes as "user" records that are not a conversation:
+# a slash command (/clear itself is the first record of the conversation it
+# starts) and its output. A new conversation right after /clear holds only these.
+_NOT_A_MESSAGE = ("<command-name>", "<command-message>", "<local-command-stdout>",
+                  "<local-command-stderr>", "<local-command-caveat>")
+
+
+def _is_message(d):
+    kind = d.get("type")
+    if kind not in ("user", "assistant") or d.get("isMeta"):
+        return False
+    m = d.get("message")
+    if kind == "assistant":
+        return not (isinstance(m, dict) and m.get("model") == "<synthetic>")
+    c = m.get("content") if isinstance(m, dict) else None
+    return not (isinstance(c, str) and c.lstrip().startswith(_NOT_A_MESSAGE))
+
+
+def has_messages(path, limit=TRANSCRIPT_SCAN_MAX):
+    """True when the transcript at `path` holds a conversation: a prompt or a
+    model reply — not only summaries, snapshots, slash commands and their output.
+    Reads at most `limit` bytes; a missing or unreadable file is False."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(limit)
+    except OSError:
+        return False
+    for line in data.splitlines():
+        if b'"user"' not in line and b'"assistant"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(d, dict) and _is_message(d):
+            return True
+    return False
 
 
 # ── transcripts → trash (moved, never unlinked) ─────────────────────────────
@@ -272,7 +386,8 @@ def resolve(lib, text, archived=False):
     if not q:
         return []
     live = [e for e in lib["sessions"] if bool(e.get("archived")) == bool(archived)]
-    for rule in (lambda e: e["id"] == q, lambda e: e["id"].startswith(q),
+    for rule in (lambda e: e["id"] == q or q in (e.get("aliases") or ()),
+                 lambda e: e["id"].startswith(q),
                  lambda e: q in e["name"].casefold()):
         hits = [e for e in live if rule(e)]
         if hits:
@@ -364,6 +479,15 @@ def set_hold(sid, until, lib_file=None):
         f.write(f"{until}\n")
     os.replace(tmp, path)
     return until
+
+
+def move_hold(old, new, lib_file=None):
+    """The terminal's number changed (switch()): its hold goes with it."""
+    until = hold_until(old, lib_file)
+    if until is not None:
+        set_hold(new, until, lib_file)
+    with contextlib.suppress(OSError):
+        os.unlink(hold_path(old, lib_file))
 
 
 # ── migration from numbered slots ───────────────────────────────────────────

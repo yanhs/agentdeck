@@ -88,3 +88,33 @@ def test_a_later_hold_is_not_shortened(reg):
     long_hold = until(reg)
     run(reg, {"tool_name": "ScheduleWakeup", "tool_input": {"delaySeconds": 60}})
     assert until(reg) == long_hold
+
+
+# ── one number per terminal: the hold goes to the conversation live now ─────
+# AGENTDECK_SESSION is exported once, when the pane starts. After Claude's consent
+# relaunch, /clear or /resume the terminal's number is the new conversation's
+# (convo_sync renames it); the hook payload's session_id is that conversation.
+UB = "b2b2b2b2-2222-4222-8222-222222222222"
+
+
+def test_hold_goes_to_the_hook_payload_session(reg):
+    r = run(reg, {"session_id": UB, "tool_name": "CronCreate", "tool_input": {}},
+            session="a1a1a1a1")
+    assert r.returncode == 0, r.stderr
+    assert os.path.exists(hold_file(reg, "b2b2b2b2"))
+    assert not os.path.exists(hold_file(reg, "a1a1a1a1"))
+
+
+@pytest.mark.parametrize("bad", ["../../etc/passwd", "", 12345678, None, "B2B2B2B2-x"])
+def test_a_malformed_payload_session_falls_back_to_the_pane_variable(reg, bad):
+    r = run(reg, {"session_id": bad, "tool_name": "CronCreate", "tool_input": {}},
+            session="a1a1a1a1")
+    assert r.returncode == 0, r.stderr
+    assert os.listdir(os.path.dirname(reg)) == ["hold-a1a1a1a1"]
+
+
+def test_payload_session_outside_a_library_pane_is_a_no_op(reg):
+    # a Claude that AgentDeck did not start (no AGENTDECK_SESSION) holds nothing
+    r = run(reg, {"session_id": UB, "tool_name": "CronCreate", "tool_input": {}}, session=None)
+    assert r.returncode == 0
+    assert not os.path.exists(os.path.dirname(reg))

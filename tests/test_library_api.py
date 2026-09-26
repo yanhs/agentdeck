@@ -61,13 +61,18 @@ def api(tmp_path, monkeypatch):
     libfile = tmp_path / "library.json"
     monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", sock)
     monkeypatch.setenv("AGENTDECK_LIBRARY", str(libfile))
+    # Claude's live-process files (convo_sync) and transcripts: temp, never the real ones
+    (tmp_path / "claude-sessions").mkdir()
+    monkeypatch.setenv("AGENTDECK_CLAUDE_SESSIONS", str(tmp_path / "claude-sessions"))
+    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))
     monkeypatch.delenv("TMUX", raising=False)
     sys.modules.pop("status_server", None)
     ss = importlib.import_module("status_server")
     srv = HTTPServer(("127.0.0.1", 0), ss.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     A = types.SimpleNamespace(base=f"http://127.0.0.1:{srv.server_address[1]}",
-                              sock=sock, lib=str(libfile), ss=ss)
+                              sock=sock, lib=str(libfile), ss=ss,
+                              claude_sessions=tmp_path / "claude-sessions")
     try:
         yield A
     finally:
@@ -827,3 +832,76 @@ def test_restore_never_unloads(api, monkeypatch):
 
 def test_archive_quiet_window_is_the_delete_window(api):
     assert api.ss.DELETE_QUIET_SECONDS == 120
+
+
+# ── one number per terminal (convo_sync): the listing follows the conversation ──
+UNEW = "0badc0de-1111-4222-8333-444455556666"
+
+
+def _pane_pid(A, name):
+    r = _tmux(A.sock, "list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}")
+    for line in r.stdout.splitlines():
+        n, _, pid = line.partition("\t")
+        if n == name:
+            return int(pid)
+    return None
+
+
+def _claude_runs(A, name, u):
+    """Claude's pid file (~/.claude/sessions/<pid>.json) for the pane of `name`:
+    the conversation live in it is `u` (as after the consent relaunch or /clear)."""
+    pid = _pane_pid(A, name)
+    with open(f"/proc/{pid}/stat") as f:
+        start = f.read().rsplit(")", 1)[1].split()[19]
+    (A.claude_sessions / f"{pid}.json").write_text(json.dumps(
+        {"pid": pid, "sessionId": u, "procStart": start, "kind": "interactive",
+         "entrypoint": "cli", "tmux": name + ":@0.%0", "cwd": "/home/ubuntu/pr"}))
+
+
+def test_listing_follows_a_conversation_switch(api):
+    _seed(api, (U1, "consent", 10), (U2, "other", 20))
+    _start(api, "cs-aaaa1111")
+    _claude_runs(api, "cs-aaaa1111", UNEW)     # never had a transcript: the consent case
+    code, data = get(api)
+    assert code == 200
+    by = _by_id(data)
+    assert set(by) == {"0badc0de", "bbbb2222"}
+    row = by["0badc0de"]
+    assert row["active"] is True and row["name"] == "consent"
+    assert row["prev_id"] == "aaaa1111" and row["aliases"] == ["aaaa1111"]
+    assert isinstance(row["switched_at"], int)
+    assert set(by["bbbb2222"]) == ROW_KEYS           # untouched rows: the same keys as ever
+    assert _alive(api, "cs-0badc0de") and not _alive(api, "cs-aaaa1111")
+
+
+def test_close_by_a_vanished_number_acts_on_the_renamed_terminal(api, monkeypatch):
+    monkeypatch.setattr(api.ss, "CLOSE_QUIET_SECONDS", 0)
+    _seed(api, (U1, "consent", 10))
+    _start(api, "cs-aaaa1111")
+    _claude_runs(api, "cs-aaaa1111", UNEW)
+    # no listing in between: close itself syncs first, then maps the old number
+    code, e = post(api, "close", {"id": "aaaa1111"})
+    assert code == 200 and e["id"] == "0badc0de" and e["killed"] is True
+    assert not _alive(api, "cs-0badc0de") and not _alive(api, "cs-aaaa1111")
+
+
+def test_rename_and_archive_by_a_vanished_number(api):
+    _seed(api, (U1, "consent", 10))
+    _start(api, "cs-aaaa1111")
+    _claude_runs(api, "cs-aaaa1111", UNEW)
+    get(api)                                          # the switch happens here
+    code, e = post(api, "rename", {"id": "aaaa1111", "name": "renamed"})
+    assert code == 200 and e["id"] == "0badc0de" and e["name"] == "renamed"
+    code, e = post(api, "archive", {"id": "aaaa1111", "archived": True})
+    assert code == 200 and e["id"] == "0badc0de" and e["archived"] is True
+
+
+def test_a_broken_sync_never_breaks_the_listing(api, monkeypatch):
+    _seed(api, (U1, "a", 10))
+    import convo_sync
+
+    def boom(**kw):
+        raise RuntimeError("disk on fire")
+    monkeypatch.setattr(convo_sync, "sync", boom)
+    code, data = get(api)
+    assert code == 200 and [s["id"] for s in data["sessions"]] == ["aaaa1111"]

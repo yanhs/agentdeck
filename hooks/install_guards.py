@@ -4,7 +4,8 @@
 The set: guard_task_board.py + guard_dont_stop.py (the board), and hold_on_timer.py
 (PostToolUse on ScheduleWakeup/CronCreate/Monitor: a terminal waiting on its own timer
 stays loaded — idle_reaper skips it while the hold marker is fresh; the terminal is
-identified by $AGENTDECK_SESSION, which library_cli exports in every cs-<id> pane).
+identified by the conversation in the hook's payload, which is the terminal's number,
+and $AGENTDECK_SESSION, exported in every cs-<id> pane, marks a library terminal).
 
 The hooks block comes from hooks/settings.example.json (one source), with
 /path/to/agentdeck replaced by the real repo path. The merge is idempotent and keeps

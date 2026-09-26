@@ -14,7 +14,10 @@
 #   <id>   topic cs-<id>: a login + interactive bash loads the user's rc environment
 #          (the same one a terminal's own shell has); then every CLAUDE* variable is
 #          unset (a Claude-spawned caller must not leak into the pane), ~/.claude/oauth.env
-#          is sourced, AGENTDECK_SESSION=<id> exported, and claude exec'd with the
+#          is sourced, AGENTDECK_SESSION=<id> exported (the number the terminal has
+#          at launch: after Claude's consent relaunch, /clear or /resume the terminal
+#          takes the live conversation's number — convo_sync.py — and the live one
+#          is CLAUDE_CODE_SESSION_ID), and claude exec'd with the
 #          arguments `library_cli.py ensure` prepared for this start in
 #          <registry folder>/launch/<id> (NUL-separated: claude, --resume or --session-id,
 #          the uuid, --dangerously-skip-permissions, the session's own ultracode / max

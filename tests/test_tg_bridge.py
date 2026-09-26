@@ -2547,3 +2547,74 @@ def test_a_pick_refused_as_open_elsewhere_says_what_happens(world, monkeypatch):
     # a typed message is still refused the same way, and says it was not sent
     sink, streamed = _deliver(world, monkeypatch, "hello")
     assert "already open" in sink[-1][0] and "not sent" in sink[-1][0] and not streamed
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# One number per terminal: the chat's selection follows its terminal when the
+# conversation in it changes (Claude's consent relaunch, /clear, /resume) —
+# convo_sync gives the terminal the new conversation's number.
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_current_selection_follows_a_vanished_number(world):
+    # the consent case: aaaa1111 never was a conversation; the terminal is bbbb2222
+    world.add("Deploy", uuid=U1)
+    with library.update(world.lib) as L:
+        library.switch(L, "aaaa1111", U2, False, now=100)
+    tb.set_current(CHAT, "aaaa1111")
+    assert tb.resolve_current(CHAT) == "bbbb2222"
+    assert tb.get_current(CHAT) == "bbbb2222"
+    assert tb.topic_entry("aaaa1111")["id"] == "bbbb2222"
+    # `/use <old number>` finds the terminal as well
+    tb.set_current(CHAT, "6")
+    world.loaded.append("bbbb2222")
+    run_cmd(tb.cmd_use, ["aaaa1111"])
+    assert tb.get_current(CHAT) == "bbbb2222"
+
+
+def test_current_selection_follows_the_terminal_after_clear_but_not_a_later_pick(world):
+    world.add("Deploy", uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")
+    st = tb.load_state()
+    st["_picked"][str(CHAT)] = 50                       # picked before the switch
+    tb.save_state(st)
+    with library.update(world.lib) as L:                 # /clear after work, at t=100
+        library.switch(L, "aaaa1111", U2, True, now=100)
+    assert tb.resolve_current(CHAT) == "bbbb2222"
+    # the owner picks the earlier conversation on purpose afterwards: it stays
+    tb.set_current(CHAT, "aaaa1111")
+    assert tb.resolve_current(CHAT) == "aaaa1111"
+    assert tb.resolve_current(CHAT) == "aaaa1111"
+
+
+def test_selection_syncs_before_resolving(world, monkeypatch, tmp_path):
+    # /clear sent through the bot, then the next message at once: nothing else has
+    # synced yet. The bridge must not load the earlier conversation into a new
+    # cs-aaaa1111 and type there — it resolves the terminal's live number first.
+    sock = f"agentdeck-test-tgsync-{os.getpid()}"
+    sessions = tmp_path / "claude-sessions"
+    sessions.mkdir()
+    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", sock)
+    monkeypatch.setenv("AGENTDECK_CLAUDE_SESSIONS", str(sessions))
+    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))
+    tm = ["tmux", "-L", sock, "-f", "/dev/null"]
+    e = world.add("Deploy", uuid=U1, cwd=str(tmp_path))
+    p = Path(library.transcript_file(str(tmp_path / "projects"), e["cwd"], U1))
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
+    tb.set_current(CHAT, "aaaa1111")
+    subprocess.run([*tm, "new-session", "-d", "-s", "cs-aaaa1111", "sleep", "600"], check=True)
+    try:
+        pid = int(subprocess.run([*tm, "list-panes", "-a", "-F", "#{pane_pid}"],
+                                 capture_output=True, text=True).stdout.split()[0])
+        with open(f"/proc/{pid}/stat") as f:
+            start = f.read().rsplit(")", 1)[1].split()[19]
+        (sessions / f"{pid}.json").write_text(json.dumps(
+            {"pid": pid, "sessionId": U2, "procStart": start, "kind": "interactive",
+             "entrypoint": "cli", "tmux": "cs-aaaa1111:@0.%0"}))
+        assert tb.resolve_current(CHAT) == "bbbb2222"
+        names = subprocess.run([*tm, "list-sessions", "-F", "#{session_name}"],
+                               capture_output=True, text=True).stdout.split()
+        assert names == ["cs-bbbb2222"]
+        assert library.find(library.load(world.lib), "aaaa1111")["name"] == "Deploy (earlier)"
+    finally:
+        subprocess.run([*tm, "kill-server"], capture_output=True)

@@ -17,7 +17,7 @@ import time
 
 import pytest
 
-from tests.test_library_cli import BAD_IDS, U1, U2, U3, Deck, wait_for
+from tests.test_library_cli import BAD_IDS, U1, U2, U3, Deck, library, wait_for
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(REPO, "open-session.sh")
@@ -110,6 +110,22 @@ def test_all_busy_prints_a_clear_message_and_exits_3(deck):
     assert r.returncode == 3
     assert "busy" in (r.stdout + r.stderr)
     assert not deck.has("cs-c0ffee00")
+
+
+# ── one number per terminal: an old link lands on the terminal ──────────────
+def test_old_link_attaches_to_the_renamed_terminal(deck):
+    # Claude's consent relaunch gave terminal aaaaaaaa's conversation a new number:
+    # the terminal is cs-bbbbbbbb now, and a tab opened with the old link attaches there
+    deck.add("Deploy", uuid=U1)
+    with library.update(deck.lib) as L:
+        library.switch(L, "aaaaaaaa", U2, False, now=1)
+    tab = subprocess.Popen(["script", "-qfc", f"bash {SCRIPT} aaaaaaaa", "/dev/null"],
+                           stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, env=deck.env)
+    deck.clients.append(tab)
+    assert wait_for(lambda: deck.active().get("bbbbbbbb", {}).get("attached"))
+    assert not deck.has("cs-aaaaaaaa")
+    assert len(wait_for(deck.calls)) == 1
 
 
 # ── deployment wiring ───────────────────────────────────────────────────────

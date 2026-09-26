@@ -16,6 +16,7 @@ import unicodedata
 from urllib.parse import urlparse, parse_qs
 
 import library   # session registry (library.py next to this file)
+import convo_sync   # a terminal takes the number of the conversation live in it
 import idle_reaper   # background-task detection (tree_has_task_output), pure /proc walk
 import server_status   # the Server page's collector (GET /api/server)
 
@@ -497,6 +498,9 @@ def lib_origin_ok(origin, headers):
     allowed = lib_allowed_origin(headers)
     return bool(allowed) and origin == allowed
 _LIB_ROW_KEYS = ("id", "name", "cwd", "created", "last_used", "archived", "pos")
+# only on a terminal whose conversation changed under it (convo_sync / library.switch):
+# the numbers that now lead here, the number it had before and when it changed
+_LIB_SWITCH_KEYS = ("aliases", "prev_id", "switched_at")
 
 
 class LibError(Exception):
@@ -519,6 +523,27 @@ def lib_tmux(*args):
     sock = os.environ.get("AGENTDECK_TMUX_SOCKET")
     return subprocess.run(["tmux", *(["-L", sock] if sock else []), *args],
                           capture_output=True, text=True)
+
+
+def lib_sync(lock="try"):
+    """One number per terminal: a terminal whose Claude now runs another conversation
+    (consent relaunch, /clear, /resume) takes that conversation's number before
+    anything reads or acts on it (convo_sync.sync). lock="try": the page's poll
+    skips a round while an `ensure` runs; True: wait (before an unload). Never
+    raises: a failure is logged and the caller goes on with what is there."""
+    try:
+        return convo_sync.sync(run=lib_tmux, lib_file=lib_path(), lock=lock)
+    except Exception as e:  # noqa: BLE001 — must never break the listing or a POST
+        convo_sync.log(f"sync failed: {str(e)[:200]}")
+        return []
+
+
+def lib_canonical(sid):
+    """The current number of terminal `sid`: after syncing, an old number that
+    became an alias (the consent relaunch) maps to the terminal that has it."""
+    lib_sync(lock=True)
+    e = library.find_or_alias(library.load(lib_path()), sid)
+    return e["id"] if e is not None else sid
 
 
 def lib_live():
@@ -624,6 +649,7 @@ def lib_rows(entries, live=None, legacy_paths=None, working=None):
     rows = []
     for e in entries:
         row = {k: e.get(k) for k in _LIB_ROW_KEYS}
+        row.update({k: e[k] for k in _LIB_SWITCH_KEYS if e.get(k) is not None})
         row["archived"] = bool(e.get("archived"))
         info = live.get(e["id"])
         legacy = legacy_paths.get(e.get("uuid")) if info is None else None
@@ -636,6 +662,7 @@ def lib_rows(entries, live=None, legacy_paths=None, working=None):
 
 
 def lib_listing(include_archived=False):
+    lib_sync()                                      # the page polls this every 4 s
     lib = library.load(lib_path())
     live = lib_live()
     legacy = lib_legacy()
@@ -701,6 +728,8 @@ def lib_post(route, body):
         return {"ok": True, "killed": killed}
 
     sid = lib_id(body)
+    if route in ("rename", "archive", "close", "delete"):
+        sid = lib_canonical(sid)                  # act on the terminal's live number
     if route == "rename":
         name = lib_clean_name(body.get("name"), required=True)
         return lib_edit(sid, lambda lib: library.rename(lib, sid, name))
