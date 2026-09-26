@@ -492,24 +492,28 @@ def tg_html() -> str:
 
     msgs = [
         out("/list", "14:02"),
-        inc("Current: cs-3f9a1c07 «Auth: refresh tokens»\n\n"
-            "Topics (🟢 loaded · ⚪️ unloaded · ⚙️ working):\n"
+        inc("Current: «Auth: refresh tokens» · 3f9a1c07\n\n"
+            "Terminals (🟢 loaded · ⚪️ unloaded · ⚙️ working):\n"
             "🟢 «Auth: refresh tokens» · 3f9a1c07 ⚙️ ← current\n"
             "🟢 «Docs: API reference» · 8b2e4d10\n"
             "🟢 «Data pipeline backfill» · c41d9e2a ⚙️\n"
-            "⚪️ «Scraper rate limits» · a9e61c34\n"
-            "⚪️ «Release notes v2» · e2b04a9d", "14:02"),
-        out("/new Invoice PDF export", "14:02"),
-        inc("🆕 ✅ Current topic: cs-4e8d2b61 «Invoice PDF export»\n▶️ was unloaded — loading…", "14:02"),
-        out("/use scraper", "14:03"),
-        inc("✅ Current topic: cs-a9e61c34 «Scraper rate limits»\n▶️ was unloaded — loading…", "14:03"),
-        out("Back off exponentially on 429s and run the tests", "14:03"),
-        inc("Read(scraper/fetch.py)\n⎿ Read 96 lines\n"
-            "Update(scraper/fetch.py)\n⎿ Updated scraper/fetch.py with 18 additions\n"
-            "Bash(pytest -q)\n⎿ 41 passed in 2.3s\n"
-            "✻ Crunched for 52s\n\n"
-            "Done — a 429 now waits 1s → 2s → 4s … (capped at 60s) and honours Retry-After when the site sends it.",
-            "14:04"),
+            "⚪️ «Scraper rate limits» · a9e61c34\n\n"
+            "🗄 In the archive: 2 — /archive to pick one", "14:02"),
+        out("/archive", "14:03"),
+        inc("🗄 Archive (2) — tap a terminal to restore and open it:", "14:03",
+            kb=["🗄 Stripe webhooks retry · 0b7d2e91", "🗄 Prototype: voice notes · 6ac3f150"]),
+        inc("✅ Current terminal: «Stripe webhooks retry» · 0b7d2e91\n"
+            "♻️ restored from the archive\n▶️ was unloaded — loading…", "14:03"),
+        inc("📺 «Stripe webhooks retry» · 0b7d2e91\n\n"
+            "● Done. Failed webhooks now retry with backoff\n"
+            "  (1m → 5m → 30m), 3 new tests, 88 passed.\n\n"
+            "> ", "14:03"),
+        out("Also retry on 502 from Stripe and run the tests", "14:04"),
+        inc("Update(billing/webhooks.py)\n⎿ Updated billing/webhooks.py with 6 additions\n"
+            "Bash(pytest -q)\n⎿ 90 passed in 3.1s\n"
+            "✻ Crunched for 41s\n\n"
+            "Done — a 502 now counts as retryable; 2 new tests.",
+            "14:05"),
         out("", "14:06", voice=True),
         inc('🎙 "commit it and deploy to staging"', "14:06"),
         inc("📋 Which environment should I deploy to?\n"

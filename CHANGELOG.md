@@ -2,6 +2,29 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## v1.6.0 — archive that frees memory, Telegram menu with the archive
+
+### Dashboard
+- **Archive unloads the terminal** right away, unless it is working (printing, a timer, a
+  background task); a busy one unloads by itself once it goes quiet. The dashboard says which.
+- **Clicking an archived terminal restores and opens it.** The Restore button is gone; Delete
+  stays. The task board's terminal links restore an archived terminal the same way.
+
+### Telegram bridge
+- **`/archive`**: archived terminals as buttons (newest first); a tap restores and opens it,
+  like a click on the dashboard. `/archive <text>` searches the archive.
+- **`/use`** buttons list the terminals outside the archive, loaded first; `/list` shows how
+  many are archived.
+- **After a pick the bot re-reads the session by itself**: a second message "📺 «name» · id"
+  with the terminal's screen once Claude is up, or its last reply if it can't load.
+- A topic still running in an old numbered terminal is served there (no "already open
+  elsewhere" refusal); `/read` on an unloaded terminal shows its last reply from the transcript.
+- The menu says "terminal" everywhere, like the dashboard.
+
+### Repo
+- The nginx example has no numbered `/terminalN` routes any more (one ttyd on `/sess/`).
+- README gallery: fewer task-board shots; new archive and Telegram screenshots.
+
 ## v1.5.1 — terminal ⇄ tasks links, fixes from a fresh-user Docker install test
 
 Tested before release: the full suite, and a fresh install from GitHub with Docker following
