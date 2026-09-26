@@ -227,12 +227,13 @@ def search(lib, text, include_archived=False):
     return out
 
 
-def resolve(lib, text):
-    """For `/use <text>`: exact id, else id prefix, else name substring."""
+def resolve(lib, text, archived=False):
+    """For `/use <text>`: exact id, else id prefix, else name substring — among
+    the topics outside the archive, or (archived=True) only among the archived."""
     q = (text or "").strip().casefold()
     if not q:
         return []
-    live = [e for e in lib["sessions"] if not e.get("archived")]
+    live = [e for e in lib["sessions"] if bool(e.get("archived")) == bool(archived)]
     for rule in (lambda e: e["id"] == q, lambda e: e["id"].startswith(q),
                  lambda e: q in e["name"].casefold()):
         hits = [e for e in live if rule(e)]

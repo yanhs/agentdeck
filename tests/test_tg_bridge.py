@@ -1073,6 +1073,7 @@ class World:
         self.threads = []         # (subcommand, thread id) of every library_cli call
         monkeypatch.setattr(tb, "STATE_FILE", str(tmp_path / "state.json"))
         monkeypatch.setattr(tb, "_fresh", {})
+        monkeypatch.setattr(tb, "_auto_reads", {}, raising=False)   # no re-read carried over
         self.log = []          # every library_cli call and keystroke, in order
         self.loaded = []       # ids that are "in tmux"
         self.codes = {}        # id -> (exit code, stderr) for ensure
@@ -1216,7 +1217,7 @@ def test_use_by_name_selects_topic_by_id_and_loads_it(world):
     assert tb.get_current(CHAT) == "bbbb2222"            # stored by id, not by name
     assert world.ensured() == ["bbbb2222"]                # loaded via library_cli ensure
     text = replies[-1][0]
-    assert text.splitlines() == ["✅ Current topic: cs-bbbb2222 «Налоги 2026»",
+    assert text.splitlines() == ["✅ Current terminal: «Налоги 2026» · bbbb2222",
                                  "▶️ was unloaded — loading…"]
 
 
@@ -1332,8 +1333,8 @@ def test_list_loaded_topics_first_and_marks_current(world):
     tb.set_current(CHAT, "bbbb2222")
     text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
     assert ("active",) in world.log                       # asks library_cli what is loaded
-    assert text.startswith("Current: cs-bbbb2222 «Новая выгруженная»\n\n")  # header names the current one
-    assert "Topics (🟢 loaded · ⚪️ unloaded · ⚙️ working):" in text
+    assert text.startswith("Current: «Новая выгруженная» · bbbb2222\n\n")  # header names the current one
+    assert "Terminals (🟢 loaded · ⚪️ unloaded · ⚙️ working):" in text
     rows = [l for l in text.splitlines() if l.startswith(("🟢", "⚪"))]
     assert [("Старая" in l, "Новая" in l) for l in rows] == [(True, False), (False, True)]
     loaded, cur = rows
@@ -1346,7 +1347,7 @@ def test_list_says_so_when_loaded_state_is_unknown(world):
     world.add("тема", uuid=U1)
     world.active_code = 1
     text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
-    assert "тема" in text and "couldn't tell which topics are loaded" in text
+    assert "тема" in text and "couldn't tell which terminals are loaded" in text
 
 
 # --- /new ------------------------------------------------------------------
@@ -1361,7 +1362,7 @@ def test_new_creates_topic_selects_and_loads_it(world, monkeypatch, tmp_path):
     assert e["cwd"] == str(tmp_path)
     assert tb.get_current(CHAT) == e["id"]
     assert world.ensured() == [e["id"]]
-    assert replies[-1][0] == (f"🆕 ✅ Current topic: cs-{e['id']} «Разбор логов»\n"
+    assert replies[-1][0] == (f"🆕 ✅ Current terminal: «Разбор логов» · {e['id']}\n"
                               "▶️ was unloaded — loading…")
 
 
@@ -1952,11 +1953,593 @@ def test_open_session_prints_no_cyrillic():
 
 def test_bot_commands_are_english():
     got = {c.command: c.description for c in tb.BOT_COMMANDS}
-    assert got["use"] == "pick a topic: /use <part of the name or id>"
-    assert got["list"] == "topics: loaded first, current one marked"
-    assert got["new"] == "new topic: /new <name>"
+    assert got["use"] == "pick a terminal: buttons, or /use <part of the name or id>"
+    assert got["list"] == "terminals: loaded first, current one marked"
+    assert got["new"] == "new terminal: /new <name>"
     assert not [d for d in got.values() if _CYR.search(d)]
 
 
 def test_need_pick_is_english():
-    assert tb.NEED_PICK == "Pick a topic first: /use <part of the name or id> · /list · /new <name>"
+    assert tb.NEED_PICK == "Pick a terminal first: /use <part of the name or id> · /list · /new <name>"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Menu refresh (2026-09-26): pick from the normal agents (/use), pick from the
+# archive (/archive — restores, like the dashboard's click on an archived
+# terminal), and after ANY pick the bot re-reads the session by itself (what
+# /read shows), without typing anything into the terminal.
+#
+# The re-read runs as a background task (the pick answers at once; a freshly
+# loaded Claude may take READY_TIMEOUT to draw). run_cmd_bg / run_cb_bg let
+# those tasks finish before the test looks at the replies.
+# ════════════════════════════════════════════════════════════════════════════
+
+READY_SCREEN = ("● the answer is 42\n"
+                "❯ \n"
+                "  ⏵⏵ bypass permissions on (shift+tab to cycle)")
+SHELL_SCREEN = "ubuntu@vps:~/pr$ claude --resume x --dangerously-skip-permissions"
+
+
+async def _drain_background():
+    """Wait for the bridge's background work started in this event loop."""
+    loop = asyncio.get_running_loop()
+    for _ in range(50):
+        tasks = [t for t in list(getattr(tb, "_background", ())) if t.get_loop() is loop]
+        if not tasks:
+            return
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def run_cmd_bg(handler, args):
+    sink = []
+    ctx = type("Ctx", (), {"args": list(args)})()
+
+    async def go():
+        await handler(_Upd(sink), ctx)
+        await _drain_background()
+    asyncio.run(go())
+    return sink
+
+
+def run_cb_bg(handler, data):
+    return run_cbs_bg(handler, [data])
+
+
+def run_cbs_bg(handler, datas):
+    """Button taps handled at the same time (concurrent_updates), then the
+    background work they started."""
+    sink = []
+
+    class Q:
+        def __init__(self, data):
+            self.data = data
+            self.message = type("M", (), {"chat_id": CHAT})()
+
+        async def answer(self, *a, **k):
+            pass
+
+        async def edit_message_text(self, text, reply_markup=None, **k):
+            sink.append((text, reply_markup))
+
+    def upd(data):
+        return type("U", (), {"callback_query": Q(data),
+                              "effective_user": type("E", (), {"id": tb.OWNER_ID})()})()
+
+    class Bot:
+        async def send_message(self, chat_id, text, **k):
+            assert chat_id == CHAT
+            sink.append((text, None))
+            return _Reply(sink)
+    ctx = type("Ctx", (), {"bot": Bot(), "args": []})()
+
+    async def go():
+        await asyncio.gather(*(handler(upd(d), ctx) for d in datas))
+        await _drain_background()
+    asyncio.run(go())
+    return sink
+
+
+def run_cmds_bg(calls):
+    """Several commands one after the other in ONE event loop (so an earlier
+    pick's background re-read can still be running), then the background work."""
+    sink = []
+
+    async def go():
+        for handler, args in calls:
+            await handler(_Upd(sink), type("Ctx", (), {"args": list(args)})())
+        await _drain_background()
+    asyncio.run(go())
+    return sink
+
+
+def _reread_env(world, monkeypatch, screens=None, capture_text=READY_SCREEN):
+    """Fake the terminal for the re-read: `visible` walks `screens` (the last one
+    stays), `capture` returns capture_text; every keystroke path is recorded so
+    a test can prove nothing was typed. Returns the record dict."""
+    import threading
+    rec = {"visible": 0, "capture": [], "typed": [], "tmux": [], "threads": []}
+    seq = list(screens or [READY_SCREEN])
+
+    def fake_visible(s):
+        rec["visible"] += 1
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    def fake_capture(s, lines=200):
+        rec["capture"].append((s, rec["visible"]))
+        rec["threads"].append(threading.get_ident())
+        return capture_text
+
+    def fake_tmux(*a):
+        rec["tmux"].append(a)
+        return subprocess.CompletedProcess(a, 1, "", "")
+    monkeypatch.setattr(tb, "visible", fake_visible)
+    monkeypatch.setattr(tb, "capture", fake_capture)
+    monkeypatch.setattr(tb, "_tmux", fake_tmux)
+    monkeypatch.setattr(tb, "send_text", lambda s, t: rec["typed"].append(("text", s, t)))
+    monkeypatch.setattr(tb, "send_key", lambda s, k: rec["typed"].append(("key", s, k)))
+
+    async def no_sleep(*a, **k):
+        pass
+    monkeypatch.setattr(tb, "_ready_sleep", no_sleep)
+    return rec
+
+
+def _nothing_typed(rec):
+    return rec["typed"] == [] and not [a for a in rec["tmux"] if a and a[0] == "send-keys"]
+
+
+def _transcript(tmp_path, text):
+    f = tmp_path / "t.jsonl"
+    _write(f, [{"type": "assistant", "uuid": "a1",
+                "message": {"model": "m", "content": [{"type": "text", "text": text}]}}])
+    return str(f)
+
+
+def _is_archived(world, sid):
+    return library.find(library.load(world.lib), sid)["archived"]
+
+
+# --- /archive: pick from the archive ----------------------------------------
+
+def test_archive_menu_lists_only_archived_most_recent_first(world):
+    world.add("active one", uuid=U1, last_used=50)
+    world.add("archived older", uuid=U2, last_used=10, archived=True)
+    world.add("archived newer", uuid=U3, last_used=30, archived=True)
+    replies = run_cmd(tb.cmd_archive, [])
+    text, markup = replies[-1]
+    assert _callbacks(markup) == ["arch:c0ffee00", "arch:bbbb2222"]   # newest first
+    labels = [b.text for row in markup.inline_keyboard for b in row]
+    assert "archived newer" in labels[0] and "active one" not in " ".join(labels)
+    assert "archive" in text.lower()
+    assert world.ensured() == [] and tb.get_current(CHAT) is None      # a menu only
+    assert _is_archived(world, "bbbb2222") and _is_archived(world, "c0ffee00")
+
+
+def test_archive_menu_when_the_archive_is_empty(world):
+    world.add("active one", uuid=U1)
+    text, markup = run_cmd(tb.cmd_archive, [])[-1]
+    assert markup is None and "empty" in text.lower()
+
+
+def test_archive_menu_caps_the_buttons_with_a_hint(world, monkeypatch):
+    monkeypatch.setattr(tb, "TOPIC_BUTTONS_MAX", 2)
+    world.add("a1", uuid=U1, last_used=10, archived=True)
+    world.add("a2", uuid=U2, last_used=20, archived=True)
+    world.add("a3", uuid=U3, last_used=30, archived=True)
+    text, markup = run_cmd(tb.cmd_archive, [])[-1]
+    assert _callbacks(markup) == ["arch:c0ffee00", "arch:bbbb2222"]
+    assert "1 more" in text and "/archive <" in text     # a search that reaches the rest
+
+
+def test_archive_pick_restores_selects_and_loads(world, monkeypatch):
+    world.add("old work", uuid=U2, archived=True)
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cb_bg(tb.on_archive_cb, "arch:bbbb2222")
+    assert _is_archived(world, "bbbb2222") is False          # out of the archive
+    assert tb.get_current(CHAT) == "bbbb2222"
+    assert world.ensured() == ["bbbb2222"]                    # loaded like a normal pick
+    first = sink[0][0]
+    assert first.startswith("✅ Current terminal: «old work» · bbbb2222")
+    assert "restored from the archive" in first
+    assert any("the answer is 42" in t for t, _ in sink[1:])  # then the screen by itself
+    assert _nothing_typed(rec)
+
+
+def test_archive_pick_of_a_topic_restored_meanwhile_is_a_normal_pick(world, monkeypatch):
+    world.add("back already", uuid=U2)                        # restored on the dashboard
+    _reread_env(world, monkeypatch)
+    sink = run_cb_bg(tb.on_archive_cb, "arch:bbbb2222")
+    assert tb.get_current(CHAT) == "bbbb2222" and world.ensured() == ["bbbb2222"]
+    assert "restored" not in sink[0][0]
+
+
+def test_archive_pick_of_an_unknown_or_bad_id_does_nothing(world, monkeypatch):
+    rec = _reread_env(world, monkeypatch)
+    for data in ("arch:deadbeef", "arch:../x", "arch:"):
+        sink = run_cb_bg(tb.on_archive_cb, data)
+        assert sink and "No such terminal" in sink[-1][0]
+    assert tb.get_current(CHAT) is None and world.ensured() == [] and rec["capture"] == []
+
+
+def test_archive_pick_ensure_exit_4_refuses_and_starts_nothing(world, monkeypatch, tmp_path):
+    world.add("open elsewhere", uuid=U2, archived=True)
+    world.codes["bbbb2222"] = (4, "conversation already running in pid 123")
+    path = _transcript(tmp_path, "what it said last")
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: path if aid == "bbbb2222" else None)
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cb_bg(tb.on_archive_cb, "arch:bbbb2222")
+    assert world.ensured() == ["bbbb2222"]                    # asked once, refused
+    assert "bbbb2222" not in world.loaded                     # no second Claude started
+    assert not [a for a in rec["tmux"] if a and a[0] == "new-session"]
+    assert "already open" in sink[0][0]
+    assert rec["capture"] == []                               # nothing on screen to show
+    later = "\n".join(t for t, _ in sink[1:])
+    assert "what it said last" in later                       # the transcript instead
+    assert _nothing_typed(rec)
+
+
+# --- /use: the normal agents; archived only as a restore-on-tap fallback ------
+
+def test_use_menu_excludes_archived_and_points_to_the_archive(world):
+    world.add("active one", uuid=U1)
+    world.add("in the archive", uuid=U2, archived=True)
+    text, markup = run_cmd(tb.cmd_use, [])[-1]
+    cbs = _callbacks(markup)
+    assert cbs == ["use:aaaa1111"]
+    assert not [c for c in cbs if "bbbb2222" in c]
+    assert "/archive" in text
+
+
+def test_use_menu_caps_the_buttons_with_a_hint(world, monkeypatch):
+    monkeypatch.setattr(tb, "TOPIC_BUTTONS_MAX", 2)
+    world.add("t1", uuid=U1, last_used=10)
+    world.add("t2", uuid=U2, last_used=20)
+    world.add("t3", uuid=U3, last_used=30)
+    text, markup = run_cmd(tb.cmd_use, [])[-1]
+    assert _callbacks(markup) == ["use:c0ffee00", "use:bbbb2222"]   # most recent first
+    assert "1 more" in text and "/use" in text
+
+
+def test_use_name_falls_back_to_the_archive_and_restores_on_pick(world, monkeypatch):
+    world.add("Old research", uuid=U1, archived=True)
+    world.add("Taxes 2026", uuid=U2)
+    replies = run_cmd(tb.cmd_use, ["research"])
+    text, markup = replies[-1]
+    assert _callbacks(markup) == ["arch:aaaa1111"]            # offered, not picked
+    assert "archive" in text.lower()
+    assert tb.get_current(CHAT) is None and world.ensured() == []
+    assert _is_archived(world, "aaaa1111") is True            # untouched until the tap
+    _reread_env(world, monkeypatch)
+    sink = run_cb_bg(tb.on_archive_cb, "arch:aaaa1111")
+    assert _is_archived(world, "aaaa1111") is False
+    assert tb.get_current(CHAT) == "aaaa1111" and world.ensured() == ["aaaa1111"]
+    assert any("the answer is 42" in t for t, _ in sink)
+
+
+def test_use_name_prefers_a_non_archived_match(world, monkeypatch):
+    world.add("Taxes 2025", uuid=U1, archived=True)
+    world.add("Taxes 2026", uuid=U2)
+    _reread_env(world, monkeypatch)
+    run_cmd_bg(tb.cmd_use, ["taxes"])
+    assert tb.get_current(CHAT) == "bbbb2222" and world.ensured() == ["bbbb2222"]
+    assert _is_archived(world, "aaaa1111") is True
+
+
+def test_use_name_with_no_match_anywhere(world):
+    world.add("Taxes 2025", uuid=U1, archived=True)
+    text, markup = run_cmd(tb.cmd_use, ["nothing like it"])[-1]
+    assert markup is None and "/new" in text and "/list" in text
+    assert _is_archived(world, "aaaa1111") is True
+
+
+# --- auto re-read after a pick ------------------------------------------------
+
+def test_auto_read_after_use_sends_the_screen(world, monkeypatch):
+    world.add("topic", uuid=U1)
+    world.loaded.append("aaaa1111")                           # already loaded, Claude up
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cmd_bg(tb.cmd_use, ["topic"])
+    assert sink[0][0].startswith("✅ Current terminal: «topic» · aaaa1111")
+    screen = [t for t, _ in sink[1:]]
+    assert screen and "the answer is 42" in screen[0]
+    assert screen[0].splitlines()[0] == "📺 «topic» · aaaa1111"   # says whose screen it is
+    assert "bypass permissions" not in screen[0]              # cleaned like /read
+    assert [s for s, _ in rec["capture"]] == ["cs-aaaa1111"]
+    assert _nothing_typed(rec)
+
+
+def test_auto_read_waits_for_a_freshly_loaded_topic(world, monkeypatch):
+    world.add("topic", uuid=U1)                               # unloaded: the pick loads it
+    rec = _reread_env(world, monkeypatch, screens=[SHELL_SCREEN, SHELL_SCREEN, READY_SCREEN])
+    sink = run_cmd_bg(tb.cmd_use, ["topic"])
+    assert world.ensured() == ["aaaa1111"]
+    assert rec["capture"] and rec["capture"][0][1] >= 3       # captured only once Claude was up
+    assert any("the answer is 42" in t for t, _ in sink[1:])
+    assert not any("ubuntu@vps" in t for t, _ in sink)
+    assert _nothing_typed(rec)
+
+
+def test_auto_read_when_claude_never_comes_up_sends_the_last_reply(world, monkeypatch, tmp_path):
+    world.add("topic", uuid=U1)
+    monkeypatch.setattr(tb, "READY_TIMEOUT", 0)
+    path = _transcript(tmp_path, "the latest answer")
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: path if aid == "aaaa1111" else None)
+    rec = _reread_env(world, monkeypatch, screens=[SHELL_SCREEN], capture_text=SHELL_SCREEN)
+    sink = run_cmd_bg(tb.cmd_use, ["topic"])
+    later = "\n".join(t for t, _ in sink[1:])
+    assert "the latest answer" in later and "didn't come up" in later
+    assert "ubuntu@vps" not in later and rec["capture"] == []
+    assert _nothing_typed(rec)
+
+
+def test_auto_read_when_the_load_is_refused_sends_the_last_reply(world, monkeypatch, tmp_path):
+    world.add("topic", uuid=U1)
+    world.codes["aaaa1111"] = (3, "All 12 loaded topics are busy")
+    path = _transcript(tmp_path, "the latest answer")
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: path if aid == "aaaa1111" else None)
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cmd_bg(tb.cmd_use, ["topic"])
+    assert "couldn't load" in sink[0][0]
+    later = [t for t, _ in sink[1:]]
+    assert later and later[0].startswith("📺 «topic» · aaaa1111\n" + tb.READ_UNLOADED_HEAD)
+    assert "the latest answer" in later[0]
+    assert rec["capture"] == [] and _nothing_typed(rec)
+
+
+def test_auto_read_when_not_loadable_and_no_transcript_says_so(world, monkeypatch):
+    world.add("topic", uuid=U1)
+    world.codes["aaaa1111"] = (3, "All 12 loaded topics are busy")
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: None)
+    _reread_env(world, monkeypatch)
+    sink = run_cmd_bg(tb.cmd_use, ["topic"])
+    assert len(sink) == 2 and "not loaded" in sink[1][0]
+
+
+def test_auto_read_after_a_button_pick(world, monkeypatch):
+    world.add("topic", uuid=U1)
+    world.loaded.append("aaaa1111")
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cb_bg(tb.on_use_cb, "use:aaaa1111")
+    assert "aaaa1111" in sink[0][0]
+    assert any("the answer is 42" in t for t, _ in sink[1:])  # sent as a new message
+    assert _nothing_typed(rec)
+
+
+def test_auto_read_after_new(world, monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTDECK_WORKDIR", str(tmp_path))
+    # a brand-new conversation has nothing to re-read: once Claude is up the
+    # bot says so instead of posting the startup banner as "the session"
+    banner = ("╭──────────────────────────╮\n"
+              "│ Welcome back │ Tips for getting started │\n"
+              "╰──────────────────────────╯\n" + READY_SCREEN)
+    rec = _reread_env(world, monkeypatch, screens=[SHELL_SCREEN, banner], capture_text=banner)
+    sink = run_cmd_bg(tb.cmd_new, ["fresh", "one"])
+    assert sink[0][0].startswith("🆕 ✅ Current terminal:")
+    later = "\n".join(t for t, _ in sink[1:])
+    assert "first message" in later and "fresh one" in later
+    assert "Welcome back" not in later and rec["capture"] == []
+    assert rec["visible"] >= 2                                # waited for Claude to be up
+    assert _nothing_typed(rec)
+
+
+def test_auto_read_of_a_topic_in_its_legacy_terminal(world, monkeypatch):
+    _legacy_world(world, monkeypatch)
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cmd_bg(tb.cmd_use, ["aaaa1111"])
+    assert [s for s, _ in rec["capture"]] == ["claude-terminal-2"]
+    assert any("the answer is 42" in t for t, _ in sink[1:])
+    assert _nothing_typed(rec)
+
+
+def test_auto_read_runs_off_the_event_loop(world, monkeypatch):
+    import threading
+    world.add("topic", uuid=U1)
+    world.loaded.append("aaaa1111")
+    rec = _reread_env(world, monkeypatch)
+    run_cmd_bg(tb.cmd_use, ["topic"])
+    main = threading.get_ident()
+    assert rec["threads"] and all(t != main for t in rec["threads"])
+
+
+def test_no_auto_read_when_nothing_was_picked(world, monkeypatch):
+    world.add("Taxes 2025", uuid=U1)
+    world.add("Taxes 2026", uuid=U2)
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cmd_bg(tb.cmd_use, ["taxes"])                  # several hits → buttons only
+    assert len(sink) == 1 and rec["capture"] == []
+
+
+def test_read_still_shows_the_screen(world, monkeypatch):
+    world.add("topic", uuid=U1)
+    world.loaded.append("aaaa1111")
+    tb.set_current(CHAT, "aaaa1111")
+    rec = _reread_env(world, monkeypatch)
+    replies = run_cmd(tb.cmd_read, [])
+    assert "the answer is 42" in replies[-1][0] and _nothing_typed(rec)
+
+
+# --- /list and the command menu -------------------------------------------------
+
+def test_list_mentions_the_archive_with_its_count(world):
+    world.add("active one", uuid=U1)
+    world.add("gone 1", uuid=U2, archived=True)
+    world.add("gone 2", uuid=U3, archived=True)
+    text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
+    line = [l for l in text.splitlines() if "/archive" in l]
+    assert line and "2" in line[0]
+    assert "gone 1" not in text and "gone 2" not in text
+
+
+def test_list_without_an_archive_does_not_point_to_it(world):
+    world.add("active one", uuid=U1)
+    text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
+    assert "archive" not in text.lower()
+
+
+def test_bot_commands_list_the_archive_in_menu_order_and_are_english():
+    assert [c.command for c in tb.BOT_COMMANDS] == [
+        "use", "list", "archive", "new", "read", "esc", "enter", "compact"]
+    got = {c.command: c.description for c in tb.BOT_COMMANDS}
+    assert "archive" in got["archive"].lower()
+    for d in got.values():
+        assert d.isascii() and not _CYR.search(d) and 0 < len(d) <= 80
+
+
+def test_every_menu_command_and_button_has_a_handler():
+    from telegram.ext import CallbackQueryHandler, CommandHandler
+    app = tb.build_app()
+    hs = [h for group in app.handlers.values() for h in group]
+    cmds = {c for h in hs if isinstance(h, CommandHandler) for c in h.commands}
+    assert {c.command for c in tb.BOT_COMMANDS} <= cmds
+    cbs = {h.callback: h for h in hs if isinstance(h, CallbackQueryHandler)}
+    assert cbs[tb.on_archive_cb].pattern.match("arch:aaaa1111")
+    assert not cbs[tb.on_archive_cb].pattern.match("use:aaaa1111")
+    assert cbs[tb.on_use_cb].pattern.match("use:aaaa1111")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Review fixes (2026-09-26): the re-read must not use up the "wait for Claude"
+# check, a newer pick wins over an older pick's re-read, a double tap re-reads
+# once, archived terminals past the button cap stay reachable (/archive <text>),
+# a corrupt registry is answered, a legacy slot that can't start is not picked,
+# one noun ("terminal") in the menu, and refusal texts that match what happens.
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_auto_read_timeout_keeps_the_wait_for_claude_before_typing(world, monkeypatch):
+    world.add("topic", uuid=U1)                               # unloaded: the pick loads it
+    monkeypatch.setattr(tb, "READY_TIMEOUT", 0)
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: None)
+    rec = _reread_env(world, monkeypatch, screens=[SHELL_SCREEN], capture_text=SHELL_SCREEN)
+    run_cmd_bg(tb.cmd_use, ["topic"])                         # Claude never draws its screen
+    assert "cs-aaaa1111" in tb._fresh                         # the re-read left the check in place
+    sink, streamed = _deliver(world, monkeypatch, "hello", screens=[SHELL_SCREEN])
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert any("not sent" in t for t, _ in sink)              # refused, as without the re-read
+    assert _nothing_typed(rec)
+
+
+def test_a_double_tap_re_reads_once(world, monkeypatch):
+    world.add("topic", uuid=U1)
+    world.loaded.append("aaaa1111")
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cbs_bg(tb.on_use_cb, ["use:aaaa1111", "use:aaaa1111"])
+    assert len([t for t, _ in sink if "the answer is 42" in t]) == 1
+    assert _nothing_typed(rec)
+
+
+def test_a_newer_pick_drops_the_older_picks_re_read(world, monkeypatch, tmp_path):
+    world.add("alpha", uuid=U1)                               # unloaded: its Claude never comes up
+    world.add("beta", uuid=U2)
+    world.loaded.append("bbbb2222")                           # loaded and ready
+    monkeypatch.setattr(tb, "READY_TIMEOUT", 0.3)
+    path = _transcript(tmp_path, "alpha said this")
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: path if aid == "aaaa1111" else None)
+    rec = _reread_env(world, monkeypatch)
+    monkeypatch.setattr(tb, "visible",
+                        lambda s: SHELL_SCREEN if s == "cs-aaaa1111" else READY_SCREEN)
+    sink = run_cmds_bg([(tb.cmd_use, ["alpha"]), (tb.cmd_use, ["beta"])])
+    texts = [t for t, _ in sink]
+    assert tb.get_current(CHAT) == "bbbb2222"
+    b = [i for i, t in enumerate(texts) if t.startswith("✅ Current terminal: «beta»")][0]
+    after = texts[b + 1:]
+    assert not [t for t in after if "alpha" in t]             # nothing of alpha after beta's pick
+    assert after and after[-1].startswith("📺 «beta» · bbbb2222")
+    assert _nothing_typed(rec)
+
+
+def test_archive_search_reaches_a_terminal_hidden_by_the_cap(world, monkeypatch):
+    monkeypatch.setattr(tb, "TOPIC_BUTTONS_MAX", 1)
+    world.add("Appeals", uuid=U1, last_used=10, archived=True)       # hidden by the cap
+    world.add("Newer one", uuid=U3, last_used=30, archived=True)
+    world.add("Appeals 2", uuid=U2, last_used=20)                   # a live name-alike
+    text, markup = run_cmd(tb.cmd_archive, [])[-1]
+    assert _callbacks(markup) == ["arch:c0ffee00"] and "/archive <" in text
+    text, markup = run_cmd(tb.cmd_archive, ["appeals"])[-1]
+    assert _callbacks(markup) == ["arch:aaaa1111"]            # the archived one, not "Appeals 2"
+    assert tb.get_current(CHAT) is None and world.ensured() == []
+    assert _is_archived(world, "aaaa1111") is True            # a search restores nothing
+    text, markup = run_cmd(tb.cmd_archive, ["no such thing"])[-1]
+    assert markup is None and "no such thing" in text and "/archive" in text
+
+
+def test_corrupt_registry_is_answered_not_a_silent_failure(world, monkeypatch):
+    os.makedirs(os.path.dirname(world.lib), exist_ok=True)
+    with open(world.lib, "w") as f:
+        f.write("{not json")
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cb_bg(tb.on_archive_cb, "arch:bbbb2222")
+    assert sink and "⚠️" in sink[-1][0] and "not valid JSON" in sink[-1][0]
+    text, _ = run_cmd(tb.cmd_archive, [])[-1]
+    assert "⚠️" in text and "not valid JSON" in text
+    text, _ = run_cmd(tb.cmd_new, ["x"])[-1]
+    assert "⚠️" in text and "not valid JSON" in text
+    assert open(world.lib).read() == "{not json"              # never papered over
+    assert world.ensured() == [] and _nothing_typed(rec)
+
+
+def test_use_number_that_cannot_start_picks_nothing(world, monkeypatch):
+    world.add("topic", uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")
+    monkeypatch.setattr(tb, "start_session", lambda aid: (False, f"no launch script for #{aid}"))
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cmd_bg(tb.cmd_use, ["5"])
+    assert tb.get_current(CHAT) == "aaaa1111"                 # the selection stays
+    assert len(sink) == 1 and "couldn't start" in sink[0][0] and "no launch script" in sink[0][0]
+    assert "Current" not in sink[0][0]
+    assert rec["capture"] == [] and _nothing_typed(rec)       # no re-read of a dead slot
+
+
+def test_menu_speaks_of_terminals_with_their_names_not_tmux_ids(world, monkeypatch):
+    world.add("active one", uuid=U1)
+    world.add("in the archive", uuid=U2, archived=True)
+    _reread_env(world, monkeypatch)
+    texts = [tb.NEED_PICK] + [c.description for c in tb.BOT_COMMANDS]
+    texts += [t for t, _ in run_cmd(tb.cmd_use, [])]
+    texts += [t for t, _ in run_cmd(tb.cmd_archive, [])]
+    texts += [t for t, _ in run_cmd_bg(tb.cmd_use, ["active"])]
+    texts += [t for t, _ in run_cmd(tb.cmd_list, [])]
+    texts += [t for t, _ in run_cmd(tb.cmd_use, ["nothing like it"])]
+    blob = "\n".join(texts)
+    assert "topic" not in blob.lower()
+    assert "cs-" not in blob                                  # «name» · id, not the tmux name
+    assert "terminal" in blob.lower()
+
+
+def test_use_menu_when_every_terminal_is_archived(world):
+    world.add("gone", uuid=U1, archived=True)
+    text, markup = run_cmd(tb.cmd_use, [])[-1]
+    assert markup is None
+    assert "outside the archive" in text and "/archive" in text
+    assert "yet" not in text
+
+
+def test_text_to_an_archived_current_terminal_points_to_the_archive(world, monkeypatch):
+    world.add("shelved", uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")
+    with library.update(world.lib) as L:                      # archived on the dashboard
+        library.archive(L, "aaaa1111", True)
+    sink, streamed = _deliver(world, monkeypatch, "hello")
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert world.ensured() == []
+    assert "/archive" in sink[-1][0] and "shelved" in sink[-1][0]
+    text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
+    cur = text.splitlines()[0]
+    assert cur.startswith("Current: «shelved»") and "archive" in cur
+
+
+def test_a_pick_refused_as_open_elsewhere_says_what_happens(world, monkeypatch):
+    world.add("open elsewhere", uuid=U2)
+    world.codes["bbbb2222"] = (4, "conversation already running in pid 123")
+    monkeypatch.setattr(tb, "transcript_path", lambda aid: None)
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cmd_bg(tb.cmd_use, ["open elsewhere"])
+    first = sink[0][0]
+    assert "already open" in first and "pick it again" in first
+    assert "message not sent" not in first.lower()            # no message was sent at a pick
+    assert "next message will try again" not in first.lower()
+    later = "\n".join(t for t, _ in sink[1:])
+    assert "not loaded" in later and "will load" not in later
+    assert "bbbb2222" not in world.loaded and _nothing_typed(rec)
+    # a typed message is still refused the same way, and says it was not sent
+    sink, streamed = _deliver(world, monkeypatch, "hello")
+    assert "already open" in sink[-1][0] and "not sent" in sink[-1][0] and not streamed

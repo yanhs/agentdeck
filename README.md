@@ -57,8 +57,9 @@ working reference you adapt, not a turn-key installer.
   status server: one cookie-session login protects the dashboard, the terminals, and the
   status APIs (no basic-auth re-prompt storms).
 - **Telegram bridge** — drive agents from your phone:
-  - pick a terminal with `/use <part of its name or code>`, see them all with `/list`,
-    start one with `/new <name>`;
+  - pick a terminal with `/use` (buttons) or `/use <part of its name or code>`, see them
+    all with `/list`, bring one back from the archive with `/archive`, start one with
+    `/new <name>`; after a pick the bot shows that terminal's screen by itself;
   - plain text is typed straight into the selected agent's terminal (an unloaded one is
     loaded first);
   - **voice notes** are transcribed locally with [`faster-whisper`](https://github.com/SYSTRAN/faster-whisper) and sent in;
@@ -374,10 +375,13 @@ Then pick a terminal and send text, voice or files:
 
 | Command | What it does |
 |---|---|
-| `/use <text>` | pick a terminal by part of its name or its code (several matches → buttons) |
-| `/list` | all terminals, loaded ones first; the current one is marked |
+| `/use` | pick a terminal from buttons (loaded ones first, archived ones left out) |
+| `/use <text>` | pick a terminal by part of its name or its code (several matches → buttons; a match only in the archive → a button that restores it) |
+| `/list` | all terminals, loaded ones first; the current one is marked; how many are archived |
+| `/archive` | archived terminals as buttons: a tap restores the terminal and picks it |
+| `/archive <text>` | only the archived terminals whose name or code matches (reaches ones past the button limit) |
 | `/new <name>` | start a new terminal and select it |
-| `/read` | re-read the current terminal's screen |
+| `/read` | re-read the current terminal's screen (after every pick this happens by itself, headed 📺 «name» · code) |
 | `/esc` | interrupt the agent (Escape) |
 | `/enter` | send Enter |
 | `/compact` | compact the agent's conversation |

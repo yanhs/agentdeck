@@ -9,17 +9,26 @@ the library, the old numbered claude-terminal[-N] slots:
     then the bot streams progress and posts the agent's reply; before typing,
     `library_cli.py ensure <id>` loads the topic if it was unloaded;
   - /use <text>   — pick the current topic by a part of its name or its id
-                    (library.resolve; several matches → buttons); no text →
-                    button menu. `/use N` (a legacy slot number) still works as
+                    (library.resolve; several matches → buttons); no match
+                    outside the archive → the archived matches as restore
+                    buttons; no text → button menu of the topics outside the
+                    archive. `/use N` (a legacy slot number) still works as
                     the transition fallback: the topic migrated from slot N
                     (even an archived one — then it refuses), else the old
                     claude-terminal-N. A migrated slot's old launch script is
                     never run again (it would be a 2nd Claude on one uuid).
+  - /archive      — button menu of the archived topics; a tap restores the
+                    topic (archived=false, as the dashboard's click does) and
+                    picks it like /use.
+  - after every pick the bot re-reads the session by itself (auto_read: what
+    /read shows, once a just-loaded Claude has drawn its screen); it only
+    reads the screen or the transcript, it never types.
   - owner text is typed only when the pane runs Claude
     (`library_cli.py pane-is-claude`, or pane_current_command for a legacy
     terminal), with exact tmux targets (=name / =name:) and `send-keys -l --`.
   - /new <name>   — create a topic, select it and load it
-  - /list         — topics, loaded ones first, + which is current
+  - /list         — topics, loaded ones first, + which is current + the
+                    archive's size
   - /read         — re-read the current terminal screen now
   - /esc          — interrupt the agent (Escape ×2)
   - /enter        — send a bare Enter
@@ -164,7 +173,8 @@ def start_session(aid: str) -> tuple[bool, str]:
     if e is not None:
         # its conversation now lives in the library: the old launch script would
         # start a SECOND Claude on the same uuid
-        return False, f"slot #{aid} moved to topic {topic_label(e)} — not starting the old terminal"
+        return False, (f"slot #{aid} moved to terminal {name_label(e)} — not starting "
+                       "the old terminal")
     script = "launch-claude.sh" if str(aid) == "1" else f"launch-claude-{aid}.sh"
     spath = os.path.join(GATE_DIR, script)
     if not os.path.exists(spath):
@@ -248,7 +258,7 @@ def legacy_pane_command(session: str) -> str | None:
 # unloads a working or watched one) — the bridge only asks it.
 
 LIBRARY_CLI = os.path.join(GATE_DIR, "library_cli.py")
-NEED_PICK = "Pick a topic first: /use <part of the name or id> · /list · /new <name>"
+NEED_PICK = "Pick a terminal first: /use <part of the name or id> · /list · /new <name>"
 TOPIC_NAME_MAX = 100       # a topic name typed in /new
 TOPIC_BUTTONS_MAX = 24     # topic buttons in one /use picker
 READY_TIMEOUT = 45         # s to wait for a just-loaded Claude to draw its screen
@@ -264,6 +274,11 @@ def _lib_file() -> str:
 
 def _load_lib() -> dict:
     return library.load(_lib_file())
+
+
+# what reading or writing the registry can raise: a missing/unreadable file, a
+# bad value, or a registry that is not valid JSON (never papered over)
+LIB_ERRORS = (OSError, ValueError, library.CorruptRegistry)
 
 
 def _clip(text: str, n: int = 600) -> str:
@@ -289,11 +304,20 @@ def topic_label(e: dict) -> str:
     return f"{library.tmux_name(e['id'])} «{name}»"
 
 
+def name_label(e: dict) -> str:
+    """«name» · id — how the owner sees a terminal of the library (the tmux
+    name cs-<id> is an internal detail: logs only, topic_label)."""
+    name = _clip(e.get("name", ""), 60).replace("\n", " ")
+    return f"«{name}» · {e['id']}"
+
+
 def target_label(key) -> str:
+    """What the owner sees for a selection: «name» · id, or #N for an old
+    numbered terminal."""
     key = str(key or "")
     if is_topic(key):
         e = topic_entry(key, include_archived=True)
-        return topic_label(e) if e else library.tmux_name(key)
+        return name_label(e) if e else key
     return f"#{key}"
 
 
@@ -368,6 +392,32 @@ def migrated_topic(slot: str) -> dict | None:
     return None
 
 
+def archived_topics(lib: dict | None = None) -> list[dict]:
+    """The archived topics, most recently used first (the /archive menu)."""
+    rows = [e for e in (lib or _load_lib())["sessions"]
+            if e.get("archived") and is_topic(e.get("id"))]
+    return sorted(rows, key=lambda e: -(e.get("last_used") or 0))
+
+
+def restore_topic(sid: str) -> tuple[dict | None, bool]:
+    """Take a topic out of the archive — archived=false under the registry lock,
+    what the dashboard's click on an archived terminal does. (entry, restored
+    now); (None, False) for an unknown id. It only flips the flag: loading is
+    library_cli ensure's job afterwards, which still refuses a conversation
+    that runs elsewhere (never two Claudes on one conversation)."""
+    e = topic_entry(sid, include_archived=True)
+    if e is None:
+        return None, False
+    if not e.get("archived"):
+        return e, False
+    try:
+        with library.update(_lib_file()) as lib:
+            e = dict(library.archive(lib, sid, False))
+    except KeyError:                     # deleted meanwhile (nothing was saved)
+        return None, False
+    return e, True
+
+
 def topic_transcript(sid: str) -> str | None:
     e = topic_entry(sid, include_archived=True)
     if e is None:
@@ -385,6 +435,7 @@ def run_library_cli(*args, timeout: int = 60) -> subprocess.CompletedProcess:
                           capture_output=True, text=True, timeout=timeout)
 
 
+ENSURE_UNKNOWN = 2
 ENSURE_ELSEWHERE = 4
 
 
@@ -400,9 +451,9 @@ def ensure_topic(sid: str) -> tuple[int, str]:
         return 1, f"library_cli failed: {ex}"
     msg = _clip(r.stderr)
     if r.returncode == ENSURE_ELSEWHERE:
+        # the caller says what that means for it (a pick, or a message not sent)
         msg = ("this conversation is already open elsewhere (another terminal) — not "
-               "starting a second Claude on it, message not sent. Close it there "
-               "or write there." + (f"\n({msg})" if msg else ""))
+               "starting a second Claude on it" + (f"\n({msg})" if msg else ""))
     return r.returncode, msg
 
 
@@ -447,10 +498,14 @@ async def _ready_sleep(s: float) -> None:
     await asyncio.sleep(s)
 
 
-async def _wait_ready(session: str, timeout: float | None = None) -> bool:
+async def _wait_ready(session: str, timeout: float | None = None,
+                      keep_on_timeout: bool = False) -> bool:
     """A topic the bridge just loaded needs a few seconds before keystrokes
     reach Claude (typed earlier, they land in the shell). No-op otherwise.
-    False = Claude never came up: the caller must NOT send."""
+    False = Claude never came up: the caller must NOT send. The "just loaded"
+    mark goes once Claude is up; on a timeout it goes too (the next message
+    relies on pane-is-claude) — unless keep_on_timeout: a reader that only
+    looks (the re-read after a pick) must not use up the typing path's check."""
     timeout = READY_TIMEOUT if timeout is None else timeout
     t0 = _fresh.get(session)
     if t0 is None:
@@ -460,28 +515,38 @@ async def _wait_ready(session: str, timeout: float | None = None) -> bool:
             _fresh.pop(session, None)
             return True
         if time.monotonic() - t0 >= timeout:
-            _fresh.pop(session, None)
-            log.info("READY-TIMEOUT %s — not sending", session)
+            if not keep_on_timeout:
+                _fresh.pop(session, None)
+            log.info("READY-TIMEOUT %s%s", session, "" if keep_on_timeout else " — not sending")
             return False
         await _ready_sleep(0.5)
 
 
-async def _load_topic(sid: str) -> tuple[str | None, str]:
-    """Make sure the topic runs: (cs-<id>, notice) or (None, why not). A topic
-    whose Claude still runs in its old terminal is already loaded there: that
-    session, and no ensure (it would refuse: same conversation)."""
+def _archived_now(sid: str) -> bool:
+    e = topic_entry(sid, include_archived=True)
+    return bool(e and e.get("archived"))
+
+
+async def _load_topic(sid: str) -> tuple[str | None, str, int]:
+    """Make sure the topic runs: (cs-<id>, notice, 0) or (None, why not, the
+    ensure exit code). A topic whose Claude still runs in its old terminal is
+    already loaded there: that session, and no ensure (it would refuse: same
+    conversation). An archived topic is never loaded (its conversation is left
+    alone): the owner restores it in /archive."""
     legacy = await asyncio.to_thread(legacy_session_of, sid)
     if legacy:
-        return legacy, ""
+        return legacy, "", 0
+    if await asyncio.to_thread(_archived_now, sid):
+        return None, "it is in the archive — pick it in /archive to restore it", ENSURE_UNKNOWN
     name = library.tmux_name(sid)
     was = await asyncio.to_thread(has_session, name)
     code, msg = await asyncio.to_thread(ensure_topic, sid)
     if code != 0:
         log.info("ENSURE %s -> exit %s: %s", name, code, msg[:200])
-        return None, msg or f"library_cli ensure: exit code {code}"
+        return None, msg or f"library_cli ensure: exit code {code}", code
     if not was:
         _fresh[name] = time.monotonic()
-    return name, msg
+    return name, msg, 0
 
 
 def resolve_current(chat_id: int) -> str | None:
@@ -1272,6 +1337,119 @@ async def stream_live(message, session: str, path: str | None, baseline: set[str
             _stream_done(mid)
 
 
+# ── re-read: /read, and the automatic one after every pick ──────────────────
+
+READ_NOT_READY_HEAD = "⚠️ Claude didn't come up in {secs}s — last reply from the transcript:"
+READ_SETTLE = 1.0     # s after a just-loaded Claude first draws (a --resume draws the history)
+
+
+def _last_reply_of(aid) -> str:
+    return last_reply(transcript_path(aid))
+
+
+def _reply_view(head: str, last: str) -> str:
+    """head + the transcript's last reply, clipped to one Telegram message (tail kept)."""
+    head += "\n\n"
+    body = last[-(TG_LIMIT - len(head) - 2):]
+    return head + ("…" + body[1:] if len(body) < len(last) else body)
+
+
+async def read_view(aid, wait: bool = False, new: bool = False) -> list[str]:
+    """What /read shows for a selection, as Telegram-sized parts: the cleaned
+    screen while its terminal runs, else Claude's last reply from the
+    transcript (never loads anything). wait=True — the re-read after a pick:
+    a topic the bridge just loaded gets READY_TIMEOUT to draw Claude's screen
+    (_wait_ready, without using up the typing path's check); if it never does,
+    the transcript's last reply is shown instead of a half-started shell.
+    new=True — a conversation /new just started: nothing to re-read, so once
+    Claude is up it says so instead of posting the startup banner.
+    Read-only: nothing is typed. tmux and file work run off the event loop."""
+    session = await asyncio.to_thread(session_for, aid) if aid else None
+    if not session:
+        return [NEED_PICK]
+    loaded = await asyncio.to_thread(has_session, session)
+    if loaded and wait:
+        fresh = session in _fresh
+        if not await _wait_ready(session, keep_on_timeout=True):
+            last = await asyncio.to_thread(_last_reply_of, aid)
+            if last:
+                return [_reply_view(READ_NOT_READY_HEAD.format(secs=READY_TIMEOUT), last)]
+            return [f"⚠️ Claude didn't come up in {READY_TIMEOUT}s and there is no saved "
+                    "reply yet — /read shows the screen as it is now."]
+        if new:
+            return ["✅ Claude is up — a new conversation: type your first message."]
+        if fresh:
+            await _ready_sleep(READ_SETTLE)
+    if loaded:
+        return chunk(clean_pane(await asyncio.to_thread(capture, session)) or "(empty)")
+    last = await asyncio.to_thread(_last_reply_of, aid)
+    if not last:
+        if wait:
+            # the pick tried to load it and could not: its answer says why
+            return ["⚪️ not loaded (see above), and there is no saved reply yet."]
+        label = await asyncio.to_thread(target_label, aid)
+        return [f"⚪️ {label} is not loaded and has no saved reply yet — send a message "
+                "(or /use) to load it"]
+    return [_reply_view(READ_UNLOADED_HEAD, last)]
+
+
+_background: set = set()    # running auto_read tasks (a reference keeps them alive)
+# chat id → (picked id, monotonic start, task) of the chat's latest re-read
+_auto_reads: dict[int, tuple[str, float, asyncio.Task]] = {}
+AUTO_READ_DEDUP = 5.0       # s: the same pick again (a double tap) is not re-read twice
+
+
+def _background_done(task: asyncio.Task) -> None:
+    _background.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        log.warning("background task failed: %r", task.exception())
+
+
+async def auto_read(send, aid: str, chat_id: int, new: bool = False) -> None:
+    """The re-read after a pick: read_view(wait=True), each part sent by
+    `send` (a coroutine function taking the text). The first part names the
+    terminal (📺 «name» · id); nothing is sent once the chat has picked
+    another terminal meanwhile (its screen must never pass for the new one's)."""
+    parts = await read_view(aid, wait=True, new=new)
+    head = "📺 " + await asyncio.to_thread(target_label, aid)
+    parts[0] = f"{head}\n{parts[0]}"
+    for part in parts:
+        if await asyncio.to_thread(get_current, chat_id) != aid:
+            _convo("AUTO-READ-DROP", part, f"{aid}: another terminal was picked meanwhile")
+            return
+        try:
+            await send(part)
+        except TelegramError as e:
+            _convo("SEND-FAIL", f"{type(e).__name__}: {e}", f"auto-read {aid}")
+            return
+        _convo("AUTO-READ", part, f"{aid}")
+
+
+def _after_pick(chat_id: int, send, aid, new: bool = False) -> None:
+    """Re-read the picked session by itself, in the background: the pick's
+    answer goes out at once, the screen follows once Claude is up. One re-read
+    per chat: a newer pick cancels the older pick's re-read, and the same pick
+    again right away (a double tap) does not send the screen twice."""
+    aid, now = str(aid), time.monotonic()
+    prev = _auto_reads.get(chat_id)
+    if prev is not None:
+        p_aid, p_t0, p_task = prev
+        if p_aid == aid and (not p_task.done() or now - p_t0 < AUTO_READ_DEDUP):
+            return
+        if not p_task.done():
+            p_task.cancel()
+    task = asyncio.get_running_loop().create_task(auto_read(send, aid, chat_id, new=new))
+    _auto_reads[chat_id] = (aid, now, task)
+    _background.add(task)
+    task.add_done_callback(_background_done)
+
+
+def _chat_sender(bot, chat_id: int):
+    async def send(text: str):
+        return await bot.send_message(chat_id, text)
+    return send
+
+
 # ── Telegram handlers ─────────────────────────────────────────────────────
 
 def _running_legacy() -> list[str]:
@@ -1279,20 +1457,34 @@ def _running_legacy() -> list[str]:
     return [aid for aid in sorted(SESSIONS, key=int) if has_session(SESSIONS[aid])]
 
 
+def _no_terminals(n_arch: int) -> str:
+    return ("No terminals outside the archive — /archive · /new <name>" if n_arch
+            else "No terminals yet — /new <name>")
+
+
 def _agents_overview(chat_id: int) -> str:
-    """/list: topics (loaded first, each group most recent first), then the
-    legacy terminals that still run."""
+    """/list: terminals (loaded first, each group most recent first), the size
+    of the archive when it has any, then the legacy terminals that still run."""
     cur = resolve_current(chat_id)
     live = loaded_topics()
     old = legacy_topics(skip=set(live or {}))    # loaded, but in their old terminal
     act = {**(live or {}), **old}
-    rows = library.display_order(_load_lib(), set(act))
-    lines = [f"Current: {target_label(cur)}" if cur else NEED_PICK, ""]
+    lib = _load_lib()
+    rows = library.display_order(lib, set(act))
+    n_arch = len(archived_topics(lib))
+    if cur:
+        head = f"Current: {target_label(cur)}"
+        e = library.find(lib, cur) if is_topic(cur) else None
+        if e is not None and e.get("archived"):     # archived on the dashboard since
+            head += " — 🗄 in the archive: /archive to restore it"
+        lines = [head, ""]
+    else:
+        lines = [NEED_PICK, ""]
     if live is None:
-        lines.append("⚠️ couldn't tell which topics are loaded (library_cli active) — "
+        lines.append("⚠️ couldn't tell which terminals are loaded (library_cli active) — "
                      "all shown as unloaded")
     if rows:
-        lines.append("Topics (🟢 loaded · ⚪️ unloaded · ⚙️ working):")
+        lines.append("Terminals (🟢 loaded · ⚪️ unloaded · ⚙️ working):")
         for e in rows:
             s = act.get(e["id"])
             name = _clip(e.get("name", ""), 60).replace("\n", " ")
@@ -1300,7 +1492,9 @@ def _agents_overview(chat_id: int) -> str:
                          f"{' ⚙️' if s and s.get('working') else ''}"
                          f"{' ← current' if e['id'] == cur else ''}")
     else:
-        lines.append("No topics yet — /new <name>")
+        lines.append(_no_terminals(n_arch))
+    if n_arch:
+        lines += ["", f"🗄 In the archive: {n_arch} — /archive to pick one"]
     # a slot whose conversation is listed above as a topic is not listed again
     legacy = [a for a in _running_legacy() if a not in {s["slot"] for s in old.values()}]
     if legacy:
@@ -1342,14 +1536,21 @@ def _topic_button(e: dict, state: dict | None) -> InlineKeyboardButton:
                                 callback_data=f"use:{e['id']}")
 
 
-def _topics_keyboard(entries: list[dict], with_legacy: bool = False) -> InlineKeyboardMarkup:
-    """One button per topic (loaded first, then most recent), then — for the
-    plain /use picker — the legacy terminals that still run, two per row (not
-    the ones whose conversation is already a topic button, served there)."""
+def _more_hint(n: int) -> str:
+    return f"…and {n} more — /use <part of the name>"
+
+
+def _topics_keyboard(entries: list[dict], with_legacy: bool = False) -> tuple[InlineKeyboardMarkup, int]:
+    """One button per topic outside the archive (loaded first, then most
+    recent; at most TOPIC_BUTTONS_MAX), then — for the plain /use picker — the
+    legacy terminals that still run, two per row (not the ones whose
+    conversation is already a topic button, served there).
+    → (keyboard, how many topics did not fit)."""
     live = loaded_topics() or {}
     old = legacy_topics(skip=set(live))
     act = {**live, **old}
-    order = library.display_order({"sessions": entries}, set(act))[:TOPIC_BUTTONS_MAX]
+    ordered = library.display_order({"sessions": entries}, set(act))
+    order = ordered[:TOPIC_BUTTONS_MAX]
     rows = [[_topic_button(e, act.get(e["id"]))] for e in order]
     if with_legacy:
         legacy = [a for a in _running_legacy() if a not in {s["slot"] for s in old.values()}]
@@ -1362,34 +1563,99 @@ def _topics_keyboard(entries: list[dict], with_legacy: bool = False) -> InlineKe
                 rows.append(row); row = []
         if row:
             rows.append(row)
-    return InlineKeyboardMarkup(rows)
+    return InlineKeyboardMarkup(rows), len(ordered) - len(order)
 
 
-def _use_keyboard() -> InlineKeyboardMarkup:
+def _use_keyboard() -> tuple[InlineKeyboardMarkup, int]:
     return _topics_keyboard(_load_lib()["sessions"], with_legacy=True)
 
 
-async def _apply_use(chat_id: int, aid: str) -> str:
-    set_current(chat_id, aid)
+def _use_menu(cur) -> tuple[str, InlineKeyboardMarkup | None]:
+    """/use without text: the terminals outside the archive as buttons, with a
+    hint when some did not fit and a pointer to /archive when it has any."""
+    kb, more = _use_keyboard()
+    n_arch = len(archived_topics())
+    if not kb.inline_keyboard:
+        return _no_terminals(n_arch), None
+    lines = [f"Current: {target_label(cur)}. Pick a terminal:" if cur else "Pick a terminal:"]
+    if more:
+        lines.append(_more_hint(more))
+    if n_arch:
+        lines.append(f"🗄 {n_arch} in the archive — /archive")
+    return "\n".join(lines), kb
+
+
+def _archived_button(e: dict) -> InlineKeyboardButton:
+    name = _clip(e.get("name", ""), 28).replace("\n", " ")
+    return InlineKeyboardButton(f"🗄 {name} · {e['id']}", callback_data=f"arch:{e['id']}")
+
+
+def _archive_keyboard(entries: list[dict]) -> tuple[InlineKeyboardMarkup, int]:
+    """Restore buttons for archived topics, most recently used first (at most
+    TOPIC_BUTTONS_MAX). → (keyboard, how many did not fit)."""
+    ordered = sorted(entries, key=lambda e: -(e.get("last_used") or 0))
+    shown = ordered[:TOPIC_BUTTONS_MAX]
+    return InlineKeyboardMarkup([[_archived_button(e)] for e in shown]), len(ordered) - len(shown)
+
+
+def _archive_menu(query: str = "") -> tuple[str, InlineKeyboardMarkup | None]:
+    """/archive: the archived terminals as restore buttons, most recent first.
+    /archive <text>: only the archived ones that match (library.resolve among
+    the archived) — how one past the button cap is reached. A menu only: a
+    terminal is restored by a tap, never by typing."""
+    lib = _load_lib()
+    if query:
+        q = _clip(query, 60)
+        rows = library.resolve(lib, query, archived=True)
+        if not rows:
+            return f"🗄 Nothing in the archive matches «{q}» — /archive shows them all.", None
+        kb, more = _archive_keyboard(rows)
+        lines = [f"🗄 In the archive, matching «{q}» ({len(rows)}) — tap to restore and open:"]
+        if more:
+            lines.append(f"…and {more} more — type more of the name")
+        return "\n".join(lines), kb
+    rows = archived_topics(lib)
+    if not rows:
+        return "🗄 The archive is empty (Archive on the dashboard puts a terminal there).", None
+    kb, more = _archive_keyboard(rows)
+    lines = [f"🗄 Archive ({len(rows)}) — tap a terminal to restore and open it:"]
+    if more:
+        lines.append(f"…and {more} more — /archive <part of the name>")
+    return "\n".join(lines), kb
+
+
+async def _apply_use(chat_id: int, aid: str) -> tuple[str, bool]:
+    """Pick the old numbered terminal #N: running → picked; stopped → started
+    and picked; could not start → nothing picked (the selection stays).
+    → (answer, picked)."""
     head = f"✅ Current terminal: #{aid} ({SESSIONS[aid]})"
-    if has_session(SESSIONS[aid]):
-        return head
+    if await asyncio.to_thread(has_session, SESSIONS[aid]):
+        set_current(chat_id, aid)
+        return head, True
     # not running → start it on selection
     ok, msg = await asyncio.to_thread(start_session, aid)
-    return head + (f"\n▶️ wasn't running — starting it…" if ok
-                   else f"\n⚠️ couldn't start: {msg}")
+    if not ok:
+        return f"⚠️ Old terminal #{aid} isn't running and couldn't start: {msg}", False
+    set_current(chat_id, aid)
+    _fresh[SESSIONS[aid]] = time.monotonic()   # re-read and typing wait for Claude
+    return head + "\n▶️ wasn't running — starting it…", True
 
 
-async def _apply_topic(chat_id: int, e: dict) -> str:
+async def _apply_topic(chat_id: int, e: dict, restored: bool = False) -> str:
     """Select a topic (stored by id) and load it now, so Claude is up by the
     time the first message arrives. A refusal keeps the selection: the next
-    message asks library_cli again."""
+    message asks library_cli again. restored = it was just taken out of the
+    archive (said in the answer)."""
     sid = e["id"]
     set_current(chat_id, sid)
-    head = f"✅ Current topic: {topic_label(e)}"
-    name, msg = await _load_topic(sid)
+    head = f"✅ Current terminal: {name_label(e)}"
+    if restored:
+        head += "\n♻️ restored from the archive"
+    name, msg, code = await _load_topic(sid)
     if name is None:
-        return head + f"\n⚠️ couldn't load: {msg}\nThe next message will try again."
+        nxt = ("Close it there, then pick it again." if code == ENSURE_ELSEWHERE
+               else "The next message will try again.")
+        return head + f"\n⚠️ couldn't load: {msg}\n{nxt}"
     slot = legacy_slot_of(name)
     if slot:
         return head + f"\n🟢 runs in the old terminal #{slot} ({name}) — messages go there"
@@ -1397,51 +1663,83 @@ async def _apply_topic(chat_id: int, e: dict) -> str:
     return out + (f"\nℹ️ {msg}" if msg else "")
 
 
-async def _use_number(chat_id: int, aid: str) -> str:
+async def _use_number(chat_id: int, aid: str) -> tuple[str, str | None]:
     """`/use N` during the transition: the topic migrated from slot N if there
-    is one, else the old claude-terminal-N."""
+    is one, else the old claude-terminal-N. → (answer, the picked selection or
+    None when nothing was picked)."""
     e = migrated_topic(aid)
     if e is not None and legacy_alive(aid):
         # the migration left this busy terminal running: its topic would refuse
         # (same conversation), so keep talking to the terminal itself
-        return await _apply_use(chat_id, aid)
+        text, ok = await _apply_use(chat_id, aid)
+        return text, (aid if ok else None)
     if e is not None:
         if e.get("archived"):
             # never fall back to the old launch script: it would start a second
             # Claude on this very conversation
-            return (f"Slot #{aid} moved to topic {topic_label(e)}, which is in the archive — "
-                    "restore it on the library page. Not starting the old terminal "
-                    "(that would be a second Claude on the same conversation).")
-        return await _apply_topic(chat_id, e)
-    return await _apply_use(chat_id, aid)
+            return (f"Slot #{aid} moved to terminal {name_label(e)}, which is in the archive — "
+                    "pick it in /archive to restore it. Not starting the old terminal "
+                    "(that would be a second Claude on the same conversation)."), None
+        return await _apply_topic(chat_id, e), e["id"]
+    text, ok = await _apply_use(chat_id, aid)
+    return text, (aid if ok else None)
 
 
 async def cmd_use(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     query = " ".join(ctx.args or []).strip()
+    reply = update.message.reply_text
     if not query:
         cur = resolve_current(chat_id)
-        head = f"Current: {target_label(cur)}. Pick a topic:" if cur else "Pick a topic:"
-        kb = await asyncio.to_thread(_use_keyboard)
-        await update.message.reply_text(head, reply_markup=kb)
+        head, kb = await asyncio.to_thread(_use_menu, cur)
+        await reply(head, reply_markup=kb)
         return
     # a bare legacy slot number is the old form: numbers are too common in topic
     # names ("Налоги 2026") for name search to be the first reading of "/use 6"
     num = query.lstrip("#")
     if num in SESSIONS:
-        await update.message.reply_text(await _use_number(chat_id, num))
+        text, picked = await _use_number(chat_id, num)
+        await reply(text)
+        if picked:
+            _after_pick(chat_id, reply, picked)
         return
-    hits = library.resolve(_load_lib(), query)
+    lib = _load_lib()
+    hits = library.resolve(lib, query)
     if not hits:
-        await update.message.reply_text(
-            f"No topic «{_clip(query, 60)}» (or it is archived). "
-            "All topics: /list · new: /new <name>")
+        # outside the archive nothing matches: offer the archived matches as
+        # restore buttons — a tap restores; typing alone never does
+        arch = library.resolve(lib, query, archived=True)
+        if arch:
+            kb, more = _archive_keyboard(arch)
+            lines = [f"No terminal «{_clip(query, 60)}» outside the archive. In the archive "
+                     f"({len(arch)}) — tap to restore and open it:"]
+            if more:
+                lines.append(f"…and {more} more — type more of the name")
+            await reply("\n".join(lines), reply_markup=kb)
+            return
+        await reply(f"No terminal «{_clip(query, 60)}», the archive included. "
+                    "All terminals: /list · new: /new <name>")
         return
     if len(hits) == 1:
-        await update.message.reply_text(await _apply_topic(chat_id, hits[0]))
+        await reply(await _apply_topic(chat_id, hits[0]))
+        _after_pick(chat_id, reply, hits[0]["id"])
         return
-    kb = await asyncio.to_thread(_topics_keyboard, hits)
-    await update.message.reply_text(f"Found {len(hits)} topics. Which one?", reply_markup=kb)
+    kb, more = await asyncio.to_thread(_topics_keyboard, hits)
+    text = f"Found {len(hits)} terminals. Which one?"
+    if more:
+        text += f"\n…and {more} more — type more of the name"
+    await reply(text, reply_markup=kb)
+
+
+async def cmd_archive(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/archive [text] — the archived terminals (or those matching text) as
+    buttons; a tap restores and picks one."""
+    query = " ".join(ctx.args or []).strip()
+    try:
+        text, kb = await asyncio.to_thread(_archive_menu, query)
+    except LIB_ERRORS as ex:
+        text, kb = f"⚠️ couldn't read the terminal list: {_clip(ex, 300)}", None
+    await update.message.reply_text(text, reply_markup=kb)
 
 
 async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1452,11 +1750,13 @@ async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         with library.update(_lib_file()) as lib:
             e = dict(library.create(lib, name, cwd=cwd, now=int(time.time())))
-    except (OSError, ValueError) as ex:
-        await update.message.reply_text(f"⚠️ couldn't create the topic: {_clip(ex, 200)}")
+    except LIB_ERRORS as ex:
+        await update.message.reply_text(f"⚠️ couldn't create the terminal: {_clip(ex, 300)}")
         return
     log.info("NEW %s", topic_label(e))
-    await update.message.reply_text("🆕 " + await _apply_topic(update.effective_chat.id, e))
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("🆕 " + await _apply_topic(chat_id, e))
+    _after_pick(chat_id, update.message.reply_text, e["id"], new=True)
 
 
 async def on_use_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1465,15 +1765,44 @@ async def on_use_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.answer("no access"); return
     await q.answer()
     key = q.data.split(":", 1)[1]
+    chat_id = q.message.chat_id
     if is_topic(key):
         e = topic_entry(key)
         if e is None:
-            await q.edit_message_text("No such topic (or it is archived) — /list"); return
-        await q.edit_message_text(await _apply_topic(q.message.chat_id, e))
+            await q.edit_message_text("No such terminal (or it was archived) — /list · /archive")
+            return
+        await q.edit_message_text(await _apply_topic(chat_id, e))
+        _after_pick(chat_id, _chat_sender(ctx.bot, chat_id), key)
         return
     if key not in SESSIONS:
         await q.edit_message_text("No such terminal"); return
-    await q.edit_message_text(await _use_number(q.message.chat_id, key))
+    text, picked = await _use_number(chat_id, key)
+    await q.edit_message_text(text)
+    if picked:
+        _after_pick(chat_id, _chat_sender(ctx.bot, chat_id), picked)
+
+
+async def on_archive_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Tap on an archived terminal (/archive, or /use <text> that matched only
+    archived ones) → restore it (archived=false, as the dashboard's click does)
+    and pick it like /use: select, load, re-read. One restored meanwhile is
+    simply picked."""
+    q = update.callback_query
+    if update.effective_user.id != OWNER_ID:
+        await q.answer("no access"); return
+    await q.answer()
+    sid = q.data.split(":", 1)[1]
+    chat_id = q.message.chat_id
+    try:
+        e, restored = await asyncio.to_thread(restore_topic, sid)
+    except LIB_ERRORS as ex:
+        await q.edit_message_text(f"⚠️ couldn't restore the terminal: {_clip(ex, 300)}"); return
+    if e is None:
+        await q.edit_message_text("No such terminal — /archive · /list"); return
+    if restored:
+        log.info("RESTORE %s", topic_label(e))
+    await q.edit_message_text(await _apply_topic(chat_id, e, restored=restored))
+    _after_pick(chat_id, _chat_sender(ctx.bot, chat_id), e["id"])
 
 
 async def on_menu_select_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1547,23 +1876,10 @@ async def on_menu_chat_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_read(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    s = _require_session(update)
-    if not s:
-        await update.message.reply_text(NEED_PICK); return
-    if not has_session(s):
-        # not loaded: show Claude's last reply from the transcript, never load it
-        cur = resolve_current(update.effective_chat.id)
-        last = await asyncio.to_thread(last_reply, transcript_path(cur))
-        if not last:
-            await update.message.reply_text(
-                f"⚪️ {s} is not loaded and has no saved reply yet — send a message "
-                "(or /use) and the topic will load"); return
-        head = READ_UNLOADED_HEAD + "\n\n"
-        body = last[-(TG_LIMIT - len(head) - 2):]
-        await update.message.reply_text(head + ("…" + body[1:] if len(body) < len(last) else body))
-        return
-    text = clean_pane(capture(s)) or "(empty)"
-    for part in chunk(text):
+    # the screen while loaded; not loaded: Claude's last reply from the
+    # transcript, never loading it (read_view)
+    cur = resolve_current(update.effective_chat.id)
+    for part in await read_view(cur):
         await update.message.reply_text(part)
 
 
@@ -1716,9 +2032,10 @@ async def _deliver_to_terminal(reply_to, chat_id: int, text: str) -> None:
     if is_topic(cur):
         # a topic: library_cli loads it if it was unloaded (or refuses when every
         # loaded topic is busy) — keystrokes go to cs-<id> only after that
-        session, note = await _load_topic(cur)
+        session, note, code = await _load_topic(cur)
         if session is None:
-            await reply_to.reply_text(f"⚠️ {label}: {note}"); return
+            tail = " Close it there or write there." if code == ENSURE_ELSEWHERE else ""
+            await reply_to.reply_text(f"⚠️ {label}: {note}\nMessage not sent.{tail}"); return
         if note:
             await reply_to.reply_text(f"ℹ️ {note}")
     else:
@@ -1729,7 +2046,7 @@ async def _deliver_to_terminal(reply_to, chat_id: int, text: str) -> None:
             await reply_to.reply_text(f"⚠️ Terminal #{cur} isn't running (no tmux session)."); return
     _convo("IN", text, f"chat={chat_id} {label}")
     starting = time.monotonic() - _fresh.get(session, float("-inf")) < READY_TIMEOUT
-    placeholder = await reply_to.reply_text(f"➡️ {label}: …" + ("\n▶️ loading the topic…" if starting else ""))
+    placeholder = await reply_to.reply_text(f"➡️ {label}: …" + ("\n▶️ loading…" if starting else ""))
     if not await _wait_ready(session):    # no-op unless the bridge just loaded it
         await _safe_edit(placeholder,
                          f"⚠️ {label}: Claude didn't come up in {READY_TIMEOUT}s — message "
@@ -1832,13 +2149,14 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 BOT_COMMANDS = [
-    BotCommand("use", "pick a topic: /use <part of the name or id>"),
-    BotCommand("list", "topics: loaded first, current one marked"),
-    BotCommand("new", "new topic: /new <name>"),
-    BotCommand("read", "re-read the current terminal screen"),
-    BotCommand("esc", "interrupt the agent (Escape)"),
+    BotCommand("use", "pick a terminal: buttons, or /use <part of the name or id>"),
+    BotCommand("list", "terminals: loaded first, current one marked"),
+    BotCommand("archive", "archived terminals: tap one to restore and open it"),
+    BotCommand("new", "new terminal: /new <name>"),
+    BotCommand("read", "show the current terminal's screen again"),
+    BotCommand("esc", "interrupt Claude (Escape)"),
     BotCommand("enter", "send Enter"),
-    BotCommand("compact", "compact the agent's conversation (/compact)"),
+    BotCommand("compact", "compact Claude's conversation (/compact)"),
 ]
 
 
@@ -1858,20 +2176,21 @@ async def _post_init(app: Application) -> None:
     _streams_save({})  # the running tasks re-register themselves
 
 
-def main() -> None:
-    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
-    log.setLevel(logging.INFO)
+def build_app() -> Application:
+    """The bot: handlers for every BOT_COMMANDS entry and every button kind."""
     app = (Application.builder().token(TOKEN).post_init(_post_init)
            .concurrent_updates(True).build())
     owner = filters.User(user_id=OWNER_ID)
     app.add_handler(CommandHandler("list", cmd_list, filters=owner))
     app.add_handler(CommandHandler("use", cmd_use, filters=owner))
+    app.add_handler(CommandHandler("archive", cmd_archive, filters=owner))
     app.add_handler(CommandHandler("new", cmd_new, filters=owner))
     app.add_handler(CommandHandler("read", cmd_read, filters=owner))
     app.add_handler(CommandHandler("esc", cmd_esc, filters=owner))
     app.add_handler(CommandHandler("enter", cmd_enter, filters=owner))
     app.add_handler(CommandHandler("compact", cmd_compact, filters=owner))
     app.add_handler(CallbackQueryHandler(on_use_cb, pattern=r"^use:"))
+    app.add_handler(CallbackQueryHandler(on_archive_cb, pattern=r"^arch:"))
     app.add_handler(CallbackQueryHandler(on_menu_select_cb, pattern=r"^msel:"))
     app.add_handler(CallbackQueryHandler(on_menu_chat_cb, pattern=r"^mchat:"))
     # voice → transcribe; other media → save + link. Registered BEFORE on_text so a
@@ -1881,7 +2200,13 @@ def main() -> None:
         owner & (filters.Document.ALL | filters.PHOTO | filters.VIDEO | filters.AUDIO), on_file))
     # TEXT | CAPTION so a forwarded/replied message (incl. captioned media) also lands
     app.add_handler(MessageHandler(owner & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, on_text))
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    return app
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(message)s")
+    log.setLevel(logging.INFO)
+    build_app().run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":

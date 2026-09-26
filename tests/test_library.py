@@ -138,6 +138,14 @@ def test_resolve_prefers_exact_id_then_prefix_then_name():
     assert lib.resolve(L, "нет такого") == []
 
 
+def test_resolve_in_the_archive_only_when_asked():
+    L = _lib3()
+    assert lib.resolve(L, "старая") == []                      # archived hidden by default
+    assert [e["id"] for e in lib.resolve(L, "старая", archived=True)] == ["cccccccc"]
+    assert [e["id"] for e in lib.resolve(L, "cccc", archived=True)] == ["cccccccc"]
+    assert lib.resolve(L, "налоги", archived=True) == []       # live ones are not in the archive
+
+
 def test_display_order_active_first_then_recent():
     L = _lib3()
     lib.archive(L, "cccccccc", archived=False)
