@@ -1545,6 +1545,10 @@ def test_text_reaches_a_real_topic_on_a_private_tmux(tmp_path, monkeypatch):
         calls = (home / "claude-calls.log").read_text()
         assert f"aaaa1111|--session-id {U1} --dangerously-skip-permissions" in calls
         assert tm("has-session", "-t", "=cs-aaaa1111").returncode == 0
+        # the server the bridge's ensure started carries no word a `pkill -f` hits
+        from tests.test_neutral_server_argv import kill_words, server_argv
+        argv = server_argv(tm)
+        assert argv[-2:] == [tb.library_cli.LAUNCHER, "aaaa1111"] and kill_words(argv) == [], argv
         assert streamed == {"session": "cs-aaaa1111", "aid": "aaaa1111"}
         e = library.find(library.load(lib), "aaaa1111")
         assert e["last_used"] > 100                         # ensure touched it

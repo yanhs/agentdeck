@@ -43,7 +43,9 @@ crashes the whole server on `display-message -t =<name>` (no trailing colon)
 with a window/time format. Targets are exact: `=name` for sessions, `=name:`
 for panes. Every call carries `-f <repo>/tmux.conf` (AgentDeck's mouse/copy
 settings, then the user's ~/.tmux.conf); a server started without it gets it
-once from ensure / shell-ensure.
+once from ensure / shell-ensure. A new pane runs `bin/agentdeck-pane <id|shell>`
+from the pane's folder — nothing else on the command line, which the tmux server
+keeps as its own (see LAUNCHER: a `pkill -f grep` must not match it).
 """
 import contextlib
 import fcntl
@@ -92,15 +94,30 @@ def tmux_argv(*args):
     return base + list(args)
 
 
+# What a new pane runs. tmux keeps, as the SERVER's own command line, the command line of
+# the client that started it — whichever new-session came first. A careless `pkill -f
+# grep` (or claude, bash, env, …) anywhere on the machine matches that line and kills
+# the server with every terminal in it (2026-09-26: `pkill -f "… | grep"` did). So every
+# new-session here is only `tmux [-L sock] -f <conf> new-session -d -s <name> LAUNCHER
+# <id|shell>`: the pane's folder is the tmux client's working directory (a detached
+# new-session starts there) instead of `-c <folder>` — a folder like ~/claude-code-bot
+# would put the word back — and bin/agentdeck-pane does the rest inside the pane.
+LAUNCHER = os.path.join(HERE, "bin", "agentdeck-pane")
+
+
 def _clean_env():
     """Our env minus CLAUDE* (a Claude-spawned caller must not leak into the
     pane if this starts the tmux server) and TMUX (the socket is chosen above)."""
     return {k: v for k, v in os.environ.items() if "CLAUDE" not in k.upper() and k != "TMUX"}
 
 
-def _tmux(*args):
+def _tmux(*args, cwd=None):
+    """cwd: the folder a new-session starts its pane in (see LAUNCHER); a folder that
+    is gone falls back to home, as tmux does for a bad -c."""
+    if cwd is not None and not os.path.isdir(cwd):
+        cwd = os.path.expanduser("~")
     return subprocess.run(tmux_argv(*args), capture_output=True, text=True,
-                          env=_clean_env(), timeout=15)
+                          env=_clean_env(), timeout=15, cwd=cwd)
 
 
 def _has(name):
@@ -430,25 +447,58 @@ def checked_entry(e):
     return sid, u
 
 
-def pane_command(e, home=None, claude_bin=None):
-    """The command the new pane runs. Built only from checked pieces:
-    the 8-hex id, a strict uuid, quoted paths and fixed flags — never the topic
-    name. A resumed conversation keeps its own session-only effort (effort_flags)."""
-    sid, u = checked_entry(e)
+def pane_argv(e, home=None, claude_bin=None):
+    """claude's command line for the topic: [claude, --resume|--session-id, uuid,
+    --dangerously-skip-permissions, the session's own effort…]. Built only from
+    checked pieces: a strict uuid that starts with the 8-hex id, the claude path and
+    fixed flags — never the topic name. A resumed conversation keeps its own
+    session-only effort (effort_flags). The claude path is found here, in the
+    caller's environment (CLAUDE_BIN, PATH), as the pane's may not have it."""
+    _, u = checked_entry(e)
     home = home or os.path.expanduser("~")
     claude = (claude_bin or os.getenv("CLAUDE_BIN") or shutil.which("claude")
               or os.path.join(home, ".local", "bin", "claude"))
     transcript = transcript_path(home, effective_cwd(e), u)
     have = os.path.isfile(transcript)
     flag = "--resume" if have else "--session-id"
-    effort = "".join(" " + shlex.quote(a) for a in (effort_flags(transcript) if have else ()))
+    return [claude, flag, u, "--dangerously-skip-permissions",
+            *(effort_flags(transcript) if have else ())]
+
+
+def pane_command(e, home=None, claude_bin=None):
+    """What the pane does, as one shell line (the dry run: `pane-cmd`, DRY_RUN=1):
+    what bin/agentdeck-pane runs after the login shell's rc, with pane_argv."""
+    sid, _ = checked_entry(e)
+    home = home or os.path.expanduser("~")
     oauth = shlex.quote(os.path.join(home, ".claude", "oauth.env"))
     return ('for v in $(env | cut -d= -f1 | grep -i CLAUDE); do unset "$v"; done; '
             f"[ -r {oauth} ] && . {oauth}; "
             f"export AGENTDECK_SESSION={sid}; "
             # exec: when claude exits the pane closes; a leftover shell prompt
             # would run whatever text the bridge types next as commands
-            f"exec {shlex.quote(claude)} {flag} {u} --dangerously-skip-permissions{effort}")
+            "exec " + " ".join(shlex.quote(a) for a in pane_argv(e, home, claude_bin)))
+
+
+def launch_file(sid):
+    """Where ensure leaves claude's arguments for `agentdeck-pane <sid>`: next to the
+    registry (the launcher applies the same rule: $AGENTDECK_LIBRARY, else
+    <repo>/.sessions/library.json)."""
+    return os.path.join(os.path.dirname(library.LIB_FILE), "launch", sid)
+
+
+def prepare_launch(sid, argv):
+    """Leave argv (NUL-separated, 0600) for the launcher, which reads it once and
+    removes it. Data, not a command: nothing in it is run as shell code."""
+    if not library.valid_id(sid) or any("\0" in a for a in argv):
+        raise ValueError("bad launch arguments")
+    path = launch_file(sid)
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(b"".join(os.fsencode(a) + b"\0" for a in argv))
+    os.replace(tmp, path)
+    return path
 
 
 # ── ensure ──────────────────────────────────────────────────────────────────
@@ -504,17 +554,24 @@ def _make_room(limit):
     return True
 
 
-def _start(e, cmd):
-    """Start cs-<id> with claude's command as the pane's own command — not typed into a
-    shell with send-keys (that showed the long `for v in … exec claude …` line, echoed
-    twice, before Claude drew). A login + interactive bash runs it, i.e. the same
-    rc-loaded environment the shell tmux used to start had; `exec` still makes claude
-    the pane's process, so the pane closes when claude exits."""
-    name = library.tmux_name(e["id"])
-    r = _tmux("new-session", "-d", "-s", name, "-c", effective_cwd(e), "bash", "-lic", cmd)
+def _start(e, argv):
+    """Start cs-<id> running claude (argv: pane_argv) — as the pane's own command, not
+    typed into a shell with send-keys (that showed the long `for v in … exec claude …`
+    line, echoed twice, before Claude drew). tmux is handed only LAUNCHER and the id
+    (see LAUNCHER); the launcher loads the login + interactive bash environment the
+    shell tmux used to start had, and execs claude with argv, prepared here — so
+    claude is the pane's process and the pane closes when claude exits."""
+    sid = e["id"]
+    name = library.tmux_name(sid)
+    if not os.access(LAUNCHER, os.X_OK):
+        raise RuntimeError(f"{LAUNCHER} is not executable (chmod +x it)")
+    prepared = prepare_launch(sid, argv)
+    r = _tmux("new-session", "-d", "-s", name, LAUNCHER, sid, cwd=effective_cwd(e))
     if r.returncode != 0:
         if _has(name):                             # someone else just started it
             return
+        with contextlib.suppress(OSError):         # never left for a later launch
+            os.unlink(prepared)
         raise RuntimeError(r.stderr.strip() or "tmux new-session failed")
 
 
@@ -548,8 +605,8 @@ def ensure(sid, now=None):
                      "room to load another. Close a tab or unload a topic and try again.")
                 return EXIT_BUSY
             try:
-                _start(e, pane_command(e))
-            except (RuntimeError, ValueError) as ex:
+                _start(e, pane_argv(e))
+            except (RuntimeError, ValueError, OSError) as ex:
                 _say(f"couldn't start {name}: {_clean(ex)}")
                 return EXIT_FAIL
         try:
@@ -563,12 +620,8 @@ def ensure(sid, now=None):
 
 # ── the plain command line ──────────────────────────────────────────────────
 # The pane inherits the tmux SERVER's environment when the server was started by
-# someone else (a Claude-spawned caller would leak CLAUDE* into it): scrub it,
-# then exec so the pane's process is the login bash itself.
-SHELL_CMD = ("bash", "-c", 'for v in $(env | cut -d= -f1 | grep -i CLAUDE); do unset "$v"; done; '
-             "unset AGENTDECK_SESSION; exec bash -l")
-
-
+# someone else (a Claude-spawned caller would leak CLAUDE* into it): `agentdeck-pane
+# shell` scrubs it, then execs so the pane's process is the login bash itself.
 def shell_ensure():
     """Start cmd-shell unless it runs; either way print its name. tmux refuses a
     second session with the same name, so two presses at once still make one."""
@@ -576,7 +629,7 @@ def shell_ensure():
     ensure_tmux_conf()
     if not _has(name):
         cwd = WORKDIR if os.path.isdir(WORKDIR) else os.path.expanduser("~")
-        r = _tmux("new-session", "-d", "-s", name, "-c", cwd, *SHELL_CMD)
+        r = _tmux("new-session", "-d", "-s", name, LAUNCHER, "shell", cwd=cwd)
         if r.returncode != 0 and not _has(name):
             _say(f"couldn't start the command line: {_clean(r.stderr.strip())}")
             return EXIT_FAIL

@@ -692,26 +692,36 @@ def test_deck_close_leaves_no_fake_claude_behind(tmp_path):
 
 
 # ── the pane starts WITH claude's command (no typed line) ────────────────────
-def test_start_passes_the_command_to_new_session_and_types_nothing(monkeypatch):
+def test_start_passes_the_command_to_new_session_and_types_nothing(tmp_path, monkeypatch):
     m = _mod()
+    monkeypatch.setattr(m.library, "LIB_FILE", str(tmp_path / "reg" / "library.json"))
     calls = []
 
     class R:
         returncode = 0; stdout = ""; stderr = ""
-    monkeypatch.setattr(m, "_tmux", lambda *a: calls.append(a) or R())
+    monkeypatch.setattr(m, "_tmux", lambda *a, cwd=None: calls.append(a) or R())
     e = {"id": "aaaaaaaa", "uuid": U1, "cwd": "/tmp"}
-    m._start(e, "exec claude --session-id x")
+    m._start(e, ["claude", "--session-id", U1])
     assert not [c for c in calls if c and c[0] == "send-keys"], calls   # the long line isn't typed
     new = [c for c in calls if c and c[0] == "new-session"]
     assert len(new) == 1
-    # a login + interactive bash runs it: the same rc-loaded environment the typed line had
-    assert new[0][-3:] == ("bash", "-lic", "exec claude --session-id x"), new[0]
+    # tmux runs the launcher with the id; the launcher (a login + interactive bash's
+    # environment, test_neutral_server_argv) execs claude with the prepared arguments
+    assert new[0][-2:] == (m.LAUNCHER, "aaaaaaaa"), new[0]
+    assert (tmp_path / "reg" / "launch" / "aaaaaaaa").read_bytes() == (
+        b"claude\0--session-id\0" + U1.encode() + b"\0")
 
 
 def test_ensure_pane_start_command_is_claudes(deck):
     e = deck.add("A", uuid=U1)
     assert deck.cli("ensure", e["id"]).returncode == 0
     wait_for(deck.calls)
-    r = deck.tmux("list-panes", "-a", "-F", "#{session_name}\t#{pane_start_command}")
-    line = [l for l in r.stdout.splitlines() if l.startswith("cs-aaaaaaaa\t")]
-    assert line and U1 in line[0], r.stdout
+    r = deck.tmux("list-panes", "-a", "-F",
+                  "#{session_name}\t#{pane_start_command}\t#{pane_pid}")
+    line = [l.split("\t") for l in r.stdout.splitlines() if l.startswith("cs-aaaaaaaa\t")]
+    assert line, r.stdout
+    _, start, pid = line[0]
+    assert "agentdeck-pane" in start and "aaaaaaaa" in start, start   # what tmux was handed
+    with open(f"/proc/{pid}/cmdline", "rb") as f:                      # what runs: claude itself
+        argv = f.read().split(b"\0")
+    assert argv[0] == b"claude" and U1.encode() in argv, argv

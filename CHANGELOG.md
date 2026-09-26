@@ -2,6 +2,28 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## Unreleased
+
+### Terminals
+- **A careless `pkill -f grep` elsewhere on the server can no longer take down every
+  terminal:** a tmux server keeps, as its own command line, the command line of the tmux
+  call that started it, and that used to be `tmux … new-session … -c <folder> bash -lic
+  'for v in $(env | … grep -i CLAUDE) … exec claude --resume …'` — so `pkill -f` with
+  `grep`, `claude`, `bash` or `env` in its pattern (even inside a `… | grep` meant as a
+  pipe) matched the server and killed all terminals at once. Every `tmux new-session`
+  AgentDeck runs is now only `tmux -f <repo>/tmux.conf new-session -d -s cs-<code>
+  <repo>/bin/agentdeck-pane <code>` (or `… cmd-shell <repo>/bin/agentdeck-pane shell`); the
+  terminal's folder is where tmux is started from, not an argument, so a folder like
+  `~/claude-bot` does not bring the word back. The new launcher `bin/agentdeck-pane`
+  checks the code, loads the login shell's environment, unsets `CLAUDE*`, sources
+  `~/.claude/oauth.env`, exports `AGENTDECK_SESSION` and execs claude with the arguments
+  `library_cli.py ensure` prepared for this start (`--resume`/`--session-id`, the
+  ultracode/max restore; left in `.sessions/launch/<code>`, read once). A Telegram-started
+  old numbered slot is created under a neutral name and renamed to `claude-terminal-N`.
+  Nothing changes for a server that is already running: the new command line applies the
+  next time the tmux server starts. (`pkill -f claude` still ends every Claude itself —
+  that is what it asks for; the conversations stay resumable.)
+
 ## v1.7.0 — HTTPS by default, copy & paste like a desktop terminal, ultracode survives restarts
 
 ### Install on your own server (`install.sh`)

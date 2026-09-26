@@ -1,0 +1,82 @@
+#!/bin/bash
+# agentdeck-pane <8-character topic id> | shell
+#
+# What tmux runs in a new AgentDeck pane (library_cli.py ensure / shell-ensure).
+#
+# Why a script: a tmux server keeps, as its own command line, the command line of the
+# client that started it. That used to be `tmux … new-session … bash -lic 'for v in
+# $(env | cut -d= -f1 | grep -i CLAUDE) … exec claude --resume …'`, and on 2026-09-26 a
+# careless `pkill -f "… | grep"` elsewhere on the machine matched the SERVER and took
+# every terminal down at once. So tmux is handed only this script's path and the id
+# (the pane's folder is tmux's working directory, not an argument), and the rest
+# happens here, in the pane:
+#
+#   <id>   topic cs-<id>: a login + interactive bash loads the user's rc environment
+#          (the same one a terminal's own shell has); then every CLAUDE* variable is
+#          unset (a Claude-spawned caller must not leak into the pane), ~/.claude/oauth.env
+#          is sourced, AGENTDECK_SESSION=<id> exported, and claude exec'd with the
+#          arguments `library_cli.py ensure` prepared for this start in
+#          <registry folder>/launch/<id> (NUL-separated: claude, --resume or --session-id,
+#          the uuid, --dangerously-skip-permissions, the session's own ultracode / max
+#          effort). The file is read once and removed. exec: when claude exits the pane
+#          closes — a shell prompt left behind would run whatever the Telegram bridge
+#          types next as commands.
+#   shell  cmd-shell, the dashboard's plain command line: CLAUDE* and AGENTDECK_SESSION
+#          unset, then `exec bash -l`.
+#
+# The argument is checked before anything else runs. The prepared arguments are data:
+# nothing from the registry is ever run as shell code.
+
+die() {
+  printf 'agentdeck-pane: %s\n' "$*" >&2
+  exit 2
+}
+
+scrub() {                          # unset every exported CLAUDE* variable, any case
+  local v
+  for v in $(compgen -e); do
+    if [[ ${v^^} == *CLAUDE* ]]; then unset "$v"; fi
+  done
+}
+
+[ "$#" -eq 1 ] || die "usage: agentdeck-pane <8-character topic id> | shell"
+id=$1
+
+if [ "$id" = shell ]; then
+  scrub
+  unset AGENTDECK_SESSION AGENTDECK_PANE_RC
+  exec bash -l
+fi
+
+# Explicit character class: a locale's [a-f] range could admit other letters.
+[[ $id =~ ^[0123456789abcdef]{8}$ ]] || die "not a topic id (8 characters 0-9 a-f)"
+
+self=$0
+[[ $self == /* ]] || self=$PWD/$self
+
+if [ "${AGENTDECK_PANE_RC:-}" != "$id" ]; then
+  # from tmux: run again under a login + interactive bash, so claude starts with the
+  # rc-loaded environment; the marker says the second run has it
+  export AGENTDECK_PANE_RC="$id"
+  exec bash -lic 'exec "$0" "$1"' "$self" "$id"
+fi
+unset AGENTDECK_PANE_RC
+
+scrub
+[ -r "$HOME/.claude/oauth.env" ] && . "$HOME/.claude/oauth.env"
+export AGENTDECK_SESSION="$id"
+
+# where library_cli prepared it: next to the registry (library.LIB_FILE's rule)
+repo=${self%/*}
+repo=${repo%/*}
+lib=${AGENTDECK_LIBRARY:-$repo/.sessions/library.json}
+prepared=${lib%/*}/launch/$id
+[ -f "$prepared" ] || die "topic $id: nothing prepared to start — open it from the dashboard (library_cli.py ensure $id)"
+argv=()
+mapfile -d '' -t argv < "$prepared"
+rm -f -- "$prepared"
+if [ "${#argv[@]}" -lt 4 ] || ! [[ ${argv[1]} == --resume || ${argv[1]} == --session-id ]] \
+   || [[ ${argv[2]} != "$id"-* ]]; then
+  die "topic $id: the start prepared in $prepared is not for this topic"
+fi
+exec "${argv[@]}"

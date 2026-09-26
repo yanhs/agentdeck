@@ -209,6 +209,12 @@ The dashboard works on a phone too:
 - **`open-session.sh` + `library_cli.py`** — one `ttyd` serves every terminal. The page
   `/sess/?arg=<code>` checks the code, loads the terminal into `tmux` if needed (unloading
   an idle one at the limit), and attaches the tab. `/sess/?arg=shell` is the `cmd` line.
+- **`bin/agentdeck-pane`** — what tmux runs in a new terminal: it loads your login shell's
+  environment and starts claude with the arguments `library_cli.py` prepared. tmux is
+  handed nothing but this path and the terminal's code, because the tmux server keeps
+  that command line as its own: a careless `pkill -f grep` (or `bash`, `env`, `python`)
+  somewhere on the server must not match it and take every terminal down. Keep the
+  checkout at a path without such words (the default `~/agentdeck` is fine).
 - **`idle_reaper.py`** — unloads terminals nobody is using (run from cron).
 - **`status_server.py`** — the login gate + library/status/buffer/paste APIs + the
   Telegram setup page.
@@ -554,7 +560,7 @@ Nothing is deleted. `--apply --rollback-dashboard` puts the old page back.
 ## 🧪 Tests
 
 ```bash
-python3 -m pytest -q        # 1190 tests
+python3 -m pytest -q        # 1221 tests
 ```
 
 The session library (registry, API, loading/unloading, migration), the idle reaper, the
@@ -582,6 +588,7 @@ https.sh                 HTTPS for the Docker sandbox in one command
 tmux.conf                AgentDeck's tmux settings (mouse, copy); your ~/.tmux.conf applies after it
 library.py               session library: the list of named terminals
 library_cli.py           loads/unloads terminals in tmux (used by ttyd and the bridge)
+bin/agentdeck-pane       what tmux runs in a new terminal (keeps the tmux server's command line neutral)
 open-session.sh          the one ttyd entry point: /sess/?arg=<code>
 sessions.pm2.config.js   PM2 app for that ttyd
 idle_reaper.py           unloads idle terminals (cron, every minute)

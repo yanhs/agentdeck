@@ -21,8 +21,8 @@
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PAUSE="${OPEN_SESSION_PAUSE:-5}"
 
-# CLAUDE* variables are scrubbed by library_cli (tmux env) and by the pane
-# command itself; not here, so a configured CLAUDE_BIN still reaches library_cli.
+# CLAUDE* variables are scrubbed by library_cli (tmux env) and in the pane by
+# bin/agentdeck-pane; not here, so a configured CLAUDE_BIN still reaches library_cli.
 unset TMUX
 
 done_with() {                      # $1 = exit code; the message is already printed

@@ -39,7 +39,8 @@ U4 = "5e5e5e5e-c9f9-41cc-b06c-2ccb34cf4613"     # slot 4: transcript < 10 KB
 AGENTS = {"1": {"project": "Terminal"}, "2": {"project": "app - PIPE"},
           "3": {"project": "Instagram"}, "_order": ["2", "1", "3"]}
 
-MODULES = ["library.py", "library_cli.py", "idle_reaper.py", "open-session.sh"]
+MODULES = ["library.py", "library_cli.py", "idle_reaper.py", "open-session.sh",
+           "bin/agentdeck-pane"]                # what tmux runs in a new pane
 SCRIPTS = {1: "launch-claude.sh", 2: "launch-claude-2.sh", 3: "launch-claude-3.sh",
            4: "launch-claude-4.sh", 10: "launch-claude-10.sh"}
 
@@ -69,6 +70,7 @@ class Mig(Deck):
         (self.repo / ".sessions").mkdir(parents=True)
         (self.repo / "web").mkdir()
         for f in MODULES:
+            (self.repo / f).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(os.path.join(REPO, f), self.repo / f)
         # an old install's numbered launch scripts (no longer shipped in the repo)
         for n, f in SCRIPTS.items():

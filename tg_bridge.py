@@ -107,10 +107,14 @@ WHISPER_SCRIPT = os.path.join(GATE_DIR, "whisper_transcribe.py")
 
 # ── tmux helpers ──────────────────────────────────────────────────────────
 
-def _tmux(*args) -> subprocess.CompletedProcess:
+def _tmux(*args, cwd=None) -> subprocess.CompletedProcess:
     # AGENTDECK_TMUX_SOCKET → `tmux -L <name>`, the same server library_cli uses
-    # (tests run on their own server and never reach the live one)
-    return subprocess.run(library_cli.tmux_argv(*args), capture_output=True, text=True)
+    # (tests run on their own server and never reach the live one). cwd: the folder a
+    # new-session starts in — never `-c <folder>` (library_cli.LAUNCHER says why)
+    if cwd is not None and not os.path.isdir(cwd):
+        cwd = os.path.expanduser("~")
+    return subprocess.run(library_cli.tmux_argv(*args), capture_output=True, text=True,
+                          cwd=cwd)
 
 
 def session_for(agent_id) -> str | None:
@@ -188,7 +192,18 @@ def start_session(aid: str) -> tuple[bool, str]:
     if not cmd:
         return False, f"could not resolve the launch command for #{aid}"
     library_cli.ensure_tmux_conf(_tmux)  # a server started without our tmux.conf
-    _tmux("new-session", "-d", "-s", session, "-c", AGENT_CWD)
+    # made under a neutral name, then renamed: if this call starts the tmux server, the
+    # server keeps its command line, and `claude-terminal-N` there would be hit by a
+    # careless `pkill -f claude` anywhere (library_cli.LAUNCHER)
+    tmp = f"agentdeck-new-{aid}-{_uuid.uuid4().hex[:8]}"   # two starts at once: two names
+    r = _tmux("new-session", "-d", "-s", tmp, cwd=AGENT_CWD)
+    if r.returncode != 0:
+        return False, f"couldn't start #{aid}: {_clip(r.stderr, 200)}"
+    if _tmux("rename-session", "-t", _exact(tmp), session).returncode != 0:
+        _tmux("kill-session", "-t", _exact(tmp))
+        if has_session(session):                 # started meanwhile by someone else
+            return True, "already running"
+        return False, f"couldn't start #{aid}"
     _tmux("set", "-t", _exact(session), "mouse", "on")
     time.sleep(0.3)
     _tmux("send-keys", "-t", _pane(session), "-l", "--", cmd)
