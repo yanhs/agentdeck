@@ -301,6 +301,20 @@ def test_entrypoint_installs_the_guards_unless_opted_out():
     assert src.index("export TRACKER_STATE") < src.index("install_guards.py") < src.index("ttyd ")
 
 
+def test_pane_exports_the_session_id_the_hold_hook_reads():
+    """hold_on_timer.py identifies its terminal by $AGENTDECK_SESSION; the pane command
+    must export it (and must not unset it with the CLAUDE* scrub)."""
+    import importlib, sys
+    sys.path.insert(0, str(ROOT))
+    lc = importlib.import_module("library_cli")
+    hook = (ROOT / "hooks" / "hold_on_timer.py").read_text()
+    assert 'os.getenv("AGENTDECK_SESSION"' in hook
+    cmd = lc.pane_command({"id": "abcdef12", "uuid": "abcdef12-0000-4000-8000-000000000000",
+                           "cwd": "/tmp"}, home="/root", claude_bin="/usr/bin/claude")
+    assert "export AGENTDECK_SESSION=abcdef12;" in cmd
+    assert "claude" not in "AGENTDECK_SESSION".lower()
+
+
 def test_compose_documents_the_guard_opt_out():
     raw = (ROOT / "docker-compose.yml").read_text()
     assert re.search(r"AGENTDECK_GUARDS:\s*\"\$\{AGENTDECK_GUARDS:-1\}\"", raw)

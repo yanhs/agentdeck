@@ -12,8 +12,9 @@ with it. This hook writes the hold marker `.sessions/hold-<id>`
     Monitor          6 hours
 
 Outside a library session (no or bad AGENTDECK_SESSION) it does nothing. It
-never fails the tool call: every error ends in exit 0. Not wired into any
-settings.json here — that is done separately.
+never fails the tool call: every error ends in exit 0. Wired in by
+hooks/install_guards.py (PostToolUse, matcher ScheduleWakeup|CronCreate|Monitor;
+see hooks/settings.example.json) — on by default in Docker.
 """
 import json
 import os

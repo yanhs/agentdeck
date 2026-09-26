@@ -21,6 +21,14 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "ScheduleWakeup|CronCreate|Monitor",
+        "hooks": [
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/hold_on_timer.py" }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

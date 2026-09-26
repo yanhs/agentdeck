@@ -11,6 +11,7 @@ All notable changes to AgentDeck. Newest first.
   agent takes on goes on the board, and it keeps working while the task is open. Opt out:
   `AGENTDECK_GUARDS=0`. `start.sh` leaves your own `~/.claude` alone unless
   `AGENTDECK_GUARDS=1`. New `hooks/install_guards.py` (install / `--remove` / `--check`).
+- **A terminal waiting on its own timer stays loaded.** `install_guards.py` now also wires `hooks/hold_on_timer.py` (PostToolUse on `ScheduleWakeup`/`CronCreate`/`Monitor`), so the idle reaper no longer unloads an agent before its timer fires.
 
 ## v1.6.0 — archive that frees memory, Telegram menu with the archive
 

@@ -45,8 +45,11 @@ def commands(s, event=None):
     return out
 
 
+OURS = ("guard_task_board.py", "guard_dont_stop.py", "hold_on_timer.py")
+
+
 def guard_commands(s):
-    return [c for c in commands(s) if "guard_task_board.py" in c or "guard_dont_stop.py" in c]
+    return [c for c in commands(s) if any(n in c for n in OURS)]
 
 
 # ── install ──────────────────────────────────────────────────────────────────
@@ -184,3 +187,54 @@ def test_installed_command_blocks_then_allows(tmp_path):
     sh(bash_cmd, {"session_id": "e2e", "tool_name": "Bash",
                   "tool_input": {"command": "python3 tracker.py add-task t1 --title x"}})
     assert sh(edit_cmd, ed).returncode == 0
+
+
+# ── hold_on_timer: a terminal waiting on its own timer stays loaded ─────────
+def test_example_wires_hold_on_timer_after_the_timer_tools():
+    ex = json.load(open(EXAMPLE))
+    groups = ex["hooks"].get("PostToolUse") or []
+    g = next(g for g in groups
+             if any("hold_on_timer.py" in h["command"] for h in g["hooks"]))
+    for tool in ("ScheduleWakeup", "CronCreate", "Monitor"):
+        assert tool in g["matcher"].split("|"), g
+    assert all("hold_on_timer.py" not in c
+               for c in commands(ex, "PreToolUse") + commands(ex, "Stop"))
+
+
+def test_install_remove_check_cover_hold_on_timer(tmp_path):
+    assert run(tmp_path).returncode == 0
+    s = settings(tmp_path)
+    hold = [c for c in commands(s, "PostToolUse") if "hold_on_timer.py" in c]
+    assert len(hold) == 1 and os.path.isfile(hold[0].split()[-1]), hold
+    run(tmp_path)                                               # idempotent
+    assert [c for c in commands(settings(tmp_path)) if "hold_on_timer.py" in c] == hold
+    assert run(tmp_path, "--remove").returncode == 0
+    assert not (tmp_path / "settings.json").exists() or \
+        "hold_on_timer.py" not in (tmp_path / "settings.json").read_text()
+
+
+def test_check_fails_when_only_part_of_the_set_is_installed(tmp_path):
+    """An older install (guards only, no hold hook) must read as not installed, so
+    --check and start.sh's hint notice the missing hook."""
+    run(tmp_path)
+    s = settings(tmp_path)
+    s["hooks"].pop("PostToolUse")
+    (tmp_path / "settings.json").write_text(json.dumps(s))
+    assert run(tmp_path, "--check").returncode == 1
+    assert run(tmp_path).returncode == 0                        # re-install completes it
+    assert run(tmp_path, "--check").returncode == 0
+
+
+def test_installed_hold_command_writes_the_marker_for_the_panes_session(tmp_path):
+    """The installed command, run the way claude runs it inside a cs-<id> pane
+    (AGENTDECK_SESSION exported by library_cli.pane_command), holds that session."""
+    run(tmp_path, "--tracker-state", str(tmp_path / "state.json"))
+    cmd = next(c for c in commands(settings(tmp_path), "PostToolUse") if "hold_on_timer" in c)
+    reg = tmp_path / "reg" / "library.json"
+    env = dict(os.environ, AGENTDECK_SESSION="abcdef12", AGENTDECK_LIBRARY=str(reg))
+    r = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=30,
+                       input=json.dumps({"hook_event_name": "PostToolUse",
+                                         "tool_name": "ScheduleWakeup",
+                                         "tool_input": {"delaySeconds": 300}}))
+    assert r.returncode == 0, r.stderr
+    assert (reg.parent / "hold-abcdef12").is_file()

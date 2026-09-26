@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Turn the task-board guard hooks on (or off) in a Claude Code settings file.
 
+The set: guard_task_board.py + guard_dont_stop.py (the board), and hold_on_timer.py
+(PostToolUse on ScheduleWakeup/CronCreate/Monitor: a terminal waiting on its own timer
+stays loaded — idle_reaper skips it while the hold marker is fresh; the terminal is
+identified by $AGENTDECK_SESSION, which library_cli exports in every cs-<id> pane).
+
 The hooks block comes from hooks/settings.example.json (one source), with
 /path/to/agentdeck replaced by the real repo path. The merge is idempotent and keeps
 everything else in the file: other keys, and every hook that is not one of ours. A file
@@ -25,7 +30,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-GUARDS = ("guard_task_board.py", "guard_dont_stop.py")
+GUARDS = ("guard_task_board.py", "guard_dont_stop.py", "hold_on_timer.py")
 
 CLAUDE_MD = """\
 # Working rules (AgentDeck)
@@ -100,13 +105,26 @@ def load(path: str):
     return (data, True) if isinstance(data, dict) else (None, False)
 
 
+def _commands(hooks: dict, event: str) -> list:
+    groups = hooks.get(event)
+    return [h.get("command", "") or ""
+            for g in (groups if isinstance(groups, list) else []) if isinstance(g, dict)
+            for h in (g.get("hooks") or []) if isinstance(h, dict)]
+
+
 def installed(data: dict, hooks_dir: str) -> bool:
-    for groups in (data.get("hooks") or {}).values():
-        for g in groups if isinstance(groups, list) else []:
-            for h in (g.get("hooks") or []) if isinstance(g, dict) else []:
-                if isinstance(h, dict) and is_ours(h.get("command", ""), hooks_dir):
-                    return True
-    return False
+    """True only when every hook of the set is present under its event — an older
+    install missing one (e.g. hold_on_timer) reads as not installed."""
+    have = data.get("hooks") or {}
+    want = template(hooks_dir, "")
+    for event, groups in want.items():
+        cmds = _commands(have, event)
+        for g in groups:
+            for h in g["hooks"]:
+                script = next(os.path.join(hooks_dir, n) for n in GUARDS if n in h["command"])
+                if not any(script in c for c in cmds):
+                    return False
+    return True
 
 
 def write_json(path: str, data: dict) -> None:

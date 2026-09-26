@@ -82,8 +82,9 @@ working reference you adapt, not a turn-key installer.
   Terminals stay dark.
 - **Guard hooks — on by default in Docker.** Two Claude Code hooks keep agents on the task
   board: no edits before the work is on the board, no silent stop in the middle of a task.
-  Opt out with `AGENTDECK_GUARDS=0`; without Docker, `AGENTDECK_GUARDS=1 ./start.sh` turns
-  them on — see [Manual setup](#-manual-setup-without-docker).
+  A third keeps a terminal loaded while it waits on its own timer. Opt out with
+  `AGENTDECK_GUARDS=0`; without Docker, `AGENTDECK_GUARDS=1 ./start.sh` turns them on —
+  see [Manual setup](#-manual-setup-without-docker).
 
 ## 📸 Screenshots
 
@@ -257,6 +258,9 @@ with no dependencies:
   background command, a timer (`CronCreate` / `ScheduleWakeup`), a `Monitor` or a sub-agent
   from the last 10 minutes, or once the task is closed or marked `stopped`. Only tasks this
   session created or moved count, and it never blocks more than twice in a row.
+- `hold_on_timer.py` keeps a waiting terminal loaded: when an agent sets a `ScheduleWakeup`,
+  `CronCreate` or `Monitor`, it writes a hold marker for that terminal, so the idle reaper
+  doesn't unload it (and kill the timer) before the timer fires.
 
 In Docker the container start merges them into the agents' `~/.claude/settings.json`
 (your other settings and hooks are kept) and writes a short default `~/.claude/CLAUDE.md`
