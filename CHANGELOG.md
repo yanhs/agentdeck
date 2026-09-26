@@ -4,11 +4,17 @@ All notable changes to AgentDeck. Newest first.
 
 ## Unreleased
 
-- **Terminals keep ultracode (and max effort) across a restart:** AgentDeck reads the
-  terminal's last /effort choice from its transcript and relaunches with it; other levels
-  already persist through Claude Code's own default. (`--settings '{"ultracode":true}'` or
-  `--effort max` on the `--resume` launch only; the transcript is read backwards and the scan
-  stops at the latest choice; any read problem means a plain `--resume`.)
+- **Terminals keep ultracode (and max effort) across a restart:** AgentDeck reads from the
+  terminal's transcript the effort it ended at and relaunches with it; other levels already
+  persist through Claude Code's own default. The newest evidence wins: an `/effort` or
+  `/model` output, the ultracode on/off notice Claude Code records whatever switched it
+  (`/config`, Alt+P, Remote Control), and the effort each reply ran at.
+  (`--settings '{"ultracode":true}'` or `--effort max` on the `--resume` launch only; the
+  transcript is read backwards and the scan stops once the newest evidence settles it; any
+  read problem means a plain `--resume`.)
+- **Terminals in folders with emoji or very long paths resume their conversation** instead
+  of starting a new one: the transcript folder name now follows Claude Code's own rule
+  (UTF-16 code units; names over 200 characters are cut and get a hash suffix).
 - **`install.sh`: HTTPS by default, never a password in clear text.** The one-liner now
   serves `https://<your-ip>.sslip.io` with a free Let's Encrypt certificate when ports 80
   and 443 are free (80 redirects; `:8765` isn't served); with 443 taken, the same

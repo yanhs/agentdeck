@@ -290,6 +290,20 @@ def test_delete_removes_only_that_entry():
 def test_cwd_slug_matches_claude_project_dir_names():
     assert lib.cwd_slug("/home/ubuntu/pr") == "-home-ubuntu-pr"
     assert lib.cwd_slug("/home/ubuntu/pr/Светлота 💡").startswith("-home-ubuntu-pr-")
+    # UTF-16 code units, as Claude Code's regex sees them: 💡 is two
+    assert lib.cwd_slug("/home/ubuntu/pr/Светлота 💡 (Rus)") == "-home-ubuntu-pr--------------Rus-"
+
+
+def test_trash_transcript_finds_a_long_cwds_folder(tmp_path, monkeypatch):
+    projects = tmp_path / "projects"
+    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(projects))
+    cwd = "/home/ubuntu/" + "deep/" * 45 + "end"
+    d = projects / (("-home-ubuntu-" + "deep-" * 45 + "end")[:200] + "-cqcn6p")
+    d.mkdir(parents=True)
+    (d / f"{U1}.jsonl").write_text("talk")
+    out = lib.trash_transcript(_entry(cwd=cwd), lib_file=str(tmp_path / "library.json"))
+    assert out == str(tmp_path / "trash" / f"{U1}.jsonl")
+    assert not (d / f"{U1}.jsonl").exists()
 
 
 def _entry(cwd="/home/ubuntu/pr", u=U1):

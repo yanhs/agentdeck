@@ -2,8 +2,10 @@
 
 Claude Code never saves `/effort ultracode` or `/effort max` ("this session
 only"), so a plain `claude --resume <uuid>` comes back at the saved default
-(e.g. medium). library_cli.pane_command reads the terminal's last effort choice
-from its transcript and, on the --resume path only, relaunches with:
+(e.g. medium). library_cli.pane_command reads from the transcript the effort the
+terminal ended at (newest evidence wins: a command's output, an ultra_effort_enter /
+ultra_effort_exit attachment, the effort a reply ran at) and, on the --resume path
+only, relaunches with:
 
     ultracode -> --settings '{"ultracode":true}'
     max       -> --effort max
@@ -71,6 +73,37 @@ def prompt(text):
 
 FILLER = dumps({"type": "assistant", "isSidechain": False, "message": {
     "role": "assistant", "content": [{"type": "text", "text": "x" * 2000}]}})
+
+
+def attachment(kind, sidechain=False, **fields):
+    """What Claude Code writes on the next user turn after ultracode goes on or off,
+    whatever turned it (/effort, /config, Alt+P, Remote Control)."""
+    return dumps({"parentUuid": "p", "isSidechain": sidechain,
+                  "attachment": {"type": kind, **fields}, "type": "attachment", "uuid": "a",
+                  "timestamp": "2026-09-26T10:00:00.000Z",
+                  "rendered": [{"content": "<system-reminder>\nUltracode …\n</system-reminder>"}],
+                  "userType": "external", "entrypoint": "cli", "cwd": CWD, "sessionId": U1,
+                  "version": "2.1.283"})
+
+
+ENTER = attachment("ultra_effort_enter", reminderType="full")
+SPARSE = attachment("ultra_effort_enter", reminderType="sparse")
+EXIT = attachment("ultra_effort_exit")
+
+
+def reply(effort, sidechain=False, **over):
+    """A model reply: Claude Code stamps it with the effort the request ran at."""
+    rec = {"parentUuid": "p", "isSidechain": sidechain, "message": {
+        "model": "claude-opus-5-5", "role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+        "requestId": "req_1", "type": "assistant", "uuid": "r",
+        "timestamp": "2026-09-26T10:00:00.000Z", "effort": effort, "perTurnEffort": effort,
+        "sessionId": U1, "version": "2.1.283"}
+    rec.update(over)
+    return dumps(rec)
+
+
+# /config -> Model, or the Alt+P picker's change log: no effort in the text
+SET_MODEL_CONFIG = "Set model to \x1b[1mOpus 5.5 (1M context)\x1b[22m"
 
 
 def write_transcript(tmp_path, lines, home_name="h", tail="\n"):
@@ -196,6 +229,128 @@ def test_an_env_override_still_records_the_sessions_choice(tmp_path):
 ])
 def test_outputs_that_change_nothing_do_not_hide_the_choice(tmp_path, noise):
     assert launch(tmp_path, [cmd_out(ULTRA), cmd_out(noise)]).endswith(ULTRA_FLAG)
+
+
+# ── changes made without /effort: /config, Alt+P, Remote Control ────────────
+# They leave no effort text in the transcript, but every ultracode switch shows
+# up as an ultra_effort_enter / ultra_effort_exit attachment on the next user
+# turn, and every model reply carries the effort it ran at. The newest evidence wins.
+@pytest.mark.parametrize("config_line", [[cmd_out(SET_MODEL_CONFIG)], []], ids=["config", "alt-p"])
+def test_ultracode_turned_off_without_effort_is_not_restored(tmp_path, config_line):
+    lines = [cmd_out(ULTRA), ENTER, reply("xhigh")] + config_line + [EXIT, reply("medium")]
+    cmd = launch(tmp_path, lines)
+    assert f"--resume {U1}" in cmd and has_no_effort_flag(cmd), cmd
+    home, t = write_transcript(tmp_path, lines, home_name="h2")
+    assert _mod().last_effort(str(t)) == "medium"
+
+
+def test_a_bare_exit_attachment_means_no_flag(tmp_path):
+    assert has_no_effort_flag(launch(tmp_path, [cmd_out(ULTRA), prompt("hi"), EXIT]))
+
+
+@pytest.mark.parametrize("enter", [ENTER, SPARSE], ids=["full", "sparse"])
+def test_ultracode_turned_on_without_a_command_is_restored(tmp_path, enter):
+    assert launch(tmp_path, [prompt("hi"), enter, reply("xhigh"), FILLER]).endswith(ULTRA_FLAG)
+    # the owner's b36f2fd1 case: a saved level earlier, ultracode switched on in /config
+    assert launch(tmp_path, [cmd_out(MEDIUM), reply("medium"), enter, reply("xhigh")],
+                  home_name="h2").endswith(ULTRA_FLAG)
+
+
+def test_the_newest_of_command_and_attachment_wins(tmp_path):
+    # /effort medium after ultracode had been on: the command is newer
+    assert has_no_effort_flag(launch(tmp_path, [ENTER, reply("xhigh"), cmd_out(MEDIUM)]))
+    # /effort ultracode and a restart before the next turn wrote its attachment
+    assert launch(tmp_path, [ENTER, EXIT, reply("medium"), cmd_out(ULTRA)],
+                  home_name="h2").endswith(ULTRA_FLAG)
+    # ultracode on again after an exit
+    assert launch(tmp_path, [ENTER, EXIT, reply("medium"), SPARSE, reply("xhigh")],
+                  home_name="h3").endswith(ULTRA_FLAG)
+
+
+def test_an_older_enter_does_not_outlive_a_later_exit(tmp_path):
+    lines = [ENTER, reply("xhigh"), EXIT] + [FILLER] * 5
+    assert has_no_effort_flag(launch(tmp_path, lines))
+
+
+@pytest.mark.parametrize("fake", [
+    attachment("ultra_effort_enter", sidechain=True, reminderType="full"),   # a subagent's
+    tool_result('{"type":"attachment","attachment":{"type":"ultra_effort_enter"}}'),   # a grep
+    assistant('"attachment":{"type":"ultra_effort_enter","reminderType":"full"}'),
+    dumps({"type": "user", "isSidechain": False, "attachment": {"type": "ultra_effort_enter"}}),
+    dumps({"type": "attachment", "isSidechain": False, "attachment": "ultra_effort_enter"}),
+])
+def test_an_enter_that_is_not_a_real_attachment_is_ignored(tmp_path, fake):
+    assert has_no_effort_flag(launch(tmp_path, [cmd_out(MEDIUM), fake, FILLER]))
+
+
+def test_an_exit_that_is_not_a_real_attachment_is_ignored(tmp_path):
+    fakes = [attachment("ultra_effort_exit", sidechain=True),
+             tool_result('{"type":"attachment","attachment":{"type":"ultra_effort_exit"}}')]
+    assert launch(tmp_path, [cmd_out(ULTRA), ENTER] + fakes).endswith(ULTRA_FLAG)
+
+
+# max leaves no attachment; the replies after it show whether it still held
+def test_max_changed_in_config_is_not_restored(tmp_path):
+    lines = [cmd_out(MAX), reply("max"), cmd_out(SET_MODEL_CONFIG), reply("medium")]
+    assert has_no_effort_flag(launch(tmp_path, lines))
+    assert has_no_effort_flag(launch(tmp_path, [cmd_out(MAX), reply("max"), reply("high")],
+                                     home_name="h2"))                  # Alt+P: no line at all
+
+
+def test_max_that_still_held_is_restored(tmp_path):
+    assert launch(tmp_path, [cmd_out(MAX), reply("max"), FILLER]).endswith("--effort max")
+    # restarted before any reply: the command is the newest word
+    assert launch(tmp_path, [reply("medium"), cmd_out(MAX)], home_name="h2").endswith("--effort max")
+
+
+def test_max_set_without_a_command_is_restored(tmp_path):
+    assert launch(tmp_path, [cmd_out(MEDIUM), reply("medium"), reply("max")]).endswith("--effort max")
+
+
+def test_max_after_ultracode_survives_the_exit_it_causes(tmp_path):
+    lines = [cmd_out(ULTRA), ENTER, reply("xhigh"), cmd_out(MAX), prompt("go"), EXIT, reply("max")]
+    cmd = launch(tmp_path, lines)
+    assert cmd.endswith("--effort max") and "--settings" not in cmd, cmd
+    lines = [cmd_out(ULTRA), ENTER, reply("xhigh"), cmd_out(MAX), EXIT]      # no reply yet
+    assert launch(tmp_path, lines, home_name="h2").endswith("--effort max")
+
+
+@pytest.mark.parametrize("other", [
+    reply("medium", sidechain=True),                                   # a subagent's reply
+    reply(None),                                                       # no effort stamped
+    dumps({"type": "assistant", "isSidechain": False, "message": {"model": "<synthetic>",
+          "role": "assistant", "content": [{"type": "text", "text": "API Error"}]},
+          "isApiErrorMessage": True, "perTurnEffort": None}),          # a synthetic error line
+    tool_result('{"type":"assistant","effort":"medium"}'),
+    assistant('{"type":"assistant","effort":"medium"}'),
+])
+def test_only_a_real_reply_can_overrule_max(tmp_path, other):
+    assert launch(tmp_path, [cmd_out(MAX), reply("max"), other]).endswith("--effort max")
+
+
+def test_a_reply_written_with_spaced_json_still_counts(tmp_path):
+    spaced = json.dumps(json.loads(reply("medium")))                   # '"effort": "medium"'
+    assert has_no_effort_flag(launch(tmp_path, [cmd_out(MAX), reply("max"), spaced]))
+
+
+def test_ultracode_replies_run_at_xhigh_and_do_not_hide_it(tmp_path):
+    assert launch(tmp_path, [cmd_out(ULTRA), prompt("hi"), reply("xhigh")] * 3).endswith(ULTRA_FLAG)
+
+
+def test_the_scan_still_stops_early_with_attachments(tmp_path, monkeypatch):
+    earlier = [FILLER] * 4000                                          # ~8 MB before
+    home, t = write_transcript(tmp_path, earlier + [SPARSE, reply("xhigh"), FILLER])
+    m = _mod()
+    read = []
+    real = m._read_at
+    monkeypatch.setattr(m, "_read_at", lambda f, pos, n: read.append(n) or real(f, pos, n))
+    assert m.last_effort(str(t)) == "ultracode"
+    assert sum(read) <= 2 * m.EFFORT_CHUNK, sum(read)
+    read.clear()
+    home, t = write_transcript(tmp_path, earlier + [cmd_out(ULTRA), EXIT, reply("medium")],
+                               home_name="h2")
+    assert m.last_effort(str(t)) == "medium"
+    assert sum(read) <= 2 * m.EFFORT_CHUNK, sum(read)
 
 
 # ── only a real command record counts ───────────────────────────────────────

@@ -233,8 +233,8 @@ def active():
 
 # ── pane command ────────────────────────────────────────────────────────────
 def slug(cwd):
-    """Claude's project-dir name for a cwd: every non-alphanumeric char -> '-'."""
-    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    """Claude's project-dir name for a cwd (library.cwd_slug: UTF-16, 200-char cap)."""
+    return library.cwd_slug(cwd)
 
 
 def effective_cwd(e):
@@ -245,15 +245,20 @@ def effective_cwd(e):
 
 
 def transcript_path(home, cwd, u):
-    return os.path.join(home, ".claude", "projects", slug(cwd), f"{u}.jsonl")
+    return library.transcript_file(os.path.join(home, ".claude", "projects"), cwd, u)
 
 
 # ── the terminal's own session-only effort ──────────────────────────────────
 # Claude Code saves /effort low|medium|high|xhigh as the default for new sessions,
 # so those come back on their own. ultracode and max are "this session only": a
-# plain --resume drops them. The terminal's last choice is in its transcript as
-# the command's output record; relaunch with it (never any other level — launch
-# stays a bare --resume otherwise).
+# plain --resume drops them. Relaunch with the one the terminal ended at (never
+# any other level — launch stays a bare --resume otherwise). The transcript shows
+# it three ways, the newest evidence wins:
+#   - a slash command's output record (/effort, the /model picker);
+#   - an ultra_effort_enter / ultra_effort_exit attachment, written on the next
+#     user turn after ultracode goes on or off, whatever turned it (/config,
+#     the Alt+P picker and Remote Control print no effort text);
+#   - the effort every model reply is stamped with (max has no attachment).
 EFFORT_FLAGS = {"ultracode": ("--settings", '{"ultracode":true}'), "max": ("--effort", "max")}
 EFFORT_CHUNK = 256 * 1024          # bytes read per step, from the end of the file
 EFFORT_MAX_LINE = 1024 * 1024      # a command record is ~600 bytes; longer lines are output
@@ -285,23 +290,44 @@ def effort_from_output(text):
     return None
 
 
-def _record_effort(line):
-    """Effort set by one transcript line (bytes), or None. Only a real command
-    record counts: type user, not a sidechain, content a string that starts with
-    the command-output tag. The same words in a tool result or a reply do not."""
-    if _STDOUT.encode() not in line or not (b"ffort" in line or b"EFFORT" in line):
+_ULTRA_ATTACHMENTS = {"ultra_effort_enter": True, "ultra_effort_exit": False}
+
+
+def _record_effort(line, replies=True):
+    """What one transcript line (bytes) says about the effort, or None:
+      ("command", level)  a slash command's output set `level`;
+      ("ultracode", bool) an ultra_effort_enter / _exit attachment;
+      ("reply", level)    a model reply ran at `level` (only when `replies`).
+    Only real records of the main chain count (not a sidechain; a command record
+    is a user line whose content is a string starting with the output tag). The
+    same words inside a tool result or a reply's text are not a record."""
+    command = _STDOUT.encode() in line and (b"ffort" in line or b"EFFORT" in line)
+    attach = b"ultra_effort_" in line
+    reply = replies and b'"effort"' in line and b'"assistant"' in line
+    if not (command or attach or reply):
         return None
     try:
         d = json.loads(line)
     except (ValueError, RecursionError):
         return None
-    if not isinstance(d, dict) or d.get("type") != "user" or d.get("isSidechain"):
+    if not isinstance(d, dict) or d.get("isSidechain"):
+        return None
+    kind = d.get("type")
+    if kind == "attachment":
+        a = d.get("attachment")
+        on = _ULTRA_ATTACHMENTS.get(a.get("type")) if isinstance(a, dict) else None
+        return None if on is None else ("ultracode", on)
+    if kind == "assistant":
+        e = d.get("effort")
+        return ("reply", e.lower()) if replies and isinstance(e, str) and e else None
+    if kind != "user":
         return None
     msg = d.get("message")
     c = msg.get("content") if isinstance(msg, dict) else None
     if not isinstance(c, str) or not c.startswith(_STDOUT):
         return None
-    return effort_from_output(c)
+    level = effort_from_output(c)
+    return ("command", level) if level else None
 
 
 def _read_at(f, pos, n):
@@ -334,10 +360,30 @@ def _lines_from_end(f, size, chunk):
         yield carry
 
 
+def _effort_at_end(events):
+    """The effort a session ended at, from its effort events newest first:
+    'ultracode' if the newest ultracode evidence (a command or an attachment)
+    says on; otherwise the newest level (a command or a reply), or None.
+    Stops reading as soon as the answer is known."""
+    ultra = level = None
+    for kind, v in events:
+        if kind == "ultracode":
+            ultra = v if ultra is None else ultra
+        elif kind == "reply":
+            level = v if level is None else level
+        else:                                      # a command answers both
+            ultra = (v == "ultracode") if ultra is None else ultra
+            level = ("xhigh" if v == "ultracode" else v) if level is None else level
+        if ultra or (ultra is False and level is not None):
+            break
+    return "ultracode" if ultra else level
+
+
 def last_effort(path, chunk=None):
-    """The terminal's most recent effort choice in transcript `path`, or None
-    (no choice, or the file cannot be read). Reads backwards, stops at the first
-    hit; never blocks on a FIFO."""
+    """The effort the terminal ended at, as its transcript `path` shows it
+    ('ultracode', 'max', 'medium', …), or None (no sign, or the file cannot be
+    read). Reads backwards, stops once the newest evidence settles it; never
+    blocks on a FIFO."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
     except OSError:
@@ -351,11 +397,18 @@ def last_effort(path, chunk=None):
         os.close(fd)
         return None
     with os.fdopen(fd, "rb") as f:
-        for line in _lines_from_end(f, st.st_size, chunk or EFFORT_CHUNK):
-            level = _record_effort(line)
-            if level:
-                return level
-    return None
+        return _effort_at_end(_effort_events(f, st.st_size, chunk or EFFORT_CHUNK))
+
+
+def _effort_events(f, size, chunk):
+    """_record_effort over f's lines, last first. Once a level is known (a reply
+    or a command), older replies no longer matter and are not parsed."""
+    replies = True
+    for line in _lines_from_end(f, size, chunk):
+        ev = _record_effort(line, replies)
+        if ev:
+            replies = replies and ev[0] == "ultracode"
+            yield ev
 
 
 def effort_flags(path):

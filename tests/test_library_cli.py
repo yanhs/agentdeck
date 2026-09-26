@@ -192,6 +192,86 @@ def test_slug_matches_claude_project_dirs():
     assert m.slug("/tmp/claude-1000/-home-ubuntu-pr/x") == "-tmp-claude-1000--home-ubuntu-pr-x"
 
 
+# Claude Code 2.1.283's own names (qx): the regex runs over UTF-16 code units, so
+# a character above U+FFFF becomes "--"; past 200 chars the name is cut and
+# "-" + base-36 of |Java string hash| of the cwd is appended. Values from node.
+CLAUDE_DIR_NAMES = [
+    ("/home/ubuntu/pr/Светлота 💡 (Rus)", "-home-ubuntu-pr--------------Rus-"),
+    ("/" + "b" * 199, "-" + "b" * 199),                                 # 200: not cut
+    ("/" + "b" * 200, "-" + "b" * 199 + "-86ms41"),
+    ("/home/ubuntu/" + "deep/" * 45 + "end",
+     ("-home-ubuntu-" + "deep-" * 45 + "end")[:200] + "-cqcn6p"),
+]
+
+
+@pytest.mark.parametrize("cwd,name", CLAUDE_DIR_NAMES)
+def test_slug_is_claudes_name_for_emoji_and_long_paths(cwd, name):
+    assert _mod().slug(cwd) == name
+    assert library.cwd_slug(cwd) == name                               # one rule, both modules
+
+
+@pytest.mark.skipif(not __import__("shutil").which("node"), reason="needs node")
+def test_slug_agrees_with_claudes_own_code_on_random_paths():
+    import random
+    rnd = random.Random(7)
+    alphabet = "abcXYZ019/._- ~é€Ωж日💡😀\U0001f9ea"
+    cwds = ["/" + "".join(rnd.choice(alphabet) for _ in range(rnd.randint(1, 260)))
+            for _ in range(300)]
+    js = ("function KJ(t){let e=0;for(let n=0;n<t.length;n++)e=(e<<5)-e+t.charCodeAt(n)|0;return e}"
+          "function qx(e){let n=e.replace(/[^a-zA-Z0-9]/g,'-');if(n.length<=200)return n;"
+          "return `${n.slice(0,200)}-${Math.abs(KJ(e)).toString(36)}`}"
+          "const a=JSON.parse(require('fs').readFileSync(0,'utf8'));"
+          "process.stdout.write(JSON.stringify(a.map(qx)))")
+    r = subprocess.run(["node", "-e", js], input=json.dumps(cwds), capture_output=True,
+                       text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    m = _mod()
+    assert [m.slug(c) for c in cwds] == json.loads(r.stdout)
+
+
+def test_pane_command_resumes_a_topic_in_an_emoji_folder(tmp_path):
+    m = _mod()
+    cwd = tmp_path / "Светлота 💡 (Rus)"
+    cwd.mkdir()
+    name = "".join(c if c.isascii() and c.isalnum() else "-" * (len(c.encode("utf-16-le")) // 2)
+                   for c in str(cwd))
+    t = tmp_path / "h" / ".claude" / "projects" / name / f"{U1}.jsonl"
+    t.parent.mkdir(parents=True)
+    t.write_text("{}\n")
+    e = {"id": "aaaaaaaa", "uuid": U1, "name": "x", "cwd": str(cwd)}
+    cmd = m.pane_command(e, home=str(tmp_path / "h"), claude_bin="/opt/claude")
+    assert f"--resume {U1}" in cmd, cmd
+
+
+def test_transcript_path_of_a_long_cwd_finds_claudes_folder(tmp_path):
+    m = _mod()
+    home = tmp_path / "h"
+    cwd = "/home/ubuntu/" + "deep/" * 45 + "end"
+    exact = m.transcript_path(str(home), cwd, U1)
+    assert os.path.basename(os.path.dirname(exact)) == CLAUDE_DIR_NAMES[3][1]
+    # Claude also accepts another hash after the same 200 chars (it globs for it)
+    other = home / ".claude" / "projects" / (CLAUDE_DIR_NAMES[3][1][:200] + "-zz9") / f"{U1}.jsonl"
+    other.parent.mkdir(parents=True)
+    other.write_text("{}\n")
+    assert m.transcript_path(str(home), cwd, U1) == str(other)
+    assert m.transcript_path(str(home), cwd, U2).endswith(
+        CLAUDE_DIR_NAMES[3][1] + f"/{U2}.jsonl")                        # none: the exact path
+    os.makedirs(os.path.dirname(exact))
+    with open(exact, "w") as f:
+        f.write("{}\n")
+    assert m.transcript_path(str(home), cwd, U1) == exact              # the exact one first
+
+
+def test_transcript_path_of_a_short_cwd_never_globs(tmp_path):
+    m = _mod()
+    home = tmp_path / "h"
+    stray = home / ".claude" / "projects" / "-home-ubuntu-pr-x" / f"{U1}.jsonl"
+    stray.parent.mkdir(parents=True)
+    stray.write_text("{}\n")
+    assert m.transcript_path(str(home), "/home/ubuntu/pr", U1) == str(
+        home / ".claude" / "projects" / "-home-ubuntu-pr" / f"{U1}.jsonl")
+
+
 def test_pane_command_session_id_when_no_transcript(tmp_path):
     m = _mod()
     e = {"id": "aaaaaaaa", "uuid": U1, "name": "x", "cwd": str(tmp_path)}

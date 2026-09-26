@@ -107,9 +107,10 @@ on one VPS.
   too; clicking an archived terminal restores it and opens it.
 - **Persistent sessions.** An agent keeps running after you **close the tab, close the
   browser, or disconnect**. Opening it again (or after a restart) resumes the exact same
-  conversation via `claude --resume`. Nothing is lost. A terminal set to `/effort ultracode`
-  or `/effort max` (Claude Code keeps those for one session only) comes back with the same
-  effort: AgentDeck reads its last `/effort` choice from the transcript.
+  conversation via `claude --resume`. Nothing is lost. A terminal running in ultracode or at
+  max effort (Claude Code keeps those for one session only) comes back the same way:
+  AgentDeck reads from the transcript the effort it ended at, whether it was set with
+  `/effort`, `/model`, `/config` or the Alt+P picker.
 - **Only what you use stays in memory.** At most 12 terminals are loaded at once
   (`AGENTDECK_MAX_ACTIVE`). Opening one more unloads the least recently used idle one. The
   **idle reaper** also unloads terminals that printed nothing for 2 hours (archived ones:

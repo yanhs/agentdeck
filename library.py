@@ -17,6 +17,7 @@ locks and replaces the file atomically); scripts read it.
 """
 import contextlib
 import fcntl
+import glob
 import json
 import os
 import re
@@ -173,10 +174,47 @@ def claude_projects_root():
             or os.path.join(os.path.expanduser("~"), ".claude", "projects"))
 
 
+SLUG_MAX = 200                     # Claude Code cuts longer project-dir names
+
+
+def _utf16_units(s):
+    b = s.encode("utf-16-le", "surrogatepass")
+    return [int.from_bytes(b[i:i + 2], "little") for i in range(0, len(b), 2)]
+
+
 def cwd_slug(cwd):
-    """Claude's project-dir name for a cwd: every non-alphanumeric char -> '-'
-    (same rule as library_cli.slug; '/' -> '-' is the common case)."""
-    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    """Claude Code's project-dir name for a cwd (its qx() in 2.1.283): every
+    non-alphanumeric UTF-16 code unit -> '-' (so an emoji becomes '--'); a name
+    over 200 chars is cut and gets '-' + base 36 of |Java string hash of cwd|."""
+    units = _utf16_units(cwd)
+    name = "".join(chr(u) if chr(u).isascii() and chr(u).isalnum() else "-" for u in units)
+    if len(name) <= SLUG_MAX:
+        return name
+    h = 0
+    for u in units:                                # (h << 5) - h + u, as a signed int32
+        h = (h * 31 + u) & 0xFFFFFFFF
+    h = abs(h - (1 << 32) if h >= 1 << 31 else h)
+    digits = ""
+    while True:
+        h, r = divmod(h, 36)
+        digits = "0123456789abcdefghijklmnopqrstuvwxyz"[r] + digits
+        if not h:
+            break
+    return f"{name[:SLUG_MAX]}-{digits}"
+
+
+def transcript_file(projects_root, cwd, u):
+    """<projects_root>/<cwd_slug(cwd)>/<u>.jsonl. For a cut (over-200) name,
+    Claude also accepts any '<first 200 chars>-*' folder, so the file is looked
+    for there too; the exact path is returned when there is none anywhere."""
+    exact = os.path.join(projects_root, cwd_slug(cwd), f"{u}.jsonl")
+    name = os.path.basename(os.path.dirname(exact))
+    if len(name) <= SLUG_MAX or os.path.lexists(exact):
+        return exact
+    found = sorted(glob.glob(os.path.join(glob.escape(projects_root),
+                                          glob.escape(name[:SLUG_MAX]) + "-*",
+                                          glob.escape(f"{u}.jsonl"))))
+    return found[0] if found else exact
 
 
 def _free_name(path):
@@ -200,7 +238,7 @@ def trash_transcript(e, lib_file=None, projects_root=None):
     cwd = e.get("cwd")
     if not isinstance(cwd, str) or not cwd:
         return None
-    src_dir = os.path.join(projects_root or claude_projects_root(), cwd_slug(cwd))
+    src_dir = os.path.dirname(transcript_file(projects_root or claude_projects_root(), cwd, u))
     trash = os.path.join(os.path.dirname(os.path.abspath(lib_file or LIB_FILE)), "trash")
     out = None
     for name in (f"{u}.jsonl", u):
