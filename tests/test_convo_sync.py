@@ -268,6 +268,35 @@ def test_a_claude_on_its_own_terminal_inside_a_pane_does_not_count(w):
     assert w.cs.pane_conversations(w.run) == {"cs-" + A: UA}
 
 
+def _pane_pids(w, name):
+    r = w.run("list-panes", "-s", "-t", "=" + name, "-F", "#{pane_id}\t#{pane_pid}")
+    return [int(l.split("\t")[1]) for l in r.stdout.splitlines()]
+
+
+@pytest.mark.parametrize("how", ["split-window", "new-window"])
+def test_a_claude_in_another_pane_of_the_session_is_not_the_terminals(w, how):
+    # review 2026-09-26: someone (the owner, or the pane's Claude through its Bash
+    # tool — $TMUX points at cs-A) opens a second pane in the terminal and starts
+    # another interactive Claude there. It is started later, on its own pane's tty,
+    # and its parent chain ends at a pane of cs-A — but the terminal's conversation
+    # is the Claude in the pane AgentDeck started, not this one.
+    w.add(UA)
+    w.transcript(UA)
+    first = w.start("cs-" + A)
+    w.pidfile(first, UA)
+    time.sleep(0.05)                                     # a later start (clock ticks)
+    target = f"=cs-{A}:" if how == "new-window" else f"=cs-{A}:0"
+    r = w.run(how, "-d", "-t", target, "sleep", "600")
+    assert r.returncode == 0, r.stderr
+    other = wait_for(lambda: [p for p in _pane_pids(w, "cs-" + A) if p != first])[0]
+    w.pidfile(other, UC)
+    assert int(start_time(other)) > int(start_time(first))
+    assert w.cs.pane_conversations(w.run) == {"cs-" + A: UA}
+    assert w.sync() == []
+    assert w.names() == ["cs-" + A]
+    assert [e["id"] for e in w.reg()["sessions"]] == [A]
+
+
 # ── sync ────────────────────────────────────────────────────────────────────
 def test_consent_case_renames_and_keeps_the_client_attached(w):
     w.add(UA, pos=1)
@@ -302,6 +331,20 @@ def test_after_clear_old_conversation_stays_as_an_unloaded_row(w):
     assert b["uuid"] == UB and b["name"] == "Deploy" and b["pos"] == 0 and b["prev_id"] == A
     assert a["uuid"] == UA and a["name"] == "Deploy (earlier)" and "pos" not in a
     assert "aliases" not in b
+
+
+def test_clear_after_a_huge_first_prompt_keeps_the_old_conversation(w):
+    # review 2026-09-26: a first prompt longer than the transcript scan (4 MB)
+    w.add(UA)
+    p = Path(library.transcript_file(str(w.projects), str(w.work), UA))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"type": "user", "message": {
+        "role": "user", "content": "x" * (library.TRANSCRIPT_SCAN_MAX + 1024)}}) + "\n")
+    w.pidfile(w.start("cs-" + A), UB)
+    assert w.sync() == [(A, B)]
+    a = w.entry(A)
+    assert a is not None and a["uuid"] == UA and a["name"] == "Deploy (earlier)"
+    assert w.entry(B)["prev_id"] == A
 
 
 def test_transcript_found_when_the_entry_folder_differs(w, tmp_path):

@@ -2105,10 +2105,19 @@
         render();
         syncSel();
         // the open terminal took a new number: follow it (a tmux re-attach —
-        // the terminal's process is not touched)
+        // the terminal's process is not touched). All the way: a background tab
+        // (its timers slowed to one a minute) can see two switches in one poll
+        // (/clear, work, /clear); stopping at the first would open that earlier
+        // row anew. Each step is a switch newer than the one before, so /resume
+        // back and forth cannot loop.
         if (ID_RE.test(sel || '')) {
-          const sw = switchedFrom(sel);
-          if (sw && sw.switched_at > _selSwitchSeen) pick(sw.id);
+          let cur = sel, seen = _selSwitchSeen;
+          for (let i = 0; i < 8; i++) {
+            const sw = switchedFrom(cur);
+            if (!sw || (cur === sel ? sw.switched_at <= seen : sw.switched_at < seen)) break;
+            cur = sw.id; seen = sw.switched_at;
+          }
+          if (cur !== sel) pick(cur);
         }
         if (_pendingOpen) { const id = _pendingOpen; _pendingOpen = null; openTerminalById(id); }
       } catch {}

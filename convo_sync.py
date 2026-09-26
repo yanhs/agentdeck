@@ -24,7 +24,9 @@ Which pane a Claude belongs to comes from the process tree, not from the file's
 Claude started (after our own rename it is stale — seen on the probe). A file
 counts when its pid is alive and still the Claude that wrote it (`procStart` =
 field 22 of /proc/<pid>/stat), it is an interactive CLI Claude, and walking up its
-parents reaches a cs-<id> pane whose terminal it runs on (same controlling tty: a
+parents reaches the first pane of a cs-<id> session — the one AgentDeck started; a
+Claude in a pane opened later in the session (split-window, new-window) is not the
+terminal's — whose terminal it runs on (same controlling tty: a
 Claude that some command in the pane started on a pty of its own, e.g. under
 `script`, is not the terminal's conversation). Two files on one pane (Claude
 relaunched as a child of itself): the later-started one is the live one.
@@ -148,18 +150,40 @@ def _default_run(*args):
                           capture_output=True, text=True, env=env, timeout=15)
 
 
-def pane_conversations(run=None, files=None):
-    """{"cs-<id>": uuid of the conversation live in that pane}, for the library
-    panes whose Claude has a live pid file. One tmux call."""
+_PANE_ID = re.compile(r"%(\d+)")
+
+
+def terminal_panes(run=None):
+    """{pane pid: "cs-<id>"} — the pane AgentDeck started in each library session:
+    its first pane (the lowest pane id; tmux numbers panes in creation order,
+    server-wide). A pane opened later in the session (split-window, new-window —
+    by hand, or by the pane's Claude through its Bash tool, where $TMUX points at
+    this session) is not the terminal, and a Claude started there is not its
+    conversation. One tmux call."""
     run = run or _default_run
-    r = run("list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}")
+    r = run("list-panes", "-a", "-F", "#{session_name}\t#{pane_id}\t#{pane_pid}")
     if getattr(r, "returncode", 1) != 0:
         return {}
-    panes = {}
+    first = {}
     for line in (r.stdout or "").splitlines():
-        name, _, pid = line.partition("\t")
-        if library.id_from_tmux(name) and pid.isdigit():
-            panes[int(pid)] = name
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        name, pane_id, pid = parts
+        m = _PANE_ID.fullmatch(pane_id)
+        if not (m and library.id_from_tmux(name) and pid.isdigit()):
+            continue
+        n = int(m.group(1))
+        if name not in first or n < first[name][0]:
+            first[name] = (n, int(pid))
+    return {pid: name for name, (_, pid) in first.items()}
+
+
+def pane_conversations(run=None, files=None):
+    """{"cs-<id>": uuid of the conversation live in that pane}, for the library
+    terminals (their first pane, see terminal_panes) whose Claude has a live pid
+    file. One tmux call."""
+    panes = terminal_panes(run)
     if not panes:
         return {}
     files = live_files() if files is None else files

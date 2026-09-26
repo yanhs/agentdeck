@@ -2381,3 +2381,29 @@ def test_open_terminal_follows_when_its_number_is_taken_over(page, api):
     assert page.inner_text("#tNum") == "eeee0010"
     assert page.query_selector(row("bbbb0002")) is None
     assert "sel" in page.get_attribute(row("eeee0010"), "class")
+
+
+def test_open_terminal_follows_two_switches_seen_in_one_poll(page, api):
+    # review 2026-09-26: the tab was in the background (browsers slow its timers to
+    # one a minute) while the terminal went on twice: /clear -> eeee0009, work,
+    # /clear -> ffff000a. Following one step re-armed the "seen" mark with the second
+    # switch, so the page stopped on eeee0009 — an earlier row, which opening then
+    # loads anew next to the terminal — instead of the terminal, ffff000a.
+    page.click(row("dddd0004") + " .proj")
+    _src_is(page, "dddd0004")
+    old = next(s for s in api.sessions if s["id"] == "dddd0004")
+    mid = dict(old, id="eeee0009", prev_id="dddd0004", switched_at=2000,
+               name=old["name"] + " (earlier)", active=False, attached=False, status="off")
+    new = dict(old, id="ffff000a", prev_id="eeee0009", switched_at=2001)
+    old.update(name=old["name"] + " (earlier)", active=False, attached=False, status="off")
+    api.sessions.extend([mid, new])                  # both in the same poll
+    _src_is(page, "ffff000a")
+    _after_next_poll(page, api)
+    assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=ffff000a"
+    assert page.inner_text("#tNum") == "ffff000a"
+    # picking the middle one on purpose afterwards sticks
+    page.click(row("eeee0009") + " .proj")
+    _src_is(page, "eeee0009")
+    _after_next_poll(page, api)
+    _after_next_poll(page, api)
+    assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=eeee0009"

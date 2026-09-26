@@ -263,12 +263,20 @@ def _is_message(d):
 def has_messages(path, limit=TRANSCRIPT_SCAN_MAX):
     """True when the transcript at `path` holds a conversation: a prompt or a
     model reply — not only summaries, snapshots, slash commands and their output.
-    Reads at most `limit` bytes; a missing or unreadable file is False."""
+    Reads at most `limit` bytes; a missing or unreadable file is False. A file
+    longer than that with no message in the part read is True: what has none —
+    a conversation that never was one, a fresh one after /clear — is a few short
+    records, while a first prompt can be one line longer than the scan (a pasted
+    log, an attached file), cut in the middle and so unreadable; wrongly False
+    would drop a real conversation from the list (switch())."""
     try:
         with open(path, "rb") as f:
-            data = f.read(limit)
+            data = f.read(limit + 1)
     except OSError:
         return False
+    longer = len(data) > limit
+    if longer:
+        data = data[:limit]
     for line in data.splitlines():
         if b'"user"' not in line and b'"assistant"' not in line:
             continue
@@ -278,7 +286,7 @@ def has_messages(path, limit=TRANSCRIPT_SCAN_MAX):
             continue
         if isinstance(d, dict) and _is_message(d):
             return True
-    return False
+    return longer
 
 
 # ── transcripts → trash (moved, never unlinked) ─────────────────────────────

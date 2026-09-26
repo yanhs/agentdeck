@@ -2619,3 +2619,93 @@ def test_selection_syncs_before_resolving(world, monkeypatch, tmp_path):
         assert library.find(library.load(world.lib), "aaaa1111")["name"] == "Deploy (earlier)"
     finally:
         subprocess.run([*tm, "kill-server"], capture_output=True)
+
+
+def test_selection_follows_two_switches_made_while_the_chat_was_quiet(world):
+    # review 2026-09-26: the chat picked aaaa1111; then, before its next message, the
+    # terminal went on twice (/clear after work, work, /clear again). Following one
+    # step at a time re-stamped the pick at "now", which is later than the second
+    # switch — the chat stopped on the middle conversation (an earlier row) and the
+    # next message loaded it anew instead of reaching the terminal.
+    world.add("Deploy", uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")
+    st = tb.load_state()
+    st["_picked"][str(CHAT)] = 50
+    tb.save_state(st)
+    with library.update(world.lib) as L:
+        library.switch(L, "aaaa1111", U2, True, now=100)      # /clear #1
+        library.switch(L, "bbbb2222", U3, True, now=200)      # /clear #2
+    assert tb.resolve_current(CHAT) == "c0ffee00"
+    assert tb.get_current(CHAT) == "c0ffee00"
+    # picking an earlier row on purpose afterwards still sticks
+    tb.set_current(CHAT, "bbbb2222")
+    assert tb.resolve_current(CHAT) == "bbbb2222"
+
+
+def test_a_message_goes_to_the_number_ensure_opened(world, monkeypatch):
+    # review 2026-09-26: the chat's sync is a "try" — skipped while an ensure holds the
+    # lock (a tab opening a terminal). ensure then syncs itself: the terminal
+    # aaaa1111 turns out to run bbbb2222 (consent relaunch), is renamed and ensure
+    # prints cs-bbbb2222. The bridge ignored that name and looked for cs-aaaa1111:
+    # "not Claude", message not sent.
+    world.add("Deploy", uuid=U1)
+    world.loaded.append("aaaa1111")
+    tb.set_current(CHAT, "aaaa1111")
+    plain = world.cli
+
+    def ensure_switches(*args, **kw):
+        if args[:2] == ("ensure", "aaaa1111"):
+            world.log.append(args)
+            with library.update(world.lib) as L:
+                library.switch(L, "aaaa1111", U2, False, now=int(_time.time()))
+            world.loaded[world.loaded.index("aaaa1111")] = "bbbb2222"
+            return _Proc(0, "cs-bbbb2222\n", "")
+        return plain(*args, **kw)
+    monkeypatch.setattr(tb, "run_library_cli", ensure_switches)
+    sink, streamed = _deliver(world, monkeypatch, "hello")
+    assert ("send", "cs-bbbb2222", "hello") in world.log, sink
+    assert streamed["session"] == "cs-bbbb2222" and streamed["aid"] == "bbbb2222"
+    assert streamed["path"].endswith(f"{U2}.jsonl")
+    assert tb.get_current(CHAT) == "bbbb2222"
+
+
+def test_a_pick_follows_the_number_ensure_opened_and_rereads_it(world, monkeypatch):
+    # the same on a pick (/use): the selection and the screen re-read after it go to
+    # the terminal's number now, not the one it had when the pick began
+    world.add("Deploy", uuid=U1)
+    world.loaded.append("aaaa1111")
+    plain = world.cli
+
+    def ensure_switches(*args, **kw):
+        if args[:2] == ("ensure", "aaaa1111"):
+            world.log.append(args)
+            with library.update(world.lib) as L:
+                library.switch(L, "aaaa1111", U2, False, now=int(_time.time()))
+            world.loaded[world.loaded.index("aaaa1111")] = "bbbb2222"
+            return _Proc(0, "cs-bbbb2222\n", "")
+        return plain(*args, **kw)
+    monkeypatch.setattr(tb, "run_library_cli", ensure_switches)
+    rec = _reread_env(world, monkeypatch)
+    sink = run_cmd_bg(tb.cmd_use, ["Deploy"])
+    assert tb.get_current(CHAT) == "bbbb2222"
+    assert sink[0][0].startswith("✅ Current terminal: «Deploy» · bbbb2222")   # its number now
+    assert "aaaa1111" not in sink[0][0]
+    assert any("the answer is 42" in t for t, _ in sink[1:]), sink   # the re-read came
+    assert rec["capture"] and all(s == "cs-bbbb2222" for s, _ in rec["capture"])
+    assert _nothing_typed(rec)
+
+
+def test_selection_follows_a_resume_back_without_looping(world):
+    # /clear (-> B), /clear (-> C), then /resume of the first conversation inside
+    # the terminal (-> A again): the chat that picked A before all that is on A
+    world.add("Deploy", uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")
+    st = tb.load_state()
+    st["_picked"][str(CHAT)] = 50
+    tb.save_state(st)
+    with library.update(world.lib) as L:
+        library.switch(L, "aaaa1111", U2, True, now=100)
+        library.switch(L, "bbbb2222", U3, True, now=150)
+        library.switch(L, "c0ffee00", U1, True, now=200)
+    assert library.find(library.load(world.lib), "aaaa1111")["prev_id"] == "c0ffee00"
+    assert tb.resolve_current(CHAT) == "aaaa1111"

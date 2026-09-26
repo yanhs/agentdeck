@@ -472,22 +472,26 @@ ENSURE_UNKNOWN = 2
 ENSURE_ELSEWHERE = 4
 
 
-def ensure_topic(sid: str) -> tuple[int, str]:
-    """`library_cli.py ensure <id>` → (exit code, its message). 0 = running now
-    (the message may say which idle topic was unloaded to make room); 2 = no such
-    topic / archived; 3 = every loaded topic is busy, nothing could be unloaded;
-    4 = this conversation already runs elsewhere (refused: never two Claudes on
-    one conversation)."""
+def ensure_topic(sid: str) -> tuple[int, str, str | None]:
+    """`library_cli.py ensure <id>` → (exit code, its message, the tmux session it
+    printed or None). 0 = running now (the message may say which idle topic was
+    unloaded to make room); 2 = no such topic / archived; 3 = every loaded topic is
+    busy, nothing could be unloaded; 4 = this conversation already runs elsewhere
+    (refused: never two Claudes on one conversation). The session is cs-<id>, or
+    the terminal's name now when its number changed (ensure syncs first: Claude's
+    consent relaunch, /clear or /resume — convo_sync)."""
     try:
         r = run_library_cli("ensure", sid, timeout=60)
     except (OSError, subprocess.SubprocessError) as ex:
-        return 1, f"library_cli failed: {ex}"
+        return 1, f"library_cli failed: {ex}", None
     msg = _clip(r.stderr)
     if r.returncode == ENSURE_ELSEWHERE:
         # the caller says what that means for it (a pick, or a message not sent)
         msg = ("this conversation is already open elsewhere (another terminal) — not "
                "starting a second Claude on it" + (f"\n({msg})" if msg else ""))
-    return r.returncode, msg
+    lines = (r.stdout or "").split() if r.returncode == 0 else []
+    name = lines[-1] if lines and library.id_from_tmux(lines[-1]) else None
+    return r.returncode, msg, name
 
 
 def pane_is_claude(sid, session: str) -> bool:
@@ -573,13 +577,32 @@ async def _load_topic(sid: str) -> tuple[str | None, str, int]:
         return None, "it is in the archive — pick it in /archive to restore it", ENSURE_UNKNOWN
     name = library.tmux_name(sid)
     was = await asyncio.to_thread(has_session, name)
-    code, msg = await asyncio.to_thread(ensure_topic, sid)
+    code, msg, printed = await asyncio.to_thread(ensure_topic, sid)
     if code != 0:
         log.info("ENSURE %s -> exit %s: %s", name, code, msg[:200])
         return None, msg or f"library_cli ensure: exit code {code}", code
+    if printed and printed != name:
+        # the terminal took its live conversation's number (ensure synced): that
+        # session is the terminal — cs-<sid> is gone (see now_topic)
+        log.info("ENSURE %s -> %s (the terminal's conversation changed)", name, printed)
+        name = printed
     if not was:
         _fresh[name] = time.monotonic()
     return name, msg, 0
+
+
+def now_topic(chat_id: int, sid: str, session: str | None) -> str:
+    """After _load_topic: the terminal's number now. When ensure opened the
+    terminal under another number (its conversation changed), the chat's
+    selection moves there — messages, the transcript read and the stream all
+    use it."""
+    new = library.id_from_tmux(session or "")
+    if new is None or new == sid or not is_topic(sid):
+        return sid
+    log.info("FOLLOW chat=%s %s -> %s (ensure opened it under its live number)",
+             chat_id, sid, new)
+    set_current(chat_id, new)
+    return new
 
 
 def sync_numbers() -> None:
@@ -593,22 +616,33 @@ def sync_numbers() -> None:
         log.info("SYNC failed: %s", _clip(ex, 200))
 
 
-def _followed(chat_id: int, cur: str) -> str | None:
-    """The terminal the chat's topic `cur` became, or None: an old number that is
-    now an alias; or a switch away from `cur` since the chat picked it (the same
-    second counts: both are whole seconds). A /clear leaves the earlier
-    conversation in the list — picking that one on purpose afterwards sticks."""
+def _picked_at(chat_id: int) -> int:
+    """When the chat made its selection (set_current), 0 if unknown."""
+    picked = (load_state().get("_picked") or {}).get(str(chat_id))
+    return picked if isinstance(picked, (int, float)) else 0
+
+
+def _followed(cur: str, since: float) -> tuple[str, float] | None:
+    """The terminal the chat's topic `cur` became, or None, with the time to
+    follow on from: an old number that is now an alias (time unchanged); or the
+    latest switch away from `cur` made at or after `since` (the same second
+    counts: both are whole seconds) and that switch's time — so a chain goes
+    forward in time only (/resume back and forth cannot loop). A /clear leaves
+    the earlier conversation in the list — picking that one on purpose
+    afterwards sticks (its pick is later than the switch)."""
     try:
         lib = _load_lib()
     except LIB_ERRORS:
         return None
     if library.find(lib, cur) is None:
         e = library.find_or_alias(lib, cur)
-        return e["id"] if e is not None else None
-    picked = (load_state().get("_picked") or {}).get(str(chat_id)) or 0
+        return (e["id"], since) if e is not None else None
     nxt = [e for e in lib["sessions"] if e.get("prev_id") == cur and e["id"] != cur
-           and isinstance(e.get("switched_at"), (int, float)) and e["switched_at"] >= picked]
-    return max(nxt, key=lambda e: e["switched_at"])["id"] if nxt else None
+           and isinstance(e.get("switched_at"), (int, float)) and e["switched_at"] >= since]
+    if not nxt:
+        return None
+    e = max(nxt, key=lambda e: e["switched_at"])
+    return e["id"], e["switched_at"]
 
 
 def resolve_current(chat_id: int) -> str | None:
@@ -623,13 +657,19 @@ def resolve_current(chat_id: int) -> str | None:
             return e["id"]
     if cur and is_topic(cur):
         sync_numbers()
-        for _ in range(8):                         # a chain of switches, bounded
-            nxt = _followed(chat_id, cur)
-            if nxt is None or nxt == cur:
+        # a chain of switches since the pick (e.g. two /clears while the chat was
+        # quiet): each step is a switch made after the chat's own pick and after
+        # the step before — a step followed here is not a pick of the middle
+        # conversation (set_current would stamp it "now", after the next switch)
+        since, start = _picked_at(chat_id), cur
+        for _ in range(8):                         # bounded
+            step = _followed(cur, since)
+            if step is None or step[0] == cur:
                 break
             log.info("FOLLOW chat=%s %s -> %s (the terminal's conversation changed)",
-                     chat_id, cur, nxt)
-            cur = nxt
+                     chat_id, cur, step[0])
+            cur, since = step
+        if cur != start:
             set_current(chat_id, cur)
     return cur
 
@@ -1507,8 +1547,14 @@ def _after_pick(chat_id: int, send, aid, new: bool = False) -> None:
     """Re-read the picked session by itself, in the background: the pick's
     answer goes out at once, the screen follows once Claude is up. One re-read
     per chat: a newer pick cancels the older pick's re-read, and the same pick
-    again right away (a double tap) does not send the screen twice."""
+    again right away (a double tap) does not send the screen twice. A topic
+    picked by a number it no longer has (an old button, or ensure found the
+    terminal's conversation changed) is re-read under the chat's selection, which
+    the pick set to the terminal's number now."""
     aid, now = str(aid), time.monotonic()
+    cur = get_current(chat_id)
+    if is_topic(aid) and cur and is_topic(cur) and cur != aid:
+        aid = cur
     prev = _auto_reads.get(chat_id)
     if prev is not None:
         p_aid, p_t0, p_task = prev
@@ -1734,6 +1780,10 @@ async def _apply_topic(chat_id: int, e: dict, restored: bool = False) -> str:
         nxt = ("Close it there, then pick it again." if code == ENSURE_ELSEWHERE
                else "The next message will try again.")
         return head + f"\n⚠️ couldn't load: {msg}\n{nxt}"
+    new = now_topic(chat_id, sid, name)
+    if new != sid:                                 # one number: say the one it has now
+        e2 = topic_entry(new, include_archived=True)
+        head = head.replace(name_label(e), name_label(e2) if e2 else new, 1)
     slot = legacy_slot_of(name)
     if slot:
         return head + f"\n🟢 runs in the old terminal #{slot} ({name}) — messages go there"
@@ -2114,6 +2164,9 @@ async def _deliver_to_terminal(reply_to, chat_id: int, text: str) -> None:
         if session is None:
             tail = " Close it there or write there." if code == ENSURE_ELSEWHERE else ""
             await reply_to.reply_text(f"⚠️ {label}: {note}\nMessage not sent.{tail}"); return
+        new = now_topic(chat_id, cur, session)
+        if new != cur:                             # the terminal's number now
+            cur, label = new, target_label(new)
         if note:
             await reply_to.reply_text(f"ℹ️ {note}")
     else:

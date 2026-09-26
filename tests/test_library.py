@@ -579,6 +579,26 @@ def test_a_conversation_holding_only_slash_commands_has_no_messages(tmp_path):
     assert lib.has_messages(str(p)) is True
 
 
+def test_a_transcript_longer_than_the_scan_is_a_conversation(tmp_path):
+    # review 2026-09-26: the first prompt is one line longer than the scan (a pasted
+    # log, an attached file). Cut mid-line it is not JSON, so nothing was found and
+    # the conversation counted as "never one": /clear then turned its row into the
+    # new conversation and the old one vanished from the list.
+    p = tmp_path / "t.jsonl"
+    p.write_text(json.dumps({"type": "user", "message": {"role": "user",
+                                                          "content": "x" * 5000}}) + "\n")
+    assert lib.has_messages(str(p), limit=1000) is True
+    # records that are not messages, past the scan too: still a transcript that big
+    q = tmp_path / "q.jsonl"
+    q.write_text("".join(json.dumps({"type": "summary", "summary": "s" * 90}) + "\n"
+                         for _ in range(40)))
+    assert lib.has_messages(str(q), limit=1000) is True
+    # what fits in the scan is judged by its records, as before
+    r = tmp_path / "r.jsonl"
+    r.write_text(json.dumps({"type": "summary", "summary": "s"}) + "\n")
+    assert lib.has_messages(str(r), limit=1000) is False
+
+
 def test_move_hold_carries_the_hold_to_the_new_number(tmp_path):
     reg = str(tmp_path / "library.json")
     lib.set_hold("a1a1a1a1", 5000, lib_file=reg)

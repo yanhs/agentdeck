@@ -29,6 +29,13 @@ All notable changes to AgentDeck. Newest first.
   hook and `library_cli.py hold -` use the conversation live now, not the number the pane
   was started with. A Claude on a terminal of its own inside a pane (`script -c claude`)
   is not mistaken for the terminal's, and the npm package's `claude.exe` counts as Claude.
+  Only the pane AgentDeck started is the terminal: a Claude started in a pane opened later
+  in it (split-window / new-window, by hand or by Claude's own Bash tool) does not take the
+  terminal over. A conversation whose first prompt is longer than the 4 MB the check reads
+  counts as a conversation (it used to vanish from the list on `/clear`). The page and a
+  Telegram chat follow several switches in a row (two `/clear`s while the tab or the chat
+  was idle) to the terminal, not to the middle conversation, and a Telegram message or pick
+  goes to the number `ensure` opened when that number changed on the way.
   Claude's permissions prompt itself is left as it is.
 - **A careless `pkill -f grep` elsewhere on the server can no longer take down every
   terminal:** a tmux server keeps, as its own command line, the command line of the tmux

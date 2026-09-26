@@ -215,7 +215,8 @@ The dashboard works on a phone too:
   `.sessions/library.json` (name, code, Claude session id, order, archived).
 - **`convo_sync.py`** — keeps a terminal's number equal to the conversation live in it:
   reads the file Claude keeps per running process (`~/.claude/sessions/<pid>.json`), finds
-  each terminal's Claude through the process tree, and after a `/clear`, `/resume` or the
+  each terminal's Claude through the process tree (in the pane AgentDeck started — not in
+  a pane split off later), and after a `/clear`, `/resume` or the
   permissions-prompt restart moves the registry entry and renames `cs-<old>` to
   `cs-<new>`. The status server (every list refresh), `library_cli.py` and the idle reaper
   run it before they act on a terminal.
