@@ -186,9 +186,13 @@ def browser():
         b.close()
 
 
-def _open(browser, site, api, width=1440, height=900, mobile=False):
+def _open(browser, site, api, width=1440, height=900, mobile=False,
+          user_agent=None, init_script=None):
+    kw = {"user_agent": user_agent} if user_agent else {}
     ctx = browser.new_context(viewport={"width": width, "height": height},
-                              is_mobile=mobile, has_touch=mobile)
+                              is_mobile=mobile, has_touch=mobile, **kw)
+    if init_script:
+        ctx.add_init_script(init_script)
     ctx.set_default_timeout(10000)
     pg = ctx.new_page()
     pg.route(re.compile(r"^https://fonts\.(googleapis|gstatic)\.com/"), lambda r: r.abort())
@@ -2111,3 +2115,197 @@ def test_account_menu_stays_after_a_terminal_is_closed(page):
     page.click(row("dddd0004") + " .proj")                 # and the terminal buttons come back
     page.wait_for_selector("#tEsc:visible")
     assert _topbar_order(page) == ["tEsc", "tPasteImg", "tOpen", "tMenu"]
+
+
+# ── "Copied" chip after a mouse selection is copied (owner, 2026-09-26) ─────
+# The terminal stub here has an .xterm element, so enableClipboardCopy binds its
+# mousedown/mouseup on it; /api/tmux-buffer/ is faked: the read at mousedown
+# (the anchor) returns the previous buffer, later reads the new selection.
+HINT_KEY = "agentdeck-copy-hint"
+HINT_PC = "Copied · Ctrl+Shift+V to paste"
+HINT_MAC = "Copied · ⌘V to paste"
+MAC_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+XTERM_STUB = ("<html><body style='margin:0;background:#000;color:#0f0'>"
+              "<div class='xterm' style='width:100vw;height:100vh;font:14px monospace'>"
+              "ubuntu@server:~$ ls -la<br>total 42</div></body></html>")
+
+
+class FakeBuffer:
+    def __init__(self, new_text="ls -la", old_text="previous"):
+        self.new_text, self.old_text, self.reads = new_text, old_text, 0
+
+    def __call__(self, route):
+        self.reads += 1
+        text = self.old_text if self.reads == 1 else self.new_text
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"text": text}))
+
+
+def _copy_page(browser, site, buf=None, **kw):
+    ctx, pg = _open(browser, site, FakeAPI(), **kw)
+    ctx.grant_permissions(["clipboard-read", "clipboard-write"],
+                          origin=site.rsplit("/", 1)[0])
+    pg.route(re.compile(r"/sess/"),
+             lambda r: r.fulfill(status=200, content_type="text/html", body=XTERM_STUB))
+    pg.route(re.compile(r"/api/tmux-buffer/"), buf or FakeBuffer())
+    return ctx, pg
+
+
+def _open_terminal(pg, sid="dddd0004"):
+    pg.click(row(sid) + " .proj")
+    pg.wait_for_selector("#wrap iframe[src^='/sess/']")
+    pg.frame_locator("#wrap iframe").locator(".xterm").wait_for()
+    pg.wait_for_timeout(250)                              # enableClipboardCopy polls every 100ms
+
+
+def _select(pg, drag=True):
+    box = pg.query_selector("#wrap iframe").bounding_box()
+    x, y = box["x"] + 40, box["y"] + 60
+    pg.mouse.move(x, y)
+    pg.mouse.down()
+    pg.mouse.move(x + (120 if drag else 0), y + (20 if drag else 0), steps=5)
+    pg.mouse.up()
+
+
+def _hint_shown(pg):
+    return pg.evaluate("!!document.getElementById('copyHint')?.classList.contains('show')")
+
+
+def _wait_hint(pg, timeout=3000):
+    pg.wait_for_function("document.getElementById('copyHint')?.classList.contains('show')",
+                         timeout=timeout)
+
+
+def test_copied_chip_after_a_selection_is_copied(browser, site):
+    ctx, pg = _copy_page(browser, site)
+    try:
+        _open_terminal(pg)
+        pg.mouse.move(700, 400)                           # hovering alone shows nothing
+        pg.wait_for_timeout(300)
+        assert not _hint_shown(pg)
+        _select(pg)
+        _wait_hint(pg)
+        pg.wait_for_timeout(300)                          # past the fade-in
+        h = pg.query_selector("#copyHint")
+        assert h.inner_text().strip() == HINT_PC
+        assert float(h.evaluate("e => getComputedStyle(e).opacity")) > 0.5
+        assert h.evaluate("e => getComputedStyle(e).pointerEvents") == "none"
+        hb, wb = h.bounding_box(), pg.query_selector("#wrap").bounding_box()
+        assert hb["x"] + hb["width"] > wb["x"] + wb["width"] - 40      # top-right
+        assert hb["y"] < wb["y"] + 40
+        assert pg.evaluate("navigator.clipboard.readText()") == "ls -la"
+        assert pg.evaluate(f"localStorage.getItem('{HINT_KEY}')") == "1"
+        shot(pg, "index-lib-copied-chip.png")
+        pg.wait_for_function("!document.getElementById('copyHint').classList.contains('show')",
+                             timeout=2500)               # ~1.5 s, then it fades
+    finally:
+        ctx.close()
+
+
+def test_copied_chip_light_theme(browser, site):
+    ctx, pg = _copy_page(browser, site, init_script=(
+        "try { localStorage.setItem('agentdeck-theme', 'light'); } catch (e) {}"))
+    try:
+        _open_terminal(pg)
+        _select(pg)
+        _wait_hint(pg)
+        pg.wait_for_timeout(300)
+        bg = pg.eval_on_selector("#copyHint", "e => getComputedStyle(e).backgroundColor")
+        assert bg == "rgb(247, 247, 248)", bg            # --menu-bg of the light palette
+        shot(pg, "index-lib-copied-chip-light.png")
+    finally:
+        ctx.close()
+
+
+def test_copied_chip_shows_on_every_copy(browser, site):
+    ctx, pg = _copy_page(browser, site)
+    try:
+        _open_terminal(pg)
+        for _ in range(2):
+            _select(pg)
+            _wait_hint(pg)
+            pg.wait_for_function(
+                "!document.getElementById('copyHint').classList.contains('show')", timeout=2500)
+    finally:
+        ctx.close()
+
+
+def test_no_chip_on_a_plain_click(browser, site):
+    ctx, pg = _copy_page(browser, site)
+    try:
+        _open_terminal(pg)
+        _select(pg, drag=False)
+        pg.wait_for_timeout(1200)
+        assert not _hint_shown(pg)
+    finally:
+        ctx.close()
+
+
+def test_no_chip_when_nothing_was_copied(browser, site):
+    ctx, pg = _copy_page(browser, site, buf=FakeBuffer(new_text="", old_text=""))
+    try:
+        _open_terminal(pg)
+        _select(pg)
+        pg.wait_for_timeout(1500)                        # the buffer poll gives up at ~700 ms
+        assert not _hint_shown(pg)
+    finally:
+        ctx.close()
+
+
+def test_no_chip_on_the_tasks_tab(browser, site):
+    ctx, pg = _copy_page(browser, site)
+    pg.route(re.compile(r"/tasks/"),
+             lambda r: r.fulfill(status=200, content_type="text/html", body=XTERM_STUB))
+    try:
+        pg.click("#tasksBtn")
+        pg.wait_for_selector("#wrap iframe[src^='/tasks/']")
+        pg.frame_locator("#wrap iframe").locator(".xterm").wait_for()
+        pg.wait_for_timeout(250)
+        _select(pg)
+        pg.wait_for_timeout(1200)
+        assert not _hint_shown(pg)
+    finally:
+        ctx.close()
+
+
+def test_after_the_limit_the_chip_just_says_copied(browser, site):
+    ctx, pg = _copy_page(browser, site,
+                         init_script=f"try {{ localStorage.setItem('{HINT_KEY}', '5'); }} catch (e) {{}}")
+    try:
+        _open_terminal(pg)
+        _select(pg)
+        _wait_hint(pg)
+        assert pg.inner_text("#copyHint").strip() == "Copied"
+        assert pg.evaluate(f"localStorage.getItem('{HINT_KEY}')") == "5"
+    finally:
+        ctx.close()
+
+
+def test_copied_chip_mac_wording(browser, site):
+    ctx, pg = _copy_page(browser, site, user_agent=MAC_UA)
+    try:
+        _open_terminal(pg)
+        _select(pg)
+        _wait_hint(pg)
+        assert pg.inner_text("#copyHint").strip() == HINT_MAC
+    finally:
+        ctx.close()
+
+
+def test_copied_chip_survives_broken_storage(browser, site):
+    ctx, pg = _copy_page(browser, site, init_script="""for (const m of ['getItem', 'setItem']) {
+        const orig = Storage.prototype[m];
+        Storage.prototype[m] = function (k, ...a) {
+          if (k === 'agentdeck-copy-hint') throw new Error('blocked');
+          return orig.call(this, k, ...a); }; }""")
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    try:
+        _open_terminal(pg)
+        _select(pg)
+        _wait_hint(pg)
+        assert pg.inner_text("#copyHint").strip() == HINT_PC
+        assert errors == [], errors
+    finally:
+        ctx.close()

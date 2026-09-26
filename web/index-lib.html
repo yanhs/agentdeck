@@ -574,6 +574,27 @@
       pointer-events: none;
     }
 
+    /* "Copied" chip after a terminal selection is copied. Never blocks a selection. */
+    .copy-hint {
+      position: absolute;
+      top: 8px;
+      right: 14px;
+      z-index: 5;
+      padding: 3px 9px;
+      font-size: 0.66rem;
+      color: var(--text-2);
+      background: var(--menu-bg);
+      border: 1px solid rgba(var(--fg-rgb),0.14);
+      border-radius: 999px;
+      box-shadow: var(--menu-shadow);
+      white-space: nowrap;
+      pointer-events: none;
+      user-select: none;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+    }
+    .copy-hint.show { opacity: 0.9; }
+
     .agent-list::-webkit-scrollbar { width: 3px; }
     .agent-list::-webkit-scrollbar-track { background: transparent; }
     .agent-list::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 2px; }
@@ -1454,6 +1475,43 @@
       closeServer();
     });
 
+    /* ── "Copied" chip: after a mouse selection in a terminal was actually copied
+       to the clipboard (enableClipboardCopy), a small chip in the terminal's
+       top-right corner confirms it and says how to paste. The paste shortcut is
+       spelled out for the first HINT_MAX copies in this browser (count in
+       localStorage; broken storage = keep spelling it out), then just "Copied". ── */
+    const HINT_KEY = 'agentdeck-copy-hint', HINT_MAX = 5, HINT_MS = 1500;
+    const _isMac = (() => {
+      const n = navigator;
+      return /mac|iphone|ipad/i.test([n.userAgentData && n.userAgentData.platform,
+                                      n.platform, n.userAgent].join(' '));
+    })();
+    let _hintTimer = null;
+    function hideCopyHint() {
+      clearTimeout(_hintTimer); _hintTimer = null;
+      const h = document.getElementById('copyHint'); if (h) h.classList.remove('show');
+    }
+    function showCopyHint() {
+      let n = 0;
+      try { n = parseInt(localStorage.getItem(HINT_KEY), 10) || 0; } catch (e) {}
+      if (n < HINT_MAX) { try { localStorage.setItem(HINT_KEY, String(n + 1)); } catch (e) {} }
+      const wrap = document.getElementById('wrap');
+      let h = document.getElementById('copyHint');
+      if (!h) {
+        h = document.createElement('div');
+        h.id = 'copyHint'; h.className = 'copy-hint';
+        h.setAttribute('role', 'status'); h.setAttribute('aria-live', 'polite');
+      }
+      if (h.parentNode !== wrap) wrap.appendChild(h);
+      h.textContent = n < HINT_MAX
+        ? 'Copied · ' + (_isMac ? '⌘V' : 'Ctrl+Shift+V') + ' to paste' : 'Copied';
+      h.classList.remove('show');
+      void h.offsetWidth;                      // restart the fade-in on a quick re-copy
+      h.classList.add('show');
+      clearTimeout(_hintTimer);
+      _hintTimer = setTimeout(hideCopyHint, HINT_MS);
+    }
+
     // plain = a web page (the task board), not a terminal: no ttyd helpers
     function openFrame(path, plain) {
       document.getElementById('tOpen').href = path;
@@ -1462,6 +1520,7 @@
       const old = wrap.querySelector('iframe'); if (old) old.remove();
       const f = document.createElement('iframe'); f.src = path;
       wrap.appendChild(f);
+      hideCopyHint();
       if (plain) { _frameFocus = null; return; }
       if (_isMobile) enableIframeTouchScroll(f);
       if (!_isMobile) enableClipboardCopy(f);
@@ -1780,15 +1839,18 @@
                   resolve(new Blob([last], {type: 'text/plain'}));   // fallback: copy current buffer (never reject)
                 })();
               });
+              // the "Copied" chip only when non-empty text really reached the clipboard
+              const copied = () => textPromise.then(b => b.text())
+                .then(t => { if (t && t.trim()) showCopyHint(); }).catch(() => {});
+              const fallback = () => textPromise.then(b => b.text())
+                .then(t => t && t.trim() && navigator.clipboard.writeText(t).then(() => showCopyHint()))
+                .catch(() => {});
               try {
                 navigator.clipboard.write([
                   new ClipboardItem({'text/plain': textPromise})
-                ]).catch(() => {
-                  // some browsers don't support a Promise ClipboardItem → writeText fallback
-                  textPromise.then(b => b.text()).then(t => t && navigator.clipboard.writeText(t).catch(() => {}));
-                });
+                ]).then(copied, fallback);   // no Promise ClipboardItem support → writeText
               } catch (_) {
-                textPromise.then(b => b.text()).then(t => t && navigator.clipboard.writeText(t).catch(() => {}));
+                fallback();
               }
             });
           } catch(e) { clearInterval(poll); }
