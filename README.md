@@ -1,4 +1,4 @@
-# 🛰️ AgentDeck — Claude Code on your VPS, in your browser
+# 🛰️ AgentDeck — Claude Code on your VPS, in your browser and Telegram
 
 > Run a fleet of **Claude Code** agents in parallel — one persistent `tmux` session each,
 > supervised from your **browser**, driven from **Telegram**.
