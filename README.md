@@ -184,6 +184,9 @@ git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
 docker compose up -d                            # → http://<your-vps-ip>:8765
 ```
 
+Want HTTPS? Run `./https.sh` — no domain needed (it uses a free `<ip>.sslip.io` name), or
+`./https.sh your-domain.com`.
+
 Open `http://<your-vps-ip>:8765`:
 1. the **first visit asks you to set a dashboard password** (it exposes live terminals);
 2. create a terminal (**＋ New terminal**) and **sign in to your Claude account once** — it's saved in a volume and reused.
@@ -204,20 +207,17 @@ AGENTDECK_PORT=9000 docker compose up -d        # → http://<your-vps-ip>:9000
 (or put `AGENTDECK_PORT=9000` in a `.env` file next to `docker-compose.yml` — compose reads it
 automatically).
 
-> **Want HTTPS?**
-> - **Trusted, no warning** — set `AGENTDECK_SITE` to a domain (or `<your-ip>.sslip.io`, a free
->   name that resolves to your IP) and edit the `ports:` in `docker-compose.yml` to
->   `"80:80"` and `"443:443"` (instead of the `8765` line). Both ports must be free on the host
->   (no other web server on them) and open in the firewall. Caddy fetches a real Let's Encrypt
->   certificate automatically and keeps it in the `caddy-data` volume.
-> - **Self-signed, no domain** — run
->   ```bash
->   AGENTDECK_SITE=https://:8765 docker compose up -d
->   ```
->   and open `https://<your-vps-ip>:8765` (`AGENTDECK_PORT` still changes the outside port). A
->   certificate is generated on first run (kept in the volume); the browser shows a one-time
->   "not trusted" warning you click through. (Needed if you want clipboard copy, which browsers
->   only allow over HTTPS or localhost.)
+> **HTTPS details.** `./https.sh` finds the server's public IP, sets `AGENTDECK_SITE` to
+> `<ip-with-dashes>.sslip.io` (or your domain) and adds `docker-compose.https.yml` (host ports
+> `80` + `443`) to `.env` — no YAML to edit, other `.env` lines are kept — then restarts and
+> waits until Caddy has a real Let's Encrypt certificate (kept in the `caddy-data` volume).
+> Ports 80 and 443 must be free (no other web server on them) and open in the firewall; if
+> they aren't, the script stops without changing anything. Running it again is safe;
+> `./https.sh --off` goes back to plain http on `8765`.
+>
+> **Fallback — self-signed, no free 80/443:** `AGENTDECK_SITE=https://:8765 docker compose up -d`,
+> then open `https://<your-vps-ip>:8765` and click through the one-time "not trusted" warning.
+> (HTTPS is needed for clipboard copy, which browsers only allow over HTTPS or localhost.)
 
 ## ✅ Requirements (for the manual setup)
 

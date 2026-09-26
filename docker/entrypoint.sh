@@ -77,6 +77,13 @@ echo "[agentdeck] idle reaper: idle_reaper.py once a minute"
 ( while true; do python3 idle_reaper.py >> /app/.sessions/idle_reaper.log 2>&1; sleep 60; done ) &
 
 CADDYFILE=/app/docker/Caddyfile
+# Let's Encrypt refuses a contact address at example.com, and the compose default is the
+# placeholder you@example.com — drop the email line then (an ACME account needs no email).
+case "${AGENTDECK_EMAIL:-}" in
+  ""|*@example.com|*@example.org|*@example.net)
+    grep -v '^[[:space:]]*email ' /app/docker/Caddyfile > /tmp/Caddyfile.base
+    CADDYFILE=/tmp/Caddyfile.base ;;
+esac
 # AGENTDECK_SITE=https://... (a port or IP, no real domain) → self-signed HTTPS:
 # generate a certificate on first run (kept in the volume) and serve with it.
 case "${AGENTDECK_SITE:-}" in
@@ -88,7 +95,7 @@ case "${AGENTDECK_SITE:-}" in
         -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
       echo "[agentdeck] generated a self-signed TLS certificate (first run)"
     fi
-    CD="$CD" python3 -c 'import os;cd=os.environ["CD"];p="/app/docker/Caddyfile";s=open(p).read().replace("{$AGENTDECK_SITE::8765} {","{$AGENTDECK_SITE::8765} {\n\ttls "+cd+"/cert.pem "+cd+"/key.pem");open("/tmp/Caddyfile","w").write(s)'
+    CD="$CD" SRC="$CADDYFILE" python3 -c 'import os;cd=os.environ["CD"];p=os.environ["SRC"];s=open(p).read().replace("{$AGENTDECK_SITE::8765} {","{$AGENTDECK_SITE::8765} {\n\ttls "+cd+"/cert.pem "+cd+"/key.pem");open("/tmp/Caddyfile","w").write(s)'
     CADDYFILE=/tmp/Caddyfile
     ;;
 esac

@@ -32,3 +32,6 @@ test-launch-claude.sh
 _order_gate.py
 tests/test_order_gate.py
 tests/test_launch_script_gate.py
+
+# written by ./https.sh (host ports 80/443 for HTTPS); ./https.sh --off removes it
+docker-compose.https.yml

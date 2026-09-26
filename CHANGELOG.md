@@ -4,6 +4,7 @@ All notable changes to AgentDeck. Newest first.
 
 ## Unreleased
 
+- **`./https.sh` — HTTPS in one command, no domain needed.** Uses a free `<ip>.sslip.io` name (or `./https.sh your-domain.com`), writes `AGENTDECK_SITE` + a ports override into `.env`, checks 80/443 are free, waits for the Let's Encrypt certificate; `--off` reverts. The placeholder `you@example.com` ACME email is now dropped (Let's Encrypt refuses it).
 - **Guard hooks on by default in Docker.** The container start merges
   `hooks/guard_task_board.py` + `hooks/guard_dont_stop.py` into the agents'
   `~/.claude/settings.json` (idempotent; other settings and your own hooks kept) and writes a
