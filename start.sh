@@ -42,6 +42,17 @@ fi
 [ -s "$AGENTDECK_PASSFILE" ] && echo "[agentdeck] dashboard password is set" \
   || echo "[agentdeck] no password yet — open the dashboard and set one on first visit"
 
+# Guard hooks (task board before edits, no silent mid-task stop): ON by default in Docker.
+# Here they would go into YOUR ~/.claude/settings.json, which every Claude Code session on
+# this machine reads — so only with AGENTDECK_GUARDS=1 (e.g. in .env); otherwise a hint.
+if [ "${AGENTDECK_GUARDS:-}" = 1 ]; then
+  python3 hooks/install_guards.py --tracker-state "$TRACKER_STATE" \
+    --claude-md "$HOME/.claude/CLAUDE.md" \
+    && echo "[agentdeck] guard hooks: on in ~/.claude/settings.json"
+elif [ "${AGENTDECK_GUARDS:-}" != 0 ] && ! python3 hooks/install_guards.py --check; then
+  echo "[agentdeck] tip: AGENTDECK_GUARDS=1 ./start.sh keeps agents on the task board (guard hooks; AGENTDECK_GUARDS=0 hides this)"
+fi
+
 pids=()
 cleanup() { echo; echo "[agentdeck] stopping…"; kill "${pids[@]}" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM

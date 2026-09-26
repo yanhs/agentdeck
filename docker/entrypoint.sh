@@ -39,6 +39,22 @@ fi
 [ -f /root/.claude.json ] && [ ! -L /root/.claude.json ] && mv -f /root/.claude.json /root/.claude/.claude.json
 ln -sfn /root/.claude/.claude.json /root/.claude.json
 
+# Guard hooks — ON by default for the agents in this container: the first file edit of a
+# session waits until the work is on the task board, and a turn can't end mid-task with
+# nothing scheduled to resume it. Merged into claude's user settings (the persisted volume)
+# idempotently — other keys and your own hooks are kept. A default ~/.claude/CLAUDE.md with
+# the board commands is written only if you have none. Opt out: AGENTDECK_GUARDS=0.
+if [ "${AGENTDECK_GUARDS:-1}" = 0 ]; then
+  python3 /app/hooks/install_guards.py --settings /root/.claude/settings.json \
+    --hooks-dir /app/hooks --remove
+  echo "[agentdeck] guard hooks: off (AGENTDECK_GUARDS=0)"
+else
+  python3 /app/hooks/install_guards.py --settings /root/.claude/settings.json \
+    --hooks-dir /app/hooks --tracker-state "$TRACKER_STATE" \
+    --claude-md /root/.claude/CLAUDE.md --tracker /app/tasks-dashboard/tracker.py \
+    && echo "[agentdeck] guard hooks: on (task board before edits, no silent mid-task stop)"
+fi
+
 echo "[agentdeck] backend: status_server.py"
 python3 status_server.py &
 sleep 1

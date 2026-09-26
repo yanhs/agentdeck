@@ -80,9 +80,10 @@ working reference you adapt, not a turn-key installer.
   so you see which agent is running the tests or which build is eating the CPU.
 - **Dark and light theme.** Switch in the **⋯** menu; the Tasks and Server tabs follow.
   Terminals stay dark.
-- **Guard hooks (optional).** Two Claude Code hooks keep agents honest about the task board:
-  no edits before the work is on the board, no silent stop in the middle of a task — see
-  [Manual setup](#-manual-setup-without-docker).
+- **Guard hooks — on by default in Docker.** Two Claude Code hooks keep agents on the task
+  board: no edits before the work is on the board, no silent stop in the middle of a task.
+  Opt out with `AGENTDECK_GUARDS=0`; without Docker, `AGENTDECK_GUARDS=1 ./start.sh` turns
+  them on — see [Manual setup](#-manual-setup-without-docker).
 
 ## 📸 Screenshots
 
@@ -243,8 +244,9 @@ sets a `ScheduleWakeup`, the terminal is marked busy until 10 minutes after the 
 time (a `CronCreate` or `Monitor`: for 6 hours), so neither the memory limit nor the idle
 reaper unloads it and kills the timer.
 
-**Optional — guard hooks that keep agents honest about the task board.** Two Claude Code
-hooks in `hooks/`, both plain Python with no dependencies:
+**Guard hooks that keep agents honest about the task board** (on by default in Docker;
+opt out with `AGENTDECK_GUARDS=0`). Two Claude Code hooks in `hooks/`, both plain Python
+with no dependencies:
 
 - `guard_task_board.py` blocks the first file edit of a session until the work is on the
   task board (any `tracker.py` call). For a genuinely trivial change the agent runs
@@ -256,7 +258,13 @@ hooks in `hooks/`, both plain Python with no dependencies:
   from the last 10 minutes, or once the task is closed or marked `stopped`. Only tasks this
   session created or moved count, and it never blocks more than twice in a row.
 
-To enable them, copy the `hooks` block from `hooks/settings.example.json` into your
+In Docker the container start merges them into the agents' `~/.claude/settings.json`
+(your other settings and hooks are kept) and writes a short default `~/.claude/CLAUDE.md`
+with the board commands if there is none. Without Docker they would go into your own
+`~/.claude/settings.json`, which every Claude Code session on the machine reads, so
+`start.sh` only prints a hint; run `AGENTDECK_GUARDS=1 ./start.sh` (or
+`python3 hooks/install_guards.py`) to install them, `python3 hooks/install_guards.py --remove`
+to take them out. Or copy the `hooks` block from `hooks/settings.example.json` into one
 project's `.claude/settings.json` and replace `/path/to/agentdeck` with where you cloned the
 repo. Settings you can change with environment variables: `TRACKER_STATE` (the board file, same default as
 `tracker.py`), `AGENTDECK_TRACKER` (path to `tracker.py`), `AGENTDECK_BOARD_URL` (a board
@@ -288,6 +296,7 @@ For production, run `status_server.py` and `tg_bridge.py` as systemd services �
 | Telegram bridge | `.env` | copy from `.env.example` |
 | Auth credentials | `/etc/nginx/.htpasswd_agents` or `AGENTDECK_PASSFILE` | htpasswd, or the dashboard's own password file |
 | Reverse proxy / TLS | `nginx/agents-subdomain.conf` | swap the domain for your own |
+| Guard hooks (task board before edits, no silent mid-task stop) | `AGENTDECK_GUARDS` env | Docker: on by default, `0` turns them off; `start.sh`: `1` installs them into `~/.claude/settings.json` |
 | Pretty project names | `PROJECT_MAP` in `status_server.py` | optional, cosmetic |
 | Working directory | `$AGENTDECK_WORKDIR` env | where agents start; defaults to the directory above the repo |
 | Pasted images (📎 Image / Ctrl+V) | `AGENTDECK_PASTE_DIR`, `AGENTDECK_PASTE_URL` env | default `.sessions/paste`, no public URL; the terminal gets the file's path either way |

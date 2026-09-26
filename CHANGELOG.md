@@ -2,6 +2,16 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## Unreleased
+
+- **Guard hooks on by default in Docker.** The container start merges
+  `hooks/guard_task_board.py` + `hooks/guard_dont_stop.py` into the agents'
+  `~/.claude/settings.json` (idempotent; other settings and your own hooks kept) and writes a
+  short default `~/.claude/CLAUDE.md` with the board commands if none exists — every task an
+  agent takes on goes on the board, and it keeps working while the task is open. Opt out:
+  `AGENTDECK_GUARDS=0`. `start.sh` leaves your own `~/.claude` alone unless
+  `AGENTDECK_GUARDS=1`. New `hooks/install_guards.py` (install / `--remove` / `--check`).
+
 ## v1.6.0 — archive that frees memory, Telegram menu with the archive
 
 ### Dashboard

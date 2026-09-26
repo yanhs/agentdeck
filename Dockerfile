@@ -42,8 +42,11 @@ COPY . /app
 # XDG_*: Caddy keeps its certificates / ACME account under $XDG_DATA_HOME/caddy — point it
 # at /data, where docker-compose.yml mounts the caddy-data volume, so Let's Encrypt certs
 # survive a container re-create (otherwise they land in /root/.local/share and are lost).
+# TRACKER_STATE: the task board file, set image-wide so tracker.py in a `docker exec` shell
+# writes the same board the agents and the guard hooks use (it lives in the sessions volume).
 ENV AGENTDECK_WORKDIR=/work IS_SANDBOX=1 LANG=C.UTF-8 LC_ALL=C.UTF-8 \
-    XDG_DATA_HOME=/data XDG_CONFIG_HOME=/data/config
+    XDG_DATA_HOME=/data XDG_CONFIG_HOME=/data/config \
+    TRACKER_STATE=/app/.sessions/tasks-state.json
 RUN mkdir -p /work /app/.sessions /data/config
 
 EXPOSE 8765 80 443

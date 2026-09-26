@@ -16,6 +16,10 @@ services:
       # address — by default the scheme + Host the browser used. Behind another proxy that
       # rewrites Host, set it explicitly, e.g. https://agents.example.com
       AGENTDECK_ORIGIN: "${AGENTDECK_ORIGIN:-}"
+      # Guard hooks keep the agents on the task board: work goes on the board before the
+      # first edit, and an agent doesn't stop mid-task with nothing scheduled to resume it.
+      # On by default; AGENTDECK_GUARDS=0 turns them off (removed on the next start).
+      AGENTDECK_GUARDS: "${AGENTDECK_GUARDS:-1}"
     volumes:
       # the agents' Claude login — stored here; sign in once in a dashboard terminal (no
       # Claude needed on the host), and it's reused on every restart.

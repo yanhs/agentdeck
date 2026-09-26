@@ -286,3 +286,43 @@ def test_nginx_example_has_no_numbered_slot_terminals():
     src = (ROOT / "nginx" / "agents-subdomain.conf").read_text()
     assert not re.search(r"location /terminal\d* \{", src)
     assert "location /sess/" in src or "location ^~ /sess/" in src
+
+
+# ── guard hooks on by default in Docker (opt-out AGENTDECK_GUARDS=0) ─────────
+def test_entrypoint_installs_the_guards_unless_opted_out():
+    src = code(SCRIPTS["entrypoint"])
+    assert "hooks/install_guards.py" in src
+    assert re.search(r"AGENTDECK_GUARDS:-1", src), src          # default on
+    assert "--remove" in src                                    # opt-out takes them out
+    assert "--claude-md" in src and "/root/.claude/CLAUDE.md" in src
+    assert "/root/.claude/settings.json" in src
+    assert "--tracker-state" in src and "$TRACKER_STATE" in src
+    # installed after TRACKER_STATE is exported and before the agents' ttyd starts
+    assert src.index("export TRACKER_STATE") < src.index("install_guards.py") < src.index("ttyd ")
+
+
+def test_compose_documents_the_guard_opt_out():
+    raw = (ROOT / "docker-compose.yml").read_text()
+    assert re.search(r"AGENTDECK_GUARDS:\s*\"\$\{AGENTDECK_GUARDS:-1\}\"", raw)
+    assert re.search(r"#.*AGENTDECK_GUARDS=0", raw)
+
+
+def test_start_sh_offers_the_guards_without_touching_home_by_default():
+    src = code(SCRIPTS["start"])
+    assert "hooks/install_guards.py" in src
+    assert '"${AGENTDECK_GUARDS:-}" = 1' in src                 # opt-in on a host
+    assert "--check" in src                                     # hint only when not installed
+
+
+def test_readme_config_table_has_the_guard_switch():
+    readme = (ROOT / "README.md").read_text()
+    rows = [l for l in readme.splitlines() if l.startswith("|") and "AGENTDECK_GUARDS" in l]
+    assert rows and "0" in rows[0]
+    assert "Guard hooks (optional)" not in readme
+
+
+def test_dockerfile_sets_the_board_state_for_every_process():
+    """`docker exec` shells don't inherit the entrypoint's exports: without an image-level
+    TRACKER_STATE, tracker.py run there writes a different board than the hooks read."""
+    src = code(ROOT / "Dockerfile")
+    assert "TRACKER_STATE=/app/.sessions/tasks-state.json" in src
