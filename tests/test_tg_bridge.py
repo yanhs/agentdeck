@@ -1504,8 +1504,9 @@ def test_text_reaches_a_real_topic_on_a_private_tmux(tmp_path, monkeypatch):
     lib = str(tmp_path / "reg" / "library.json")
     for k in ("TMUX", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
         monkeypatch.delenv(k, raising=False)
+    # CLAUDE_BIN names a file called claude: the pane launcher runs nothing else
     for k, v in dict(HOME=str(home), AGENTDECK_LIBRARY=lib, AGENTDECK_TMUX_SOCKET=sock,
-                     CLAUDE_BIN=str(fake), AGENTDECK_WORKDIR=str(work),
+                     CLAUDE_BIN=str(binp / "claude"), AGENTDECK_WORKDIR=str(work),
                      PATH=f"{binp}:{os.environ.get('PATH', '/usr/bin:/bin')}",
                      LANG="C.UTF-8", LC_ALL="C.UTF-8", TERM="xterm-256color").items():
         monkeypatch.setenv(k, v)
@@ -1546,9 +1547,9 @@ def test_text_reaches_a_real_topic_on_a_private_tmux(tmp_path, monkeypatch):
         assert f"aaaa1111|--session-id {U1} --dangerously-skip-permissions" in calls
         assert tm("has-session", "-t", "=cs-aaaa1111").returncode == 0
         # the server the bridge's ensure started carries no word a `pkill -f` hits
-        from tests.test_neutral_server_argv import kill_words, server_argv
+        from tests.test_neutral_server_argv import neutral_server, server_argv
         argv = server_argv(tm)
-        assert argv[-2:] == [tb.library_cli.LAUNCHER, "aaaa1111"] and kill_words(argv) == [], argv
+        assert neutral_server(argv, sock), argv
         assert streamed == {"session": "cs-aaaa1111", "aid": "aaaa1111"}
         e = library.find(library.load(lib), "aaaa1111")
         assert e["last_used"] > 100                         # ensure touched it

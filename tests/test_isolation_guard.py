@@ -20,3 +20,17 @@ def test_bare_tmux_sees_no_live_sessions():
                        capture_output=True, text=True)
     live = [s for s in r.stdout.split() if s.startswith(("cs-", "claude-terminal", "cmd-shell"))]
     assert live == [], live
+
+
+def test_pane_starts_go_to_a_throwaway_checkout():
+    """library_cli leaves each start in <launcher's checkout>/.sessions/launch/: the run's
+    launcher is a copy outside this checkout, so tests never write the live .sessions."""
+    import importlib.util
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    launcher = os.environ.get("AGENTDECK_LAUNCHER", "")
+    assert launcher and not os.path.realpath(launcher).startswith(repo + os.sep), launcher
+    spec = importlib.util.spec_from_file_location("library_cli", os.path.join(repo, "library_cli.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m.LAUNCHER == launcher
+    assert not m.launch_file("aaaaaaaa").startswith(repo + os.sep), m.launch_file("aaaaaaaa")

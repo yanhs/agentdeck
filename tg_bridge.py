@@ -52,6 +52,7 @@ import logging
 import mimetypes
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -110,10 +111,9 @@ WHISPER_SCRIPT = os.path.join(GATE_DIR, "whisper_transcribe.py")
 
 def _tmux(*args, cwd=None) -> subprocess.CompletedProcess:
     # AGENTDECK_TMUX_SOCKET → `tmux -L <name>`, the same server library_cli uses
-    # (tests run on their own server and never reach the live one). cwd: the folder a
-    # new-session starts in — never `-c <folder>` (library_cli.LAUNCHER says why)
-    if cwd is not None and not os.path.isdir(cwd):
-        cwd = os.path.expanduser("~")
+    # (tests run on their own server and never reach the live one). cwd: where tmux is
+    # called from — `/` for a new-session: the server keeps the working directory of
+    # the call that starts it (library_cli.LAUNCHER says why)
     return subprocess.run(library_cli.tmux_argv(*args), capture_output=True, text=True,
                           cwd=cwd)
 
@@ -193,11 +193,24 @@ def start_session(aid: str) -> tuple[bool, str]:
     if not cmd:
         return False, f"could not resolve the launch command for #{aid}"
     library_cli.ensure_tmux_conf(_tmux)  # a server started without our tmux.conf
-    # made under a neutral name, then renamed: if this call starts the tmux server, the
-    # server keeps its command line, and `claude-terminal-N` there would be hit by a
-    # careless `pkill -f claude` anywhere (library_cli.LAUNCHER)
-    tmp = f"agentdeck-new-{aid}-{_uuid.uuid4().hex[:8]}"   # two starts at once: two names
-    r = _tmux("new-session", "-d", "-s", tmp, cwd=AGENT_CWD)
+    # The tmux server keeps the command line and working directory of the call that
+    # starts it (library_cli.LAUNCHER): a server that isn't running is started first with
+    # a line that says nothing (hold_server); the session is made from `/` under a
+    # neutral name, then renamed — `claude-terminal-N` or the folder on the server's line
+    # would be hit by a careless `pkill -f claude`, the folder as its working directory
+    # by a `fuser -k <folder>`. Should that fail, no -c: a `cd` in front of the command.
+    tmp = f"new-{aid}-{_uuid.uuid4().hex[:8]}"   # two starts at once: two names
+    folder = AGENT_CWD if os.path.isdir(AGENT_CWD) else os.path.expanduser("~")
+    try:
+        up, hold = library_cli.hold_server(_tmux)
+    except subprocess.TimeoutExpired:
+        return False, f"couldn't start #{aid}: tmux did not answer"
+    if not up:
+        cmd = f"cd -- {shlex.quote(folder)} && {cmd}"
+    try:
+        r = _tmux("new-session", "-d", "-s", tmp, *(["-c", folder] if up else []), cwd="/")
+    finally:
+        library_cli.release_server(hold, _tmux)
     if r.returncode != 0:
         return False, f"couldn't start #{aid}: {_clip(r.stderr, 200)}"
     if _tmux("rename-session", "-t", _exact(tmp), session).returncode != 0:

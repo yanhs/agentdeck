@@ -222,12 +222,16 @@ The dashboard works on a phone too:
 - **`open-session.sh` + `library_cli.py`** — one `ttyd` serves every terminal. The page
   `/sess/?arg=<code>` checks the code, loads the terminal into `tmux` if needed (unloading
   an idle one at the limit), and attaches the tab. `/sess/?arg=shell` is the `cmd` line.
-- **`bin/agentdeck-pane`** — what tmux runs in a new terminal: it loads your login shell's
-  environment and starts claude with the arguments `library_cli.py` prepared. tmux is
-  handed nothing but this path and the terminal's code, because the tmux server keeps
-  that command line as its own: a careless `pkill -f grep` (or `bash`, `env`, `python`)
-  somewhere on the server must not match it and take every terminal down. Keep the
-  checkout at a path without such words (the default `~/agentdeck` is fine).
+- **`bin/pane`** — what tmux runs in a new terminal: it enters the terminal's folder,
+  loads your login shell's environment and starts claude with the arguments
+  `library_cli.py` prepared (left in `.sessions/launch/` next to it). The tmux server
+  keeps, as its own, the command line and working directory of the call that started
+  it, and a careless `pkill -f grep` (or `bash`, `env`, `python`, `agentdeck`, the
+  checkout's path) or `fuser -k <folder>` somewhere on the server must not match it and
+  take every terminal down. So AgentDeck starts the server with nothing on that line —
+  `tmux -f /dev/null new-session -d -s hold-<hex> tmux wait-for hold-<hex>`, from `/` —
+  loads `tmux.conf` into it, and only then makes the terminal (`-c <folder>`, `bin/pane
+  <code>`).
 - **`idle_reaper.py`** — unloads terminals nobody is using (run from cron).
 - **`status_server.py`** — the login gate + library/status/buffer/paste APIs + the
   Telegram setup page.
@@ -448,6 +452,7 @@ For production, run `status_server.py` and `tg_bridge.py` as systemd services �
 | What | Where | Notes |
 |---|---|---|
 | Terminals (names, codes, order, archive) | `.sessions/library.json` | written by the dashboard; `AGENTDECK_LIBRARY` moves it |
+| A terminal's start, for `bin/pane` | `.sessions/launch/<code>` of the checkout | read once and removed; always next to `bin/pane` (`AGENTDECK_LIBRARY` does not move it: a pane's environment is the tmux server's) |
 | How many terminals stay loaded | `AGENTDECK_MAX_ACTIVE` env | default `12` |
 | Dashboard address (for POST checks) | `AGENTDECK_ORIGIN` env | default: the request's own scheme + Host (as the proxy forwards them); set e.g. `https://agents.example.com` behind a proxy without `X-Forwarded-Proto`; library changes from any other origin are refused |
 | Idle reaper timings | `REAPER_IDLE_SECONDS`, `REAPER_ARCHIVED_IDLE_SECONDS`, `REAPER_BG_MAX_SECONDS` | defaults 7200 / 120 / 86400 |
@@ -602,7 +607,7 @@ tmux.conf                AgentDeck's tmux settings (mouse, copy); your ~/.tmux.c
 library.py               session library: the list of named terminals
 convo_sync.py            a terminal keeps the number of the conversation live in it (/clear, /resume)
 library_cli.py           loads/unloads terminals in tmux (used by ttyd and the bridge)
-bin/agentdeck-pane       what tmux runs in a new terminal (keeps the tmux server's command line neutral)
+bin/pane                 what tmux runs in a new terminal (keeps the tmux server's command line neutral)
 open-session.sh          the one ttyd entry point: /sess/?arg=<code>
 sessions.pm2.config.js   PM2 app for that ttyd
 idle_reaper.py           unloads idle terminals (cron, every minute)

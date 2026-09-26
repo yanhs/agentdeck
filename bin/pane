@@ -1,0 +1,129 @@
+#!/bin/bash
+# pane <8-character topic id> | shell
+#
+# What tmux runs in a new AgentDeck pane (library_cli.py ensure / shell-ensure).
+#
+# Why a script: a tmux server keeps, as its own command line, the command line of the
+# client that started it. That used to be `tmux … new-session … bash -lic 'for v in
+# $(env | cut -d= -f1 | grep -i CLAUDE) … exec claude --resume …'`, and on 2026-09-26 a
+# careless `pkill -f "… | grep"` elsewhere on the machine matched the SERVER and took
+# every terminal down at once. So tmux is handed only this script's path and the id,
+# and the rest happens here, in the pane. The name says nothing either: no "agentdeck"
+# (a `pkill -f agentdeck` meant for another install), no claude/bash/env/grep.
+#
+#   <id>   topic cs-<id>: enter the topic's folder, then a login + interactive bash
+#          loads the user's rc environment (the same one a terminal's own shell has);
+#          then every CLAUDE* variable is unset (a Claude-spawned caller must not leak
+#          into the pane), ~/.claude/oauth.env is sourced, AGENTDECK_SESSION=<id>
+#          exported (the number the terminal has at launch: after Claude's consent
+#          relaunch, /clear or /resume the terminal takes the live conversation's
+#          number — convo_sync.py — and the live one is CLAUDE_CODE_SESSION_ID), and
+#          claude exec'd with the arguments `library_cli.py ensure` prepared for this
+#          start. exec: when claude exits the pane closes — a shell prompt left behind
+#          would run whatever the Telegram bridge types next as commands.
+#   shell  cmd-shell, the dashboard's plain command line: enter the folder prepared for
+#          it (none prepared: stay), CLAUDE* and AGENTDECK_SESSION unset, `exec bash -l`.
+#
+# The prepared start: <this checkout>/.sessions/launch/<id|shell>, NUL-separated — the
+# folder, then (for a topic) claude's arguments: claude, --resume or --session-id, the
+# uuid, --dangerously-skip-permissions, the session's own ultracode / max effort. Found
+# from this script's own path, never from the environment: the pane's environment is
+# the tmux SERVER's (whoever started it first), not the environment of the ensure that
+# prepared this start. Read once and removed. Only a file this user alone could have
+# written is used, and only a program named claude (claude.exe: the npm build) is run.
+#
+# tmux is called from / (the server keeps the working directory of the call that starts
+# it: a topic folder there would make `fuser -k <folder>` kill every terminal) and gets
+# the folder as -c only on a server that already runs, so the folder is entered here
+# too; one that can't be entered: home, tmux's own rule for -c.
+#
+# The argument is checked before anything else runs. The prepared arguments are data:
+# nothing from the registry is ever run as shell code.
+
+die() {
+  printf 'pane: %s\n' "$*" >&2
+  exit 2
+}
+
+scrub() {                          # unset every exported CLAUDE* variable, any case
+  local v
+  for v in $(compgen -e); do
+    if [[ ${v^^} == *CLAUDE* ]]; then unset "$v"; fi
+  done
+}
+
+safe() {                           # $1 exists, is ours alone: not a link, not writable by others
+  local mode
+  [ -e "$1" ] && ! [ -L "$1" ] && [ -O "$1" ] || return 1
+  mode=$(stat -c %a -- "$1" 2>/dev/null) || return 1
+  [[ $mode =~ ^[0-7]+$ ]] && (( (8#$mode & 8#022) == 0 ))
+}
+
+prepared_ok() {                    # the start in $prepared may be read
+  [ -e "$prepared" ] || [ -L "$prepared" ] || return 1
+  if ! [ -f "$prepared" ] || ! safe "$prepared" || ! safe "${prepared%/*}"; then
+    die "the start prepared in $prepared is not safe to use (a link, or writable by others)"
+  fi
+}
+
+enter() {                          # the prepared folder; tmux's rule if it can't be entered
+  [ -n "$1" ] || return 0
+  cd -- "$1" 2>/dev/null && return
+  printf 'pane: cannot enter %s — starting in %s\n' "$1" "$HOME" >&2
+  cd -- "$HOME" 2>/dev/null || cd /
+}
+
+[ "$#" -eq 1 ] || die "usage: pane <8-character topic id> | shell"
+id=$1
+# Explicit character class: a locale's [a-f] range could admit other letters.
+[ "$id" = shell ] || [[ $id =~ ^[0123456789abcdef]{8}$ ]] \
+  || die "not a topic id (8 characters 0-9 a-f)"
+
+self=$0
+[[ $self == /* ]] || self=$PWD/$self
+repo=${self%/*}
+repo=${repo%/*}
+prepared=$repo/.sessions/launch/$id
+
+if [ "$id" = shell ]; then
+  if prepared_ok; then
+    dir=
+    IFS= read -r -d '' dir < "$prepared"
+    rm -f -- "$prepared"
+    enter "$dir"
+  fi
+  scrub
+  unset AGENTDECK_SESSION AGENTDECK_PANE_RC
+  exec bash -l
+fi
+
+if [ "${AGENTDECK_PANE_RC:-}" != "$id" ]; then
+  # from tmux: enter the folder, then run again under a login + interactive bash, so
+  # claude starts with the rc-loaded environment (the rc runs in the folder, as it did
+  # under tmux -c); the marker says the second run has it
+  prepared_ok || die "topic $id: nothing prepared to start — open it from the dashboard (library_cli.py ensure $id)"
+  dir=
+  IFS= read -r -d '' dir < "$prepared"
+  enter "$dir"
+  export AGENTDECK_PANE_RC="$id"
+  exec bash -lic 'exec "$0" "$1"' "$self" "$id"
+fi
+unset AGENTDECK_PANE_RC
+
+scrub
+[ -r "$HOME/.claude/oauth.env" ] && . "$HOME/.claude/oauth.env"
+export AGENTDECK_SESSION="$id"
+
+prepared_ok || die "topic $id: nothing prepared to start — open it from the dashboard (library_cli.py ensure $id)"
+argv=()
+mapfile -d '' -t argv < "$prepared"
+rm -f -- "$prepared"
+argv=("${argv[@]:1}")              # the folder: entered above
+prog=${argv[0]:-}
+prog=${prog##*/}
+if [ "${#argv[@]}" -lt 4 ] || ! [[ $prog == claude || $prog == claude.exe ]] \
+   || ! [[ ${argv[1]} == --resume || ${argv[1]} == --session-id ]] \
+   || [[ ${argv[2]} != "$id"-* ]]; then
+  die "topic $id: the start prepared in $prepared is not for this topic (claude --resume|--session-id $id-…)"
+fi
+exec "${argv[@]}"

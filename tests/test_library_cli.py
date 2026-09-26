@@ -14,6 +14,7 @@ default socket (claude-terminal*, cs-*) is never touched.
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -23,6 +24,7 @@ import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLI = os.path.join(REPO, "library_cli.py")
+REPO_LAUNCHER = os.path.join(REPO, "bin", "pane")
 
 _spec = importlib.util.spec_from_file_location("library", os.path.join(REPO, "library.py"))
 library = importlib.util.module_from_spec(_spec)
@@ -75,13 +77,21 @@ class Deck:
         self.work.mkdir()
         self.lib = str(tmp_path / "reg" / "library.json")
         self.socket = f"agentdeck-test-cli-{os.getpid()}-{_uuid.uuid4().hex[:6]}"
-        self.claude = tmp_path / "fake-claude"
-        self.claude.write_text(FAKE_CLAUDE)
-        self.claude.chmod(0o755)
-        # second guard: even if CLAUDE_BIN got lost, `claude` on PATH is the fake
+        # the pane launcher in a checkout of its own: starts are left in
+        # <checkout>/.sessions/launch/ (library_cli.LAUNCHER), never in this repo's
+        self.checkout = tmp_path / "checkout"
+        (self.checkout / "bin").mkdir(parents=True)
+        self.launcher = str(self.checkout / "bin" / "pane")
+        if os.path.exists(REPO_LAUNCHER):
+            shutil.copy2(REPO_LAUNCHER, self.launcher)
+        self.launch_dir = self.checkout / ".sessions" / "launch"
+        # the fake is named claude (the launcher runs nothing else); CLAUDE_BIN names
+        # it, and even if CLAUDE_BIN got lost, `claude` on PATH is the same fake
         self.bin = tmp_path / "bin"
         self.bin.mkdir()
-        (self.bin / "claude").symlink_to(self.claude)
+        self.claude = self.bin / "claude"
+        self.claude.write_text(FAKE_CLAUDE)
+        self.claude.chmod(0o755)
         self.clients = []
         # not TMUX, and not the conversation of a Claude that runs this suite: `hold -`
         # reads CLAUDE_CODE_SESSION_ID (a pane's live conversation)
@@ -90,6 +100,7 @@ class Deck:
         env.update(PATH=f"{self.bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
                    HOME=str(self.home), AGENTDECK_LIBRARY=self.lib,
                    AGENTDECK_TMUX_SOCKET=self.socket, CLAUDE_BIN=str(self.claude),
+                   AGENTDECK_LAUNCHER=self.launcher,
                    AGENTDECK_WORKING_SECONDS="0", AGENTDECK_MAX_ACTIVE="12",
                    OPEN_SESSION_PAUSE="0", TERM="xterm-256color", LANG="C.UTF-8",
                    # a Claude-spawned environment: must NOT leak into the pane
@@ -121,10 +132,10 @@ class Deck:
         return p
 
     # processes
-    def cli(self, *args, **extra):
+    def cli(self, *args, _cwd=None, **extra):
         env = dict(self.env, **extra)
         return subprocess.run([sys.executable, CLI, *args], capture_output=True, text=True,
-                              env=env, timeout=30)
+                              env=env, timeout=30, cwd=_cwd)
 
     def tmux(self, *args):
         return subprocess.run(["tmux", "-L", self.socket, *args], capture_output=True,
@@ -698,6 +709,9 @@ def test_deck_close_leaves_no_fake_claude_behind(tmp_path):
 def test_start_passes_the_command_to_new_session_and_types_nothing(tmp_path, monkeypatch):
     m = _mod()
     monkeypatch.setattr(m.library, "LIB_FILE", str(tmp_path / "reg" / "library.json"))
+    (tmp_path / "co" / "bin").mkdir(parents=True)
+    shutil.copy2(REPO_LAUNCHER, tmp_path / "co" / "bin" / "pane")
+    monkeypatch.setattr(m, "LAUNCHER", str(tmp_path / "co" / "bin" / "pane"))
     calls = []
 
     class R:
@@ -709,10 +723,11 @@ def test_start_passes_the_command_to_new_session_and_types_nothing(tmp_path, mon
     new = [c for c in calls if c and c[0] == "new-session"]
     assert len(new) == 1
     # tmux runs the launcher with the id; the launcher (a login + interactive bash's
-    # environment, test_neutral_server_argv) execs claude with the prepared arguments
+    # environment, test_neutral_server_argv) enters the folder and execs claude with
+    # the prepared arguments, left next to it: <checkout>/.sessions/launch/<id>
     assert new[0][-2:] == (m.LAUNCHER, "aaaaaaaa"), new[0]
-    assert (tmp_path / "reg" / "launch" / "aaaaaaaa").read_bytes() == (
-        b"claude\0--session-id\0" + U1.encode() + b"\0")
+    assert (tmp_path / "co" / ".sessions" / "launch" / "aaaaaaaa").read_bytes() == (
+        b"/tmp\0claude\0--session-id\0" + U1.encode() + b"\0")
 
 
 def test_ensure_pane_start_command_is_claudes(deck):
@@ -724,7 +739,7 @@ def test_ensure_pane_start_command_is_claudes(deck):
     line = [l.split("\t") for l in r.stdout.splitlines() if l.startswith("cs-aaaaaaaa\t")]
     assert line, r.stdout
     _, start, pid = line[0]
-    assert "agentdeck-pane" in start and "aaaaaaaa" in start, start   # what tmux was handed
+    assert deck.launcher in start and "aaaaaaaa" in start, start      # what tmux was handed
     with open(f"/proc/{pid}/cmdline", "rb") as f:                      # what runs: claude itself
         argv = f.read().split(b"\0")
     assert argv[0] == b"claude" and U1.encode() in argv, argv

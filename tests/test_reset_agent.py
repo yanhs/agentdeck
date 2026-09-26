@@ -13,7 +13,11 @@ from __future__ import annotations
 
 import importlib
 import json
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
 import types
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -90,7 +94,8 @@ def test_reset_kills_tmux_preserves_jsonl_AND_overrides(tmp_path, monkeypatch):
 
     assert out["code"] == 200, out
     assert out["data"]["ok"] is True
-    assert "claude-terminal" in killed, f"tmux not killed; got {killed}"
+    # `=name`: exactly that session (test_reset_never_reaches_another_slot)
+    assert "=claude-terminal" in killed, f"tmux not killed; got {killed}"
     # JSONL preserved on disk
     assert jsonl.exists()
     assert jsonl.read_text() == '{"role":"user","content":"hello"}\n'
@@ -142,3 +147,113 @@ def test_reset_is_idempotent_when_tmux_already_dead(tmp_path, monkeypatch):
 
     assert out["code"] == 200, f"should be idempotent, got {out}"
     assert out["data"]["ok"] is True
+
+
+# ── the old numbered slots: a tmux target is exact, never a prefix ─────────────
+# tmux takes a bare `-t <name>` as a prefix when no session has that exact name, and
+# slot #1's session is plain `claude-terminal` — the prefix of every other slot. With #1
+# not running and one other slot up, `kill-session -t claude-terminal` (reset of #1)
+# killed that other terminal; `has-session` + `send-keys` typed /compact, /model or
+# /effort into it. These run a real tmux server of their own (a private TMUX_TMPDIR: the
+# legacy code calls bare `tmux`) and signal nothing they did not start.
+class _PrivateTmux:
+    def __init__(self, monkeypatch):
+        self.dir = tempfile.mkdtemp(prefix="rst-")      # short: a socket path is limited
+        monkeypatch.setenv("TMUX_TMPDIR", self.dir)
+        monkeypatch.delenv("TMUX", raising=False)
+
+    def __call__(self, *a):
+        return subprocess.run(["tmux", *a], capture_output=True, text=True, timeout=10)
+
+    def names(self):
+        return sorted(self("list-sessions", "-F", "#{session_name}").stdout.split())
+
+    def close(self):
+        self("kill-server")
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def test_reset_never_reaches_another_slot(tmp_path, monkeypatch):
+    mod = _load("status_server")
+    tm = _PrivateTmux(monkeypatch)
+    try:
+        for name in ("claude-terminal-10", "other"):
+            assert tm("new-session", "-d", "-s", name, "cat").returncode == 0
+        assert mod.reset_agent("1", "claude-terminal") == {"tmux_killed": False}
+        assert mod.reset_agent("1", "claude-terminal-1") == {"tmux_killed": False}
+        assert tm.names() == ["claude-terminal-10", "other"]
+        assert tm("new-session", "-d", "-s", "claude-terminal", "cat").returncode == 0
+        assert mod.reset_agent("1", "claude-terminal") == {"tmux_killed": True}
+        assert tm.names() == ["claude-terminal-10", "other"]
+    finally:
+        tm.close()
+
+
+def _post(mod, body):
+    h = mod.Handler.__new__(mod.Handler)
+    raw = json.dumps(body).encode()
+    h.headers = {"Content-Length": str(len(raw))}
+    h.rfile = types.SimpleNamespace(read=lambda n: raw)
+    out = {}
+    h._json_response = lambda code, data: out.update(code=code, data=data)
+    h.do_POST()
+    return out
+
+
+def test_slash_commands_never_reach_another_slot(tmp_path, monkeypatch):
+    """/compact, /model, /effort for a slot that is not running go nowhere — not into
+    the one other slot that happens to run."""
+    mod = _load("status_server")
+    agents_file = tmp_path / "agents.json"
+    agents_file.write_text("{}")
+    monkeypatch.setattr(mod, "AGENTS_FILE", str(agents_file))
+    typed = tmp_path / "typed.txt"
+    tm = _PrivateTmux(monkeypatch)
+    try:
+        assert tm("new-session", "-d", "-s", "claude-terminal-10",
+                  f"cat > '{typed}'").returncode == 0
+        for body in ({"id": "1", "action": "compact"}, {"id": "1", "model": "sonnet"},
+                     {"id": "1", "effort": "high"}):
+            out = _post(mod, body)
+            assert out["code"] == 200, out
+        assert out["data"] == {"ok": True}
+        assert _post(mod, {"id": "1", "action": "compact"})["data"]["sent"] is False
+        time.sleep(0.3)
+        assert not typed.exists() or typed.read_text() == "", typed.read_text()
+        # the slot itself still gets them
+        assert _post(mod, {"id": "10", "action": "compact"})["data"]["sent"] is True
+        deadline = time.time() + 5
+        while time.time() < deadline and "/compact" not in (typed.read_text()
+                                                             if typed.exists() else ""):
+            time.sleep(0.05)
+        assert "/compact" in typed.read_text()
+    finally:
+        tm.close()
+
+
+def test_a_slot_that_is_not_running_shows_as_not_running(monkeypatch):
+    """The legacy status poll asked `has-session -t claude-terminal`: slot #1 showed as
+    running whenever exactly one other slot ran (and with that slot's screen)."""
+    mod = _load("status_server")
+    tm = _PrivateTmux(monkeypatch)
+    try:
+        assert tm("new-session", "-d", "-s", "claude-terminal-10", "cat").returncode == 0
+        calls = []
+        real = subprocess.run
+
+        def spy(cmd, *a, **kw):
+            if cmd[:1] == ["tmux"]:
+                calls.append(list(cmd))
+            return real(cmd, *a, **kw)
+        monkeypatch.setattr(mod.subprocess, "run", spy)
+        mod.get_pane_pid("claude-terminal")
+        mod.parse_pane("claude-terminal")
+        for c in calls:
+            if "-t" in c:
+                t = c[c.index("-t") + 1]
+                assert t.startswith("="), c
+        assert mod.get_pane_pid("claude-terminal") is None
+        assert mod.parse_pane("claude-terminal") == ("", "")
+        assert mod.get_pane_pid("claude-terminal-10") is not None
+    finally:
+        tm.close()

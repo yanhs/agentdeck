@@ -53,9 +53,11 @@ crashes the whole server on `display-message -t =<name>` (no trailing colon)
 with a window/time format. Targets are exact: `=name` for sessions, `=name:`
 for panes. Every call carries `-f <repo>/tmux.conf` (AgentDeck's mouse/copy
 settings, then the user's ~/.tmux.conf); a server started without it gets it
-once from ensure / shell-ensure. A new pane runs `bin/agentdeck-pane <id|shell>`
-from the pane's folder — nothing else on the command line, which the tmux server
-keeps as its own (see LAUNCHER: a `pkill -f grep` must not match it).
+once from ensure / shell-ensure. A new pane runs `bin/pane <id|shell>`, and tmux is
+called from `/` — nothing else on the command line and no topic folder as the working
+directory, both of which the tmux server keeps as its own (see LAUNCHER: a `pkill -f
+grep` or a `fuser -k <folder>` must not match it). A tmux call that does not answer in
+15 s is an error message and exit 1.
 """
 import contextlib
 import fcntl
@@ -91,8 +93,10 @@ USAGE = ("usage: library_cli.py ensure <id> | active | pane-cmd <id> | pane-is-c
 # ── tmux ────────────────────────────────────────────────────────────────────
 # AgentDeck's tmux settings (mouse selection, copy on release into the buffer the
 # dashboard reads, scrollback). tmux reads -f only when that command starts the
-# server, so every call carries it: whichever call comes first starts the server
-# with it. A server someone else started gets it once from ensure_tmux_conf().
+# server. AgentDeck starts one with -f /dev/null and sources the file right away
+# (hold_server: no path on the server's command line); every other call carries -f
+# too, for a server that comes up another way. A server someone else started gets
+# it once from ensure_tmux_conf().
 TMUX_CONF = os.path.join(HERE, "tmux.conf")
 TMUX_CONF_MARK = "@agentdeck-conf"                 # set by tmux.conf itself
 
@@ -105,15 +109,26 @@ def tmux_argv(*args):
     return base + list(args)
 
 
-# What a new pane runs. tmux keeps, as the SERVER's own command line, the command line of
-# the client that started it — whichever new-session came first. A careless `pkill -f
-# grep` (or claude, bash, env, …) anywhere on the machine matches that line and kills
-# the server with every terminal in it (2026-09-26: `pkill -f "… | grep"` did). So every
-# new-session here is only `tmux [-L sock] -f <conf> new-session -d -s <name> LAUNCHER
-# <id|shell>`: the pane's folder is the tmux client's working directory (a detached
-# new-session starts there) instead of `-c <folder>` — a folder like ~/claude-code-bot
-# would put the word back — and bin/agentdeck-pane does the rest inside the pane.
-LAUNCHER = os.path.join(HERE, "bin", "agentdeck-pane")
+# What a new pane runs, and how the tmux server comes up. tmux keeps, as the SERVER's
+# own command line, the command line of the client that started it — whichever call
+# came first — and its working directory too. A careless `pkill -f grep` (or claude,
+# bash, env, agentdeck, the checkout's path, …) anywhere on the machine matches that
+# line and kills the server with every terminal in it (2026-09-26: `pkill -f "… | grep"`
+# did); a `fuser -k <folder>` would, were a terminal's folder its working directory.
+# So when no server runs, hold_server() starts one first with a line that says nothing
+# — `tmux [-L sock] -f /dev/null new-session -d -s hold-<hex> tmux wait-for
+# hold-<hex>`, from `/` — sources tmux.conf into it, and keeps it up with that
+# placeholder until the real session exists (release_server ends it). The real new-session
+# (_new_session) is `new-session -d -s <name> -c <folder> LAUNCHER <id|shell>`, from `/`:
+# bin/pane does the rest inside the pane. Should the placeholder fail, the new-session
+# goes without -c (the prepared start carries the folder too; the launcher enters it),
+# so even then the server's line is only tmux options, the name and bin/pane — a name
+# without such a word, "agentdeck" included (a `pkill -f agentdeck` meant for another
+# install).
+# AGENTDECK_LAUNCHER: another copy of it (the tests: one in a throwaway checkout).
+LAUNCHER = os.path.abspath(os.getenv("AGENTDECK_LAUNCHER")
+                           or os.path.join(HERE, "bin", "pane"))
+TMUX_TIMEOUT = 15
 
 
 def _clean_env():
@@ -123,23 +138,68 @@ def _clean_env():
 
 
 def _tmux(*args, cwd=None):
-    """cwd: the folder a new-session starts its pane in (see LAUNCHER); a folder that
-    is gone falls back to home, as tmux does for a bad -c."""
-    if cwd is not None and not os.path.isdir(cwd):
-        cwd = os.path.expanduser("~")
+    """cwd: where tmux is called from — `/` for a new-session (see LAUNCHER)."""
     return subprocess.run(tmux_argv(*args), capture_output=True, text=True,
-                          env=_clean_env(), timeout=15, cwd=cwd)
+                          env=_clean_env(), timeout=TMUX_TIMEOUT, cwd=cwd)
 
 
 def _has(name):
     return _tmux("has-session", "-t", "=" + name).returncode == 0
 
 
+def _tmux_bare(*args):
+    """tmux on our socket without our -f, from `/`: the call hold_server starts a
+    server with (its command line and working directory become the server's)."""
+    sock = os.getenv("AGENTDECK_TMUX_SOCKET")
+    return subprocess.run(["tmux", *(["-L", sock] if sock else []), *args],
+                          capture_output=True, text=True, env=_clean_env(),
+                          timeout=TMUX_TIMEOUT, cwd="/")
+
+
+def hold_server(run=None):
+    """Make sure a tmux server runs for the new-session that follows, and that it was
+    not that call which started it (see LAUNCHER). Returns (up, hold): up — a server
+    runs, so the new-session may carry any path (-c <folder>, the launcher); hold — the
+    placeholder session started here to bring the server up (None: one already ran),
+    for release_server() once the new session exists. (False, None): no server could be
+    started this way; the caller names no folder. run: the caller's tmux runner."""
+    run = run or _tmux
+    if getattr(run("list-sessions", "-F", "#{session_name}"), "returncode", 1) == 0:
+        return True, None
+    hold = f"hold-{os.urandom(4).hex()}"
+    _tmux_bare("-f", os.devnull, "new-session", "-d", "-s", hold, "tmux", "wait-for", hold)
+    if getattr(run("has-session", "-t", "=" + hold), "returncode", 1) != 0:
+        return False, None
+    ensure_tmux_conf(run)                          # before the first real pane
+    return True, hold
+
+
+def release_server(hold, run=None):
+    """End hold_server()'s placeholder session (exactly that one; its pane is the
+    `tmux wait-for` hold_server started). Gone when this returns: a list right after
+    shows only the real sessions. No other session left: the server exits, as tmux
+    does when its last session closes."""
+    if hold:
+        (run or _tmux)("kill-session", "-t", "=" + hold)
+
+
+def _new_session(name, arg, folder):
+    """`new-session -d -s <name> [-c <folder>] LAUNCHER <arg>` from `/`, on a server
+    hold_server() made sure of (see LAUNCHER)."""
+    up, hold = hold_server()
+    try:
+        return _tmux("new-session", "-d", "-s", name, *(["-c", folder] if up else []),
+                     LAUNCHER, arg, cwd="/")
+    finally:
+        release_server(hold)
+
+
 def ensure_tmux_conf(run=None):
     """Source tmux.conf into a running server that has not read it (started
     without our -f: by hand, by an older AgentDeck). Once per server: the file
-    sets TMUX_CONF_MARK. No server running: nothing — the next call starts one
-    with -f. Show-options, not display-message (see the module docstring).
+    sets TMUX_CONF_MARK. No server running: nothing — hold_server() sources it
+    into the one it starts. Show-options, not display-message (see the module
+    docstring).
     run: the caller's tmux runner (the bridge passes its own)."""
     run = run or _tmux
     if not os.path.isfile(TMUX_CONF):
@@ -499,7 +559,7 @@ def pane_argv(e, home=None, claude_bin=None):
 
 def pane_command(e, home=None, claude_bin=None):
     """What the pane does, as one shell line (the dry run: `pane-cmd`, DRY_RUN=1):
-    what bin/agentdeck-pane runs after the login shell's rc, with pane_argv."""
+    what bin/pane runs after the login shell's rc, with pane_argv."""
     sid, _ = checked_entry(e)
     home = home or os.path.expanduser("~")
     oauth = shlex.quote(os.path.join(home, ".claude", "oauth.env"))
@@ -513,26 +573,40 @@ def pane_command(e, home=None, claude_bin=None):
             "exec " + " ".join(shlex.quote(a) for a in pane_argv(e, home, claude_bin)))
 
 
-def launch_file(sid):
-    """Where ensure leaves claude's arguments for `agentdeck-pane <sid>`: next to the
-    registry (the launcher applies the same rule: $AGENTDECK_LIBRARY, else
-    <repo>/.sessions/library.json)."""
-    return os.path.join(os.path.dirname(library.LIB_FILE), "launch", sid)
+def launch_file(key):
+    """Where a start is left for `bin/pane <key>` (a topic id, or `shell`):
+    <LAUNCHER's checkout>/.sessions/launch/<key>. The launcher finds it from its own
+    path — the environment can't say: the pane's is the tmux server's, set by whoever
+    started the server, not by the ensure that prepared this start."""
+    return os.path.join(os.path.dirname(os.path.dirname(LAUNCHER)), ".sessions", "launch", key)
 
 
-def prepare_launch(sid, argv):
-    """Leave argv (NUL-separated, 0600) for the launcher, which reads it once and
-    removes it. Data, not a command: nothing in it is run as shell code."""
-    if not library.valid_id(sid) or any("\0" in a for a in argv):
+def prepare_launch(key, folder, argv):
+    """Leave [folder, *argv] (NUL-separated, 0600, in a 0700 folder) for the launcher,
+    which enters the folder, reads it once and removes it. Data, not a command: nothing
+    in it is run as shell code. key: a topic id (argv: pane_argv) or `shell` (no argv)."""
+    if (not (key == "shell" or library.valid_id(key))
+            or any("\0" in a for a in (folder, *argv))):
         raise ValueError("bad launch arguments")
-    path = launch_file(sid)
-    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    path = launch_file(key)
+    d = os.path.dirname(path)
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    st = os.lstat(d)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        raise RuntimeError(f"{d} is not a folder of this user's — the launcher won't use it")
+    if st.st_mode & 0o022:                         # the launcher refuses a start others could write
+        os.chmod(d, 0o700)
     tmp = f"{path}.{os.getpid()}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as f:
-        f.write(b"".join(os.fsencode(a) + b"\0" for a in argv))
+        f.write(b"".join(os.fsencode(a) + b"\0" for a in (folder, *argv)))
     os.replace(tmp, path)
     return path
+
+
+def _discard(path):
+    with contextlib.suppress(OSError):
+        os.unlink(path)
 
 
 # ── ensure ──────────────────────────────────────────────────────────────────
@@ -593,20 +667,28 @@ def _start(e, argv):
     """Start cs-<id> running claude (argv: pane_argv) — as the pane's own command, not
     typed into a shell with send-keys (that showed the long `for v in … exec claude …`
     line, echoed twice, before Claude drew). tmux is handed only LAUNCHER and the id
-    (see LAUNCHER); the launcher loads the login + interactive bash environment the
-    shell tmux used to start had, and execs claude with argv, prepared here — so
-    claude is the pane's process and the pane closes when claude exits."""
+    (see LAUNCHER); the launcher enters the topic's folder, loads the login +
+    interactive bash environment the shell tmux used to start had, and execs claude
+    with argv, prepared here — so claude is the pane's process and the pane closes
+    when claude exits. A start tmux did not take is never left for a later launch."""
     sid = e["id"]
     name = library.tmux_name(sid)
     if not os.access(LAUNCHER, os.X_OK):
         raise RuntimeError(f"{LAUNCHER} is not executable (chmod +x it)")
-    prepared = prepare_launch(sid, argv)
-    r = _tmux("new-session", "-d", "-s", name, LAUNCHER, sid, cwd=effective_cwd(e))
+    folder = effective_cwd(e)
+    prepared = prepare_launch(sid, folder, argv)
+    try:
+        r = _new_session(name, sid, folder)
+    except subprocess.TimeoutExpired as ex:
+        _discard(prepared)
+        raise RuntimeError(f"tmux did not answer in {TMUX_TIMEOUT} s") from ex
+    except BaseException:
+        _discard(prepared)
+        raise
     if r.returncode != 0:
         if _has(name):                             # someone else just started it
             return
-        with contextlib.suppress(OSError):         # never left for a later launch
-            os.unlink(prepared)
+        _discard(prepared)
         raise RuntimeError(r.stderr.strip() or "tmux new-session failed")
 
 
@@ -661,8 +743,8 @@ def ensure(sid, now=None):
 
 # ── the plain command line ──────────────────────────────────────────────────
 # The pane inherits the tmux SERVER's environment when the server was started by
-# someone else (a Claude-spawned caller would leak CLAUDE* into it): `agentdeck-pane
-# shell` scrubs it, then execs so the pane's process is the login bash itself.
+# someone else (a Claude-spawned caller would leak CLAUDE* into it): `bin/pane shell`
+# enters WORKDIR, scrubs it, then execs so the pane's process is the login bash itself.
 def shell_ensure():
     """Start cmd-shell unless it runs; either way print its name. tmux refuses a
     second session with the same name, so two presses at once still make one."""
@@ -670,8 +752,15 @@ def shell_ensure():
     ensure_tmux_conf()
     if not _has(name):
         cwd = WORKDIR if os.path.isdir(WORKDIR) else os.path.expanduser("~")
-        r = _tmux("new-session", "-d", "-s", name, LAUNCHER, "shell", cwd=cwd)
+        prepared = prepare_launch("shell", cwd, [])
+        try:
+            r = _new_session(name, "shell", cwd)
+        except subprocess.TimeoutExpired:
+            _discard(prepared)
+            _say(f"couldn't start the command line: tmux did not answer in {TMUX_TIMEOUT} s")
+            return EXIT_FAIL
         if r.returncode != 0 and not _has(name):
+            _discard(prepared)
             _say(f"couldn't start the command line: {_clean(r.stderr.strip())}")
             return EXIT_FAIL
         # option commands need the `=name:` form (a bare `=name` is "no such session")
@@ -718,6 +807,9 @@ def main(argv):
         return _main(argv)
     except library.CorruptRegistry as ex:
         _say(f"topic registry is corrupt, doing nothing: {ex}")
+        return EXIT_FAIL
+    except subprocess.TimeoutExpired:
+        _say(f"tmux did not answer in {TMUX_TIMEOUT} s — its server may be stuck.")
         return EXIT_FAIL
 
 

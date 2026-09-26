@@ -5,12 +5,14 @@ dashboard's copy (web/index.html enableClipboardCopy -> /api/tmux-buffer) needs
 tmux to copy the selection into its buffer when the mouse button is released.
 A fresh install had none of that (it lived only in the author's ~/.tmux.conf).
 
-Every tmux server AgentDeck starts is started with `-f <repo>/tmux.conf`
-(library_cli.tmux_argv — tmux reads -f only when the server starts); a server
-that was already running gets it once via `source-file` on ensure / shell-ensure
-(the file sets the marker @agentdeck-conf, so it is never sourced twice). The
-file ends by sourcing the user's own ~/.tmux.conf, which therefore still applies
-on top.
+A tmux server AgentDeck starts gets the file via `source-file` right after it
+comes up, before the first real pane (library_cli.hold_server: the server itself is
+started with -f /dev/null, so no path lands on its command line); every other tmux
+call carries `-f <repo>/tmux.conf` (library_cli.tmux_argv — tmux reads -f only when
+the server starts) for a server that comes up another way; a server that was already
+running gets it once via `source-file` on ensure / shell-ensure (the file sets the
+marker @agentdeck-conf, so it is never sourced twice). The file ends by sourcing the
+user's own ~/.tmux.conf, which therefore still applies on top.
 
 Isolation: a private tmux socket per test (Deck from test_library_cli, killed at
 the end), fake HOME; conftest points TMUX_TMPDIR at a throwaway directory. The

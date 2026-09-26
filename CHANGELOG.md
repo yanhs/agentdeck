@@ -35,19 +35,39 @@ All notable changes to AgentDeck. Newest first.
   call that started it, and that used to be `tmux … new-session … -c <folder> bash -lic
   'for v in $(env | … grep -i CLAUDE) … exec claude --resume …'` — so `pkill -f` with
   `grep`, `claude`, `bash` or `env` in its pattern (even inside a `… | grep` meant as a
-  pipe) matched the server and killed all terminals at once. Every `tmux new-session`
-  AgentDeck runs is now only `tmux -f <repo>/tmux.conf new-session -d -s cs-<code>
-  <repo>/bin/agentdeck-pane <code>` (or `… cmd-shell <repo>/bin/agentdeck-pane shell`); the
-  terminal's folder is where tmux is started from, not an argument, so a folder like
-  `~/claude-bot` does not bring the word back. The new launcher `bin/agentdeck-pane`
-  checks the code, loads the login shell's environment, unsets `CLAUDE*`, sources
+  pipe) matched the server and killed all terminals at once. The server also keeps the
+  working directory of that call, so a terminal's folder there would make `fuser -k
+  <folder>` or `lsof +D <folder> | xargs kill` ("free this folder") do the same. Now,
+  when no server runs, AgentDeck starts one first with a line that says nothing — `tmux
+  -f /dev/null new-session -d -s hold-<hex> tmux wait-for hold-<hex>`, called from `/`:
+  no grep/claude/bash/env, no `agentdeck`, no path of the checkout or of a folder —
+  loads `tmux.conf` into it, makes the terminal on it and lets the placeholder go. The
+  terminal's own `new-session` (`-c <folder> <repo>/bin/pane <code>`, or `… bin/pane
+  shell` for `cmd`) runs on a server that is already up, so its line is not the server's,
+  and tmux's new windows in the terminal still open in its folder. Every tmux call that
+  makes a session is made from `/`. The new launcher `bin/pane` (a name with no such
+  word either) checks the code, enters the folder (one it can't enter: home, tmux's own
+  rule), loads the login shell's environment, unsets `CLAUDE*`, sources
   `~/.claude/oauth.env`, exports `AGENTDECK_SESSION` and execs claude with the arguments
   `library_cli.py ensure` prepared for this start (`--resume`/`--session-id`, the
-  ultracode/max restore; left in `.sessions/launch/<code>`, read once). A Telegram-started
-  old numbered slot is created under a neutral name and renamed to `claude-terminal-N`.
-  Nothing changes for a server that is already running: the new command line applies the
-  next time the tmux server starts. (`pkill -f claude` still ends every Claude itself —
-  that is what it asks for; the conversations stay resumable.)
+  ultracode/max restore). The start is left in `<checkout>/.sessions/launch/<code>`, read
+  once, and found from the launcher's own path — never from the environment, which in a
+  pane is the tmux server's (whoever started it first), not the dashboard's: a moved
+  registry (`AGENTDECK_LIBRARY`) cannot send it elsewhere. It is used only if nobody else
+  could have written it (not a link, not writable by others) and runs only a program
+  named `claude` (`claude.exe`: the npm build), so `CLAUDE_BIN` must name a file called
+  that, as `install.sh` sets it. A start tmux did not take — refused, or tmux hung for
+  15 s (now a message and exit 1, not a traceback) — is removed at once. A
+  Telegram-started old numbered slot is made the same way under a neutral name and
+  renamed to `claude-terminal-N`. A server that is already running keeps its line and
+  working directory until it next starts. (`pkill -f claude` still ends every Claude
+  itself — that is what it asks for; the conversations stay resumable.)
+- **The old numbered terminals' buttons reach only their own terminal.** tmux reads a
+  bare `-t claude-terminal` as a prefix when no session has exactly that name — and slot
+  #1's `claude-terminal` is the prefix of every slot. With #1 not running and one other
+  slot up, the × (unload) of #1 killed that other terminal, and `/compact`, a model or
+  effort change for #1 were typed into it; the status list showed #1 running with the
+  other's screen. Every tmux target there is exact now (`=name`, `=name:`).
 
 ## v1.7.0 — HTTPS by default, copy & paste like a desktop terminal, ultracode survives restarts
 

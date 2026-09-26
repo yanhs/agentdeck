@@ -150,8 +150,10 @@ def reset_agent(agent_id, session_name):
     """
     out = {"tmux_killed": False}
 
+    # `=name`: exactly this session. A bare name is a prefix to tmux when no session
+    # has it exactly — and slot #1's `claude-terminal` is the prefix of every slot.
     r = subprocess.run(
-        ["tmux", "kill-session", "-t", session_name],
+        ["tmux", "kill-session", "-t", "=" + session_name],
         capture_output=True, text=True,
     )
     out["tmux_killed"] = r.returncode == 0
@@ -161,7 +163,7 @@ def reset_agent(agent_id, session_name):
 
 def get_pane_pid(session):
     r = subprocess.run(
-        ["tmux", "list-panes", "-t", session, "-F", "#{pane_pid}"],
+        ["tmux", "list-panes", "-t", f"={session}:", "-F", "#{pane_pid}"],   # exact
         capture_output=True, text=True,
     )
     if r.returncode != 0 or not r.stdout.strip():
@@ -280,7 +282,7 @@ def parse_pane(session):
     """Capture pane content, extract project name and last meaningful activity."""
     # Deep capture for project detection, shallow for task
     r_deep = subprocess.run(
-        ["tmux", "capture-pane", "-t", session, "-p", "-S", "-300"],
+        ["tmux", "capture-pane", "-t", f"={session}:", "-p", "-S", "-300"],   # exact
         capture_output=True, text=True,
     )
     if r_deep.returncode != 0:
@@ -973,7 +975,7 @@ class Handler(BaseHTTPRequestHandler):
             session_name = t["session"]
 
             r = subprocess.run(
-                ["tmux", "has-session", "-t", session_name],
+                ["tmux", "has-session", "-t", "=" + session_name],   # exact, not a prefix
                 capture_output=True,
             )
             if r.returncode != 0:
@@ -1116,13 +1118,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._json_response(400, {"error": f"unknown action {action!r}"})
                 return
             session_name = valid_ids[agent_id]
-            r = subprocess.run(
-                ["tmux", "has-session", "-t", session_name],
+            r = subprocess.run(   # exact targets: never another slot (see reset_agent)
+                ["tmux", "has-session", "-t", "=" + session_name],
                 capture_output=True, text=True,
             )
             if r.returncode == 0:
                 subprocess.run(
-                    ["tmux", "send-keys", "-t", session_name,
+                    ["tmux", "send-keys", "-t", f"={session_name}:",
                      VALID_ACTIONS[action], "Enter"],
                     capture_output=True, text=True,
                 )
@@ -1172,14 +1174,14 @@ class Handler(BaseHTTPRequestHandler):
         # change in the terminal until the next launch.
         if slash_cmds:
             session_name = valid_ids[agent_id]
-            r = subprocess.run(
-                ["tmux", "has-session", "-t", session_name],
+            r = subprocess.run(   # exact targets: never another slot (see reset_agent)
+                ["tmux", "has-session", "-t", "=" + session_name],
                 capture_output=True, text=True,
             )
             if r.returncode == 0:
                 for cmd in slash_cmds:
                     subprocess.run(
-                        ["tmux", "send-keys", "-t", session_name, cmd, "Enter"],
+                        ["tmux", "send-keys", "-t", f"={session_name}:", cmd, "Enter"],
                         capture_output=True, text=True,
                     )
 
