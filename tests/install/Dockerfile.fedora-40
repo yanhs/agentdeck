@@ -1,0 +1,4 @@
+# Unsupported-distro check for install.sh: it must refuse and change nothing.
+FROM fedora:40
+RUN useradd -m -s /bin/bash tester
+CMD ["sleep", "infinity"]

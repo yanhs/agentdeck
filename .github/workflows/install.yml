@@ -1,0 +1,68 @@
+# install.sh on fresh machines, every push: GitHub's ubuntu runners ARE fresh VMs with
+# sudo + systemd, so the installer runs for real there; Debian 12 (and the refusal on an
+# unsupported distro) run in the systemd containers of tests/install/run.sh.
+name: install
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m pip install --quiet pytest
+      - run: python3 -m pytest -q tests/test_install_sh.py
+
+  vm:
+    name: install.sh on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    env:
+      PW: ci-password-123
+    steps:
+      - uses: actions/checkout@v4
+      - name: ./install.sh --yes
+        run: ./install.sh --yes
+      - name: services active
+        run: |
+          for u in agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service \
+                   agentdeck-caddy.service agentdeck-reaper.timer; do
+            systemctl is-active "$u"; systemctl is-enabled "$u"
+          done
+      - name: smoke test (login, new terminal, board, server tab)
+        run: python3 tests/install/smoke.py http://127.0.0.1:8765 --password "$PW" --first-run --new-terminal --id-file /tmp/sid
+      - name: claude runs in the new terminal
+        run: TMUX_TMPDIR=$PWD/.sessions/tmux tmux list-panes -a -F '#{session_name} #{pane_current_command}' | tee /dev/stderr | grep -Eq "^cs-$(cat /tmp/sid) (claude|node)"
+      - name: re-run is idempotent
+        run: |
+          systemctl list-units 'agentdeck*' --all --no-legend --plain | awk '{print $1}' > /tmp/u1
+          ./install.sh --yes
+          systemctl list-units 'agentdeck*' --all --no-legend --plain | awk '{print $1}' > /tmp/u2
+          diff /tmp/u1 /tmp/u2
+          test "$(pgrep -xc ttyd)" = 1 && test "$(pgrep -xc caddy)" = 1
+          python3 tests/install/smoke.py http://127.0.0.1:8765 --password "$PW" --expect-id "$(cat /tmp/sid)"
+      - name: uninstall
+        run: |
+          ./install.sh --uninstall --yes
+          test -z "$(ls /etc/systemd/system | grep agentdeck || true)"
+          ! curl -s -o /dev/null --max-time 3 http://127.0.0.1:8765/login
+      - name: logs on failure
+        if: failure()
+        run: sudo journalctl -u 'agentdeck-*' --no-pager -n 200 || true
+
+  container:
+    name: install.sh in a ${{ matrix.distro }} systemd container
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [debian-12, fedora-40]
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/install/run.sh ${{ matrix.distro }}

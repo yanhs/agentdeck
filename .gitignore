@@ -35,3 +35,6 @@ tests/test_launch_script_gate.py
 
 # written by ./https.sh (host ports 80/443 for HTTPS); ./https.sh --off removes it
 docker-compose.https.yml
+
+# written by install.sh in a folder it cloned itself (lets --uninstall --purge delete it)
+.agentdeck-managed

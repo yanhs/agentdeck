@@ -1,0 +1,14 @@
+# A fresh-VPS stand-in for install.sh: debian:12 with systemd as PID 1 and a non-root user
+# `ubuntu` with passwordless sudo — nothing else (install.sh brings the rest).
+# Used by tests/install/run.sh; not a product image.
+FROM debian:12
+ENV container=docker
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends systemd systemd-sysv dbus sudo ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && (id ubuntu >/dev/null 2>&1 || useradd -m -s /bin/bash ubuntu) \
+ && echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu && chmod 440 /etc/sudoers.d/ubuntu \
+ && systemctl mask getty.target console-getty.service
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
