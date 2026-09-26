@@ -151,9 +151,10 @@ def main():
     return 0 if not FAILED else 1
 
 
-def ttyd_attach(base, jar, sid, ctx, seconds=20):
+def ttyd_attach(base, jar, sid, ctx, seconds=20, stay=False):
     """Open /sess/ws?arg=<id> like the browser does (over TLS for https) and collect
-    terminal output."""
+    terminal output: until 2000 bytes came, or — stay=True, an open tab — for the
+    whole `seconds` (then the last 64 KiB)."""
     u = urllib.parse.urlparse(base)
     tls = u.scheme == "https"
     host, port = u.hostname, u.port or (443 if tls else 80)
@@ -188,7 +189,7 @@ def ttyd_attach(base, jar, sid, ctx, seconds=20):
     buf, out = rest, b""
     end = time.time() + seconds
     s.settimeout(2)
-    while time.time() < end and len(out) < 2000:
+    while time.time() < end and (stay or len(out) < 2000):
         try:
             chunk = s.recv(65536)
             if not chunk:
@@ -209,9 +210,12 @@ def ttyd_attach(base, jar, sid, ctx, seconds=20):
                 n, off = int.from_bytes(buf[2:10], "big"), 10
             if len(buf) < off + n:
                 break
+            opcode = buf[0] & 0x0F
             payload, buf = buf[off:off + n], buf[off + n:]
-            if payload[:1] == b"0":          # ttyd OUTPUT message
-                out += payload[1:]
+            if opcode == 0x9:                # ping: answer, or ttyd drops a quiet tab
+                send(payload, opcode=0xA)
+            elif payload[:1] == b"0":        # ttyd OUTPUT message
+                out = (out + payload[1:])[-65536:]
     s.close()
     return out
 
