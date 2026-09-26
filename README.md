@@ -3,7 +3,9 @@
 > Put a dozen **Claude Code** agents on your own server. Each one is a real terminal that
 > keeps working when you close the tab — you watch and steer them from the **browser** or
 > **Telegram**, even from your phone. Agents log every task on a **shared board** and keep
-> going until it is done.
+> going until it is done. Run it with **full control of the server** — agents install
+> packages, databases, sites and HTTPS themselves — or in a **Docker sandbox** that keeps
+> them inside a container.
 
 <p>
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
@@ -20,10 +22,13 @@
   the actual `claude` TUI in its own persistent `tmux` session on your server, shown
   through `ttyd`. Close the tab, the laptop or the phone — it keeps working. Open it later
   from anywhere and it's the same terminal.
+- **Full server control or a sandbox — your choice.** Install on the host and agents manage
+  the whole server (packages, databases, nginx, HTTPS, Docker); or use the Docker sandbox,
+  where they can't touch the host.
 - **Agents that don't stall.** Each agent puts its task on a shared board before it edits
   anything, and is not allowed to go quiet in the middle of a task: it keeps working until
   the task is closed. A terminal waiting on its own timer is never unloaded. (Claude Code
-  hooks, on by default in Docker.)
+  hooks, on by default.)
 - **Telegram drives the terminals themselves.** Pick a terminal, type or send a voice
   note, get the screen back; Claude's multiple-choice questions arrive as buttons; restore
   an archived agent with `/archive`.
@@ -35,13 +40,32 @@
 
 ## Try it in a minute
 
+Full control of the server — best on a dedicated VPS (Ubuntu 22.04 / 24.04, Debian 12):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash
+# → http://<your-vps-ip>:8765 — the first visit sets the password
+```
+
+Then **＋ New terminal**, sign in to Claude once, and give the agent a task. HTTPS with no
+domain: `~/agentdeck/install.sh --https`. Details: [Quick start](#-quick-start).
+
+## Try it in a sandbox (server control isn't available in this mode)
+
 ```bash
 git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
 docker compose up -d          # → http://<your-vps-ip>:8765 — the first visit sets the password
+./https.sh                    # optional: HTTPS on <your-ip>.sslip.io, no domain needed
 ```
 
-Then **＋ New terminal**, sign in to Claude once, and give the agent a task. Details, HTTPS
-and the manual setup: [Quick start](#-quick-start-docker--one-command).
+Limits of the sandbox — the price of keeping agents off the host:
+
+- agents can't manage the host — its nginx, services, other containers or ports;
+- a site or app an agent starts inside isn't reachable from outside: only the dashboard's
+  port is published;
+- packages installed with `apt` disappear when the container is re-created — only `/work`
+  and the settings volumes persist;
+- no systemd inside, so agents can't set up services the usual way.
 
 ## How it compares
 
@@ -173,7 +197,50 @@ The dashboard works on a phone too:
 - **`tg_bridge.py`** — the Telegram ⇄ tmux bridge (+ `whisper_transcribe.py` for voice).
 - **`tasks-dashboard/`** — the shared task board (own README inside).
 
-## 🐳 Quick start (Docker — one command)
+## 🚀 Quick start
+
+Two ways to run it. Both give the same dashboard; they differ in what the agents may touch.
+
+### 1. Install on your server (recommended) — agents get the whole server
+
+[![install.sh on fresh servers](https://github.com/yanhs/agentdeck/actions/workflows/install.yml/badge.svg)](https://github.com/yanhs/agentdeck/actions/workflows/install.yml)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash
+```
+
+or, from a clone: `./install.sh`. Run it as a normal user with `sudo` (not as root). When sudo
+needs no password (the usual cloud `ubuntu` user) nothing is asked; `--yes` never asks.
+At the end it prints the address: open it, **the first visit sets the password**, then
+**＋ New terminal** and sign in to Claude once.
+
+- **Supported:** Ubuntu 22.04 and 24.04, Debian 12 — x86_64 or aarch64. On anything else it
+  stops without changing anything and points you to the Docker sandbox below.
+- **What it installs:** `tmux`, `python3`, `git`, `curl` and a few basics (apt); `ttyd` and
+  Caddy (release binaries in `/usr/local/bin`); Node.js 22 (only if there is no Node 18+);
+  Claude Code (`npm -g`, pinned; `CLAUDE_CODE_VERSION=…` to change); the repo in
+  `~/agentdeck`; the guard hooks in your `~/.claude` (merged, never overwritten;
+  `AGENTDECK_GUARDS=0` skips them).
+- **How it runs:** systemd services running as you — `agentdeck-status`, `-tasks`,
+  `-sessions` (the one ttyd), `-caddy` (login + proxy on `:8765`) and an `agentdeck-reaper`
+  timer. They start at boot. `systemctl status 'agentdeck-*'`, `journalctl -u agentdeck-status`.
+- **HTTPS, no domain needed:** `~/agentdeck/install.sh --https` serves
+  `https://<your-ip-with-dashes>.sslip.io` with a free Let's Encrypt certificate (or
+  `--https your-domain.com`). Ports 80 and 443 must be free — if another web server holds
+  them, it stops and says so. `--http` goes back to `:8765`.
+- **Update or repair:** run the same command again — nothing is duplicated, running agents
+  keep running. **Remove:** `~/agentdeck/install.sh --uninstall` stops the services and the
+  agents' own tmux server (your own tmux sessions are never touched) and keeps your
+  terminals, board and password; `--uninstall --purge` also deletes `~/agentdeck` — only a
+  folder the installer cloned itself, never a clone of yours. `--check` only runs the checks.
+- **The agents' tmux:** a server of their own, in `~/agentdeck/.sessions/tmux` — to look at it
+  from SSH: `TMUX_TMPDIR=~/agentdeck/.sessions/tmux tmux ls`.
+
+> ⚠️ **The agents run with full access to this machine** — as your user, with your sudo.
+> That is the point (they install packages, set up databases, nginx, HTTPS, Docker), and it
+> is why this belongs on a **dedicated VPS, not your laptop**.
+
+### 2. Docker sandbox — agents stay inside a container
 
 Runs on any VPS — **no domain or pre-config needed**. You need **Docker** and **one free TCP port**
 (`8765` by default) open in your firewall / cloud security group. Note: Docker-published ports
@@ -218,6 +285,10 @@ automatically).
 > **Fallback — self-signed, no free 80/443:** `AGENTDECK_SITE=https://:8765 docker compose up -d`,
 > then open `https://<your-vps-ip>:8765` and click through the one-time "not trusted" warning.
 > (HTTPS is needed for clipboard copy, which browsers only allow over HTTPS or localhost.)
+
+The sandbox's limits (no host control, no reachable sites, `apt` installs don't survive a
+re-create, no systemd) are listed under
+[Try it in a sandbox](#try-it-in-a-sandbox-server-control-isnt-available-in-this-mode).
 
 ## ✅ Requirements (for the manual setup)
 
@@ -457,6 +528,12 @@ The session library (registry, API, loading/unloading, migration), the idle reap
 entire Telegram bridge (send/receive, menu parsing, transcription, file handling) are
 covered. Tests that need `tmux` use their own private tmux server and never touch your
 running terminals.
+
+The installer has its own end-to-end test: `tests/install/run.sh ubuntu-24.04` (also
+`ubuntu-22.04`, `debian-12`, and `fedora-40` for the refusal) boots a fresh systemd
+container, runs `install.sh` the `curl | bash` way, logs in, opens a terminal, reboots,
+re-runs the installer and uninstalls. GitHub runs it on every push, plus `./install.sh --yes`
+on real Ubuntu 22.04 / 24.04 VMs (`.github/workflows/install.yml`).
 
 ## 🗂️ Project layout
 

@@ -4,6 +4,28 @@ All notable changes to AgentDeck. Newest first.
 
 ## Unreleased
 
+- **`install.sh` — install on your own server in one command; agents get the whole server.**
+  `curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash` (or
+  `./install.sh` from a clone) on Ubuntu 22.04 / 24.04 or Debian 12 (x86_64, aarch64):
+  apt basics, ttyd + Caddy binaries, Node.js 22 when needed, Claude Code (the Dockerfile's
+  pinned version), the repo in `~/agentdeck`, guard hooks merged into `~/.claude`, and
+  systemd services running as you (status server, task board, the sessions ttyd, Caddy on
+  `:8765`, an idle-reaper timer) that start at boot. `--https [domain]` serves HTTPS on
+  80/443 (no domain → `<ip>.sslip.io`), `--uninstall [--purge]`, `--check`, `--yes`.
+  Refuses root (unless `AGENTDECK_ALLOW_ROOT=1`) and unsupported systems without changing
+  anything; re-running upgrades and repairs, and restarts never kill running agents. The
+  agents get a tmux server of their own (`TMUX_TMPDIR=~/agentdeck/.sessions/tmux`), so
+  `--uninstall` stops only that one and never your own tmux sessions; `--purge` deletes only
+  a folder the installer cloned itself (recorded in `~/.config/agentdeck/install.env`, with a
+  marker inside) and refuses anything else.
+- **README: full control or a sandbox.** "Try it in a minute" is the one-line install (full
+  control of the server, best on a dedicated VPS); "Try it in a sandbox" is Docker, with its
+  limits spelled out. Quick start has both, in that order.
+- **Installer tests.** `tests/test_install_sh.py` (preflight, OS/arch, units, uninstall and
+  purge rules — fast; it runs a copy of install.sh in a tmp sandbox where every outside
+  command is a shim and any write outside the sandbox fails the test) and
+  `tests/install/run.sh <distro>` (systemd containers: install, login, new terminal, reboot,
+  re-run, uninstall); `.github/workflows/install.yml` runs them on every push.
 - **`./https.sh` — HTTPS in one command, no domain needed.** Uses a free `<ip>.sslip.io` name (or `./https.sh your-domain.com`), writes `AGENTDECK_SITE` + a ports override into `.env`, checks 80/443 are free, waits for the Let's Encrypt certificate; `--off` reverts. The placeholder `you@example.com` ACME email is now dropped (Let's Encrypt refuses it).
 - **Guard hooks on by default in Docker.** The container start merges
   `hooks/guard_task_board.py` + `hooks/guard_dont_stop.py` into the agents'
