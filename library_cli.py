@@ -41,7 +41,9 @@ tmux: AGENTDECK_TMUX_SOCKET=<name> -> `tmux -L <name>` (tests use their own
 server). Queries go through list-sessions / list-windows -F only: tmux 3.2a
 crashes the whole server on `display-message -t =<name>` (no trailing colon)
 with a window/time format. Targets are exact: `=name` for sessions, `=name:`
-for panes.
+for panes. Every call carries `-f <repo>/tmux.conf` (AgentDeck's mouse/copy
+settings, then the user's ~/.tmux.conf); a server started without it gets it
+once from ensure / shell-ensure.
 """
 import contextlib
 import fcntl
@@ -73,9 +75,20 @@ USAGE = ("usage: library_cli.py ensure <id> | active | pane-cmd <id> | pane-is-c
 
 
 # ── tmux ────────────────────────────────────────────────────────────────────
+# AgentDeck's tmux settings (mouse selection, copy on release into the buffer the
+# dashboard reads, scrollback). tmux reads -f only when that command starts the
+# server, so every call carries it: whichever call comes first starts the server
+# with it. A server someone else started gets it once from ensure_tmux_conf().
+TMUX_CONF = os.path.join(HERE, "tmux.conf")
+TMUX_CONF_MARK = "@agentdeck-conf"                 # set by tmux.conf itself
+
+
 def tmux_argv(*args):
     sock = os.getenv("AGENTDECK_TMUX_SOCKET")
-    return (["tmux", "-L", sock] if sock else ["tmux"]) + list(args)
+    base = ["tmux", "-L", sock] if sock else ["tmux"]
+    if os.path.isfile(TMUX_CONF):
+        base += ["-f", TMUX_CONF]
+    return base + list(args)
 
 
 def _clean_env():
@@ -91,6 +104,21 @@ def _tmux(*args):
 
 def _has(name):
     return _tmux("has-session", "-t", "=" + name).returncode == 0
+
+
+def ensure_tmux_conf(run=None):
+    """Source tmux.conf into a running server that has not read it (started
+    without our -f: by hand, by an older AgentDeck). Once per server: the file
+    sets TMUX_CONF_MARK. No server running: nothing — the next call starts one
+    with -f. Show-options, not display-message (see the module docstring).
+    run: the caller's tmux runner (the bridge passes its own)."""
+    run = run or _tmux
+    if not os.path.isfile(TMUX_CONF):
+        return
+    r = run("show-options", "-gqv", TMUX_CONF_MARK)
+    if getattr(r, "returncode", 1) != 0 or (getattr(r, "stdout", "") or "").strip():
+        return
+    run("source-file", TMUX_CONF)
 
 
 def live_sessions(now=None, working_seconds=None):
@@ -328,6 +356,7 @@ def ensure(sid, now=None):
         e = _lookup(sid)                           # may have been archived meanwhile
         if e is None:
             return _unknown(sid)
+        ensure_tmux_conf()
         if not _has(name):
             other = claude_elsewhere(e["uuid"], name)
             if other:
@@ -367,6 +396,7 @@ def shell_ensure():
     """Start cmd-shell unless it runs; either way print its name. tmux refuses a
     second session with the same name, so two presses at once still make one."""
     name = library.SHELL_TMUX
+    ensure_tmux_conf()
     if not _has(name):
         cwd = WORKDIR if os.path.isdir(WORKDIR) else os.path.expanduser("~")
         r = _tmux("new-session", "-d", "-s", name, "-c", cwd, *SHELL_CMD)

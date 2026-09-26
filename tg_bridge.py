@@ -187,6 +187,7 @@ def start_session(aid: str) -> tuple[bool, str]:
     cmd = cmd[-1] if cmd else ""
     if not cmd:
         return False, f"could not resolve the launch command for #{aid}"
+    library_cli.ensure_tmux_conf(_tmux)  # a server started without our tmux.conf
     _tmux("new-session", "-d", "-s", session, "-c", AGENT_CWD)
     _tmux("set", "-t", _exact(session), "mouse", "on")
     time.sleep(0.3)
