@@ -2,13 +2,14 @@
 
 All notable changes to AgentDeck. Newest first.
 
-## Unreleased
+## v1.7.1 — one number per terminal; a stray pkill can no longer take every terminal down
 
 ### Terminals
 - **One number per terminal: a terminal and its conversation always share one number.**
-  Claude can change the conversation under a running terminal: its "allow bypass
-  permissions?" prompt, answered yes on a fresh install, restarts Claude without the
-  session id AgentDeck gave it; `/clear` starts a new conversation; `/resume` switches to
+  Claude can change the conversation under a running terminal: some of its own restarts
+  drop the session id AgentDeck gave it (on 2.1.282 the "Try the new fullscreen renderer?"
+  offer answered yes, `/tui fullscreen`, an update or sign-in restart — the bypass-permissions
+  "yes" alone does not); `/clear` starts a new conversation; `/resume` switches to
   another. The dashboard used to keep the old number while the task board (and Claude
   itself) used the new one, and a restart opened an empty conversation under the old
   number. Now the terminal takes the new conversation's number: the new `convo_sync.py`
@@ -19,7 +20,7 @@ All notable changes to AgentDeck. Newest first.
   moves along, and a restart resumes the live conversation. It runs on every list refresh,
   before close / archive / delete / rename, in `library_cli.py ensure` and `active`, in the
   idle reaper, and before the Telegram bridge reads a chat's terminal. The old number: when
-  it never held a conversation (the permissions prompt), it disappears and old links
+  it never held a conversation (a restart right after opening), it disappears and old links
   (`/?open=`, the task board, `/sess/?arg=`, `/use`) still land on the terminal; when it
   has messages (`/clear` after work), it stays in the list as its own unloaded terminal,
   "… (earlier)", and opens on its own. A conversation open in two terminals at once
@@ -36,7 +37,7 @@ All notable changes to AgentDeck. Newest first.
   Telegram chat follow several switches in a row (two `/clear`s while the tab or the chat
   was idle) to the terminal, not to the middle conversation, and a Telegram message or pick
   goes to the number `ensure` opened when that number changed on the way.
-  Claude's permissions prompt itself is left as it is.
+  Claude's own prompts are left as they are (nothing is pre-accepted for the user).
 - **A careless `pkill -f grep` elsewhere on the server can no longer take down every
   terminal:** a tmux server keeps, as its own command line, the command line of the tmux
   call that started it, and that used to be `tmux … new-session … -c <folder> bash -lic

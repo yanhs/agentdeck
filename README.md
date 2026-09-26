@@ -103,10 +103,11 @@ on one VPS.
   the start of its Claude session id, so the dashboard, the tmux session (`cs-<code>`), the
   logs, the task board, Telegram and the transcript file all match. A terminal *is* its
   conversation: one number, always. When the conversation in a running terminal changes —
-  Claude's "allow bypass permissions?" prompt restarts Claude with a new session id,
+  some of Claude's own restarts (its "try the new fullscreen renderer?" offer, an update)
+  come back with a new session id,
   `/clear` starts a new conversation, `/resume` switches to another — the terminal takes the
   new conversation's number (the tmux session is renamed, an open tab stays attached). An
-  old number that never held a conversation (the permissions prompt case) still opens the
+  old number that never held a conversation (a restart right after opening) still opens the
   terminal; after `/clear` the earlier conversation stays in the list as its own terminal,
   "… (earlier)". **＋ New terminal**, rename (✎), drag to reorder,
   **Archive** (also unloads the terminal right away — unless it is working, then it unloads
