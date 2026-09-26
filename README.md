@@ -22,6 +22,10 @@
   the actual `claude` TUI in its own persistent `tmux` session on your server, shown
   through `ttyd`. Close the tab, the laptop or the phone — it keeps working. Open it later
   from anywhere and it's the same terminal.
+- **Sessions survive restarts.** Close the browser, restart AgentDeck or reboot the server:
+  every terminal stays in the list and reopens the same Claude conversation where it left
+  off (`claude --resume`), even in ultracode mode. Unloaded and archived terminals come
+  back the same way.
 - **Copy & paste like a desktop terminal.** Select with the mouse to copy, Ctrl+Shift+V
   (⌘V on a Mac) to paste text, and paste or drop screenshots and images straight into the
   agent.
