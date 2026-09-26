@@ -1,32 +1,63 @@
 # 🛰️ AgentDeck — Claude Code on your VPS, in your browser and Telegram
 
-> Run a fleet of **Claude Code** agents in parallel — one persistent `tmux` session each,
-> supervised from your **browser**, driven from **Telegram**.
+> Put a dozen **Claude Code** agents on your own server. Each one is a real terminal that
+> keeps working when you close the tab — you watch and steer them from the **browser** or
+> **Telegram**, even from your phone. Agents log every task on a **shared board** and keep
+> going until it is done.
 
 <p>
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
+  <img alt="Docker" src="https://img.shields.io/badge/docker-compose%20up-2496ED.svg">
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue.svg">
-  <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg">
-  <img alt="Shell" src="https://img.shields.io/badge/shell-bash-89e051.svg">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-900%2B%20passing-brightgreen.svg">
 </p>
 
-AgentDeck is a small, self-hosted control panel for running **many Claude Code agents at
-once**. Each agent is a **named terminal**: one Claude conversation in its own persistent
-`tmux` session, shown in the browser as a live web terminal (via
-[`ttyd`](https://github.com/tsl0922/ttyd)). Keep as many terminals as you like — only the
-ones you use stay loaded in memory. A dashboard shows what every agent is doing, a
-cookie-session gate sits in front of everything, and a Telegram bridge lets you read and
-steer any agent from your phone.
+![AgentDeck: many Claude Code agents in one dashboard, a task board per terminal, what uses your server, from your phone and from Telegram](docs/demo.gif)
 
-It's the actual setup the author uses to keep a dozen Claude Code agents working in
-parallel on a single VPS. It is opinionated and assumes a specific layout — treat it as a
-working reference you adapt, not a turn-key installer.
+## Why AgentDeck
 
-![AgentDeck — the dashboard: named terminals on the left, a live Claude terminal on the right](docs/screenshots/dashboard.png)
+- **The real Claude Code terminal, in your browser.** Not a chat wrapper: every agent is
+  the actual `claude` TUI in its own persistent `tmux` session on your server, shown
+  through `ttyd`. Close the tab, the laptop or the phone — it keeps working. Open it later
+  from anywhere and it's the same terminal.
+- **Agents that don't stall.** Each agent puts its task on a shared board before it edits
+  anything, and is not allowed to go quiet in the middle of a task: it keeps working until
+  the task is closed. A terminal waiting on its own timer is never unloaded. (Claude Code
+  hooks, on by default in Docker.)
+- **Telegram drives the terminals themselves.** Pick a terminal, type or send a voice
+  note, get the screen back; Claude's multiple-choice questions arrive as buttons; restore
+  an archived agent with `/archive`.
+- **Many agents on one small server.** Only a limited number stay loaded; idle ones are
+  unloaded and resume with `claude --resume` on click; archive frees memory in one click.
+  A **Server** tab shows which agent, container or build is using the CPU and memory.
+- **Your subscription, your box.** Uses the official Claude Code CLI with your normal
+  Claude subscription (or an API key). Self-hosted, MIT, nothing phones home.
 
-> **New in v1.4.0:** named terminals instead of numbered slots, an idle reaper that frees
-> memory, a `cmd` command line, and the task board inside the dashboard. See
-> [CHANGELOG.md](CHANGELOG.md).
+## Try it in a minute
+
+```bash
+git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
+docker compose up -d          # → http://<your-vps-ip>:8765 — the first visit sets the password
+```
+
+Then **＋ New terminal**, sign in to Claude once, and give the agent a task. Details, HTTPS
+and the manual setup: [Quick start](#-quick-start-docker--one-command).
+
+## How it compares
+
+| | AgentDeck | Chat-style web UIs | Local tmux managers | Claude Telegram bots |
+|---|---|---|---|---|
+| Real Claude Code terminal in the browser | ✅ | chat view | ❌ no browser | ❌ |
+| Keeps running with the client closed | ✅ on your server | varies | ✅ | varies |
+| Many agents in parallel | ✅ | some | ✅ | usually one chat |
+| Telegram controls the terminals | ✅ voice, buttons | ❌ | ❌ | ✅ (the whole product) |
+| Task board + agents that finish their tasks | ✅ | ❌ | ❌ | ❌ |
+| Memory limit, idle unloading, archive | ✅ | ❌ | ❌ | ❌ |
+| Git worktree per agent, diff review | ❌ not yet | some | ✅ some | ❌ |
+| Other agents (Codex, Gemini…) | ❌ Claude only | often | often | ❌ |
+
+It's the setup the author uses every day to keep about a dozen Claude Code agents working
+on one VPS.
 
 ---
 
@@ -88,8 +119,7 @@ working reference you adapt, not a turn-key installer.
 
 ## 📸 Screenshots
 
-The first picture above shows an agent at work: named terminals on the left, a live
-Claude Code session on the right.
+![The dashboard: named terminals on the left, a live Claude Code session on the right](docs/screenshots/dashboard.png)
 
 | Tasks tab in the dashboard | A terminal's tasks | Server status |
 |---|---|---|
