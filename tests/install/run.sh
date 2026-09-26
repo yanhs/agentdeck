@@ -127,7 +127,9 @@ expect "PID 1 is systemd" test "$(docker exec "$NAME" cat /proc/1/comm)" = syste
   && git clone -q --bare "$WORK/src" "$WORK/agentdeck.git"
 )
 docker cp "$WORK/agentdeck.git" "$NAME:/opt/agentdeck.git"
-docker exec "$NAME" chmod -R a+rX /opt/agentdeck.git
+# owned by the installing user: docker cp keeps the host uid, and git refuses to clone a
+# repo owned by someone else ("dubious ownership") — e.g. uid 1001 on a GitHub runner
+docker exec "$NAME" chown -R ubuntu:ubuntu /opt/agentdeck.git
 
 say "install: bash < install.sh (the curl | bash path), as user ubuntu, no flags"
 set +e
