@@ -85,17 +85,16 @@ working reference you adapt, not a turn-key installer.
 
 ## 📸 Screenshots
 
-| Login gate | Tasks tab in the dashboard | Archived terminals |
-|---|---|---|
-| ![Login](docs/screenshots/login.png) | ![The task board open as a tab inside the dashboard](docs/screenshots/tasks-tab.png) | ![Show archived: archived terminals with Delete; a click restores one](docs/screenshots/archive.png) |
+The first picture above shows an agent at work: named terminals on the left, a live
+Claude Code session on the right.
 
-| Task board | Task board (dark) | Telegram bridge |
+| Tasks tab in the dashboard | A terminal's tasks | Server status |
 |---|---|---|
-| ![Task board with search, filters and sorting](docs/screenshots/task-board.png) | ![Task board in dark mode](docs/screenshots/task-board-dark.png) | ![Telegram](docs/screenshots/telegram.png) |
+| ![The task board open as a tab inside the dashboard](docs/screenshots/tasks-tab.png) | ![Tasks filtered to one terminal after clicking its code](docs/screenshots/tasks-filtered.png) | ![The Server tab: CPU and memory of agents, sites & apps, jobs and system over 15 minutes](docs/screenshots/server.png) |
 
-| Server status | Light theme | A terminal's tasks |
+| Telegram bridge | Light theme | Archived terminals |
 |---|---|---|
-| ![The Server tab: CPU and memory of agents, sites & apps, jobs and system over 15 minutes](docs/screenshots/server.png) | ![The dashboard in the light theme; the terminal stays dark](docs/screenshots/light-theme.png) | ![Tasks filtered to one terminal after clicking its code in the top bar](docs/screenshots/tasks-filtered.png) |
+| ![Telegram](docs/screenshots/telegram.png) | ![The dashboard in the light theme; the terminal stays dark](docs/screenshots/light-theme.png) | ![Show archived: click an archived terminal to restore and open it; Delete removes it](docs/screenshots/archive.png) |
 
 The **Server** tab shows what is using the machine now and over the last 15 minutes: each
 agent with the processes it started (tests, builds), every site and service, and background
