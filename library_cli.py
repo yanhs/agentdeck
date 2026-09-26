@@ -52,6 +52,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -247,6 +248,126 @@ def transcript_path(home, cwd, u):
     return os.path.join(home, ".claude", "projects", slug(cwd), f"{u}.jsonl")
 
 
+# ── the terminal's own session-only effort ──────────────────────────────────
+# Claude Code saves /effort low|medium|high|xhigh as the default for new sessions,
+# so those come back on their own. ultracode and max are "this session only": a
+# plain --resume drops them. The terminal's last choice is in its transcript as
+# the command's output record; relaunch with it (never any other level — launch
+# stays a bare --resume otherwise).
+EFFORT_FLAGS = {"ultracode": ("--settings", '{"ultracode":true}'), "max": ("--effort", "max")}
+EFFORT_CHUNK = 256 * 1024          # bytes read per step, from the end of the file
+EFFORT_MAX_LINE = 1024 * 1024      # a command record is ~600 bytes; longer lines are output
+_STDOUT = "<local-command-stdout>"
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_LEVEL = r"`?([A-Za-z]+)`?"
+_EFFORT_OUTPUTS = [                # Claude Code 2.1.283's messages, first match wins
+    (re.compile(r"Set effort level to " + _LEVEL + r"\b"), None),
+    (re.compile(r"(?:Effort level set to auto|Effort set to auto for this session"
+                r"|Cleared effort from settings)\b"), "auto"),
+    (re.compile(r"Effort '[^']*' exceeds the cap\b.*?; set to '([A-Za-z]+)' instead"), None),
+    (re.compile(r"Not applied: CLAUDE_CODE_EFFORT_LEVEL=\S* overrides effort this session, "
+                r"and " + _LEVEL + r" is session-only"), None),
+    (re.compile(r"CLAUDE_CODE_EFFORT_LEVEL=\S* overrides (?:effort )?this session\W+"
+                r"clear it and " + _LEVEL + r" takes over"), None),
+    (re.compile(r"Set model to .*? with " + _LEVEL + r" effort\b"), None),   # the /model picker
+]
+
+
+def effort_from_output(text):
+    """The effort a slash command's output says the session now runs at
+    ('ultracode', 'max', 'medium', 'auto', …), or None if it changed none."""
+    t = _ANSI.sub("", text)
+    t = t[len(_STDOUT):] if t.startswith(_STDOUT) else t
+    for pat, fixed in _EFFORT_OUTPUTS:
+        mt = pat.match(t.lstrip())
+        if mt:
+            return fixed or mt.group(1).lower()
+    return None
+
+
+def _record_effort(line):
+    """Effort set by one transcript line (bytes), or None. Only a real command
+    record counts: type user, not a sidechain, content a string that starts with
+    the command-output tag. The same words in a tool result or a reply do not."""
+    if _STDOUT.encode() not in line or not (b"ffort" in line or b"EFFORT" in line):
+        return None
+    try:
+        d = json.loads(line)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(d, dict) or d.get("type") != "user" or d.get("isSidechain"):
+        return None
+    msg = d.get("message")
+    c = msg.get("content") if isinstance(msg, dict) else None
+    if not isinstance(c, str) or not c.startswith(_STDOUT):
+        return None
+    return effort_from_output(c)
+
+
+def _read_at(f, pos, n):
+    f.seek(pos)
+    return f.read(n)
+
+
+def _lines_from_end(f, size, chunk):
+    """Complete lines of f, last first, reading `chunk` bytes at a time from the
+    end. A line longer than EFFORT_MAX_LINE is skipped instead of carried."""
+    pos, carry, skipping = size, b"", False
+    while pos > 0:
+        n = min(chunk, pos)
+        pos -= n
+        buf = _read_at(f, pos, n)
+        if len(buf) != n:                          # the file shrank under us
+            return
+        parts = (buf + carry).split(b"\n")
+        carry = parts.pop(0)                       # may continue in the chunk before
+        if skipping:
+            if not parts:                          # still inside the long line
+                carry = b""
+                continue
+            parts.pop()                            # the long line's head
+            skipping = False
+        yield from reversed(parts)
+        if len(carry) > EFFORT_MAX_LINE:
+            carry, skipping = b"", True
+    if carry and not skipping:
+        yield carry
+
+
+def last_effort(path, chunk=None):
+    """The terminal's most recent effort choice in transcript `path`, or None
+    (no choice, or the file cannot be read). Reads backwards, stops at the first
+    hit; never blocks on a FIFO."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        regular = stat.S_ISREG(st.st_mode)         # not a directory, a FIFO, a device
+    except OSError:
+        regular = False
+    if not regular:
+        os.close(fd)
+        return None
+    with os.fdopen(fd, "rb") as f:
+        for line in _lines_from_end(f, st.st_size, chunk or EFFORT_CHUNK):
+            level = _record_effort(line)
+            if level:
+                return level
+    return None
+
+
+def effort_flags(path):
+    """claude arguments that bring back the terminal's own session-only effort
+    (ultracode or max); [] for anything else. Any failure -> [] — reading the
+    transcript must never stop a terminal from starting."""
+    try:
+        return list(EFFORT_FLAGS.get(last_effort(path), ()))
+    except Exception:  # noqa: BLE001 — best effort by design, see above
+        return []
+
+
 def checked_entry(e):
     """Raise ValueError unless id and uuid are well-formed and agree."""
     sid, u = e.get("id"), e.get("uuid")
@@ -258,20 +379,23 @@ def checked_entry(e):
 
 def pane_command(e, home=None, claude_bin=None):
     """The command the new pane runs. Built only from checked pieces:
-    the 8-hex id, a strict uuid, and quoted paths — never the topic name."""
+    the 8-hex id, a strict uuid, quoted paths and fixed flags — never the topic
+    name. A resumed conversation keeps its own session-only effort (effort_flags)."""
     sid, u = checked_entry(e)
     home = home or os.path.expanduser("~")
     claude = (claude_bin or os.getenv("CLAUDE_BIN") or shutil.which("claude")
               or os.path.join(home, ".local", "bin", "claude"))
-    have = os.path.isfile(transcript_path(home, effective_cwd(e), u))
+    transcript = transcript_path(home, effective_cwd(e), u)
+    have = os.path.isfile(transcript)
     flag = "--resume" if have else "--session-id"
+    effort = "".join(" " + shlex.quote(a) for a in (effort_flags(transcript) if have else ()))
     oauth = shlex.quote(os.path.join(home, ".claude", "oauth.env"))
     return ('for v in $(env | cut -d= -f1 | grep -i CLAUDE); do unset "$v"; done; '
             f"[ -r {oauth} ] && . {oauth}; "
             f"export AGENTDECK_SESSION={sid}; "
             # exec: when claude exits the pane closes; a leftover shell prompt
             # would run whatever text the bridge types next as commands
-            f"exec {shlex.quote(claude)} {flag} {u} --dangerously-skip-permissions")
+            f"exec {shlex.quote(claude)} {flag} {u} --dangerously-skip-permissions{effort}")
 
 
 # ── ensure ──────────────────────────────────────────────────────────────────

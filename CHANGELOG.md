@@ -4,6 +4,11 @@ All notable changes to AgentDeck. Newest first.
 
 ## Unreleased
 
+- **Terminals keep ultracode (and max effort) across a restart:** AgentDeck reads the
+  terminal's last /effort choice from its transcript and relaunches with it; other levels
+  already persist through Claude Code's own default. (`--settings '{"ultracode":true}'` or
+  `--effort max` on the `--resume` launch only; the transcript is read backwards and the scan
+  stops at the latest choice; any read problem means a plain `--resume`.)
 - **`install.sh`: HTTPS by default, never a password in clear text.** The one-liner now
   serves `https://<your-ip>.sslip.io` with a free Let's Encrypt certificate when ports 80
   and 443 are free (80 redirects; `:8765` isn't served); with 443 taken, the same
