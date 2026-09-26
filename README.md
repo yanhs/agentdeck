@@ -53,7 +53,7 @@ and the manual setup: [Quick start](#-quick-start-docker--one-command).
 | Telegram controls the terminals | ✅ voice, buttons | ❌ | ❌ | ✅ (the whole product) |
 | Task board + agents that finish their tasks | ✅ | ❌ | ❌ | ❌ |
 | Memory limit, idle unloading, archive | ✅ | ❌ | ❌ | ❌ |
-| Git worktree per agent, diff review | ❌ not yet | some | ✅ some | ❌ |
+| Separate branch / worktree per agent | ✅ just ask the agent — Claude Code does it | some, automatic | some, automatic | ❌ |
 | Other agents (Codex, Gemini…) | ❌ Claude only | often | often | ❌ |
 
 It's the setup the author uses every day to keep about a dozen Claude Code agents working
