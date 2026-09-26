@@ -25,6 +25,10 @@ jobs:
         os: [ubuntu-22.04, ubuntu-24.04]
     env:
       PW: ci-password-123
+      # the default (HTTPS) path without Let's Encrypt traffic: the ACME server is
+      # unreachable, so after 20 s it falls back to HTTPS with a self-signed certificate
+      AGENTDECK_ACME_CA: https://127.0.0.1:9/directory
+      AGENTDECK_CERT_WAIT: "20"
     steps:
       - uses: actions/checkout@v4
       - name: ./install.sh --yes
@@ -36,7 +40,7 @@ jobs:
             systemctl is-active "$u"; systemctl is-enabled "$u"
           done
       - name: smoke test (login, new terminal, board, server tab)
-        run: python3 tests/install/smoke.py http://127.0.0.1:8765 --password "$PW" --first-run --new-terminal --id-file /tmp/sid
+        run: python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --first-run --new-terminal --id-file /tmp/sid
       - name: claude runs in the new terminal
         run: |
           TMUX_TMPDIR=$PWD/.sessions/tmux tmux list-panes -a -F '#{session_name} #{pane_current_command}' | tee /dev/stderr | grep -Eq "^cs-$(cat /tmp/sid) (claude|node)"
@@ -47,23 +51,28 @@ jobs:
           systemctl list-units 'agentdeck*' --all --no-legend --plain | awk '{print $1}' > /tmp/u2
           diff /tmp/u1 /tmp/u2
           test "$(pgrep -xc ttyd)" = 1 && test "$(pgrep -xc caddy)" = 1
-          python3 tests/install/smoke.py http://127.0.0.1:8765 --password "$PW" --expect-id "$(cat /tmp/sid)"
+          python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --expect-id "$(cat /tmp/sid)"
       - name: uninstall
         run: |
           ./install.sh --uninstall --yes
           test -z "$(ls /etc/systemd/system | grep agentdeck || true)"
-          ! curl -s -o /dev/null --max-time 3 http://127.0.0.1:8765/login
+          ! curl -sk -o /dev/null --max-time 3 https://127.0.0.1:8765/login
       - name: logs on failure
         if: failure()
         run: sudo journalctl -u 'agentdeck-*' --no-pager -n 200 || true
 
   container:
-    name: install.sh in a ${{ matrix.distro }} systemd container
+    name: install.sh in a ${{ matrix.distro }} systemd container (${{ matrix.scenario }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        distro: [debian-12, fedora-40]
+        include:
+          - {distro: debian-12, scenario: cert-timeout}
+          - {distro: debian-12, scenario: internal}
+          - {distro: fedora-40, scenario: cert-timeout}
     steps:
       - uses: actions/checkout@v4
       - run: tests/install/run.sh ${{ matrix.distro }}
+        env:
+          SCENARIO: ${{ matrix.scenario }}

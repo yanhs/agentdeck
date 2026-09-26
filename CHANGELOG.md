@@ -4,6 +4,22 @@ All notable changes to AgentDeck. Newest first.
 
 ## Unreleased
 
+- **`install.sh`: HTTPS by default, never a password in clear text.** The one-liner now
+  serves `https://<your-ip>.sslip.io` with a free Let's Encrypt certificate when ports 80
+  and 443 are free (80 redirects; `:8765` isn't served); with 443 taken, the same
+  certificate on `:8443`; with 80 taken, no public IP, or no certificate within ~120 s (a
+  cloud firewall…) — HTTPS with a self-signed certificate on `:8765` (the browser warns once).
+  It waits for the certificate itself and says in plain words which case you got, why, and
+  how to get a trusted one (`install.sh --https`, with a Caddy log excerpt when Let's
+  Encrypt failed). Plain http only with an explicit `--http`. The mode is recorded in
+  `~/.config/agentdeck/install.env` and kept on re-runs. Test-only switches:
+  `AGENTDECK_TLS_INTERNAL=1`, `AGENTDECK_ACME_CA`, `AGENTDECK_CERT_WAIT`.
+- **`install.sh`: new terminals open in `~/projects`,** not the whole home (Claude asks to
+  trust that folder only). The installer creates it; `AGENTDECK_WORKDIR=/path` at install
+  time picks another one, recorded and kept on re-runs. The Docker sandbox keeps `/work`.
+- **`tests/install/run.sh SCENARIO=…`** covers each HTTPS case in the systemd containers
+  (`cert-timeout`, `port80-busy`, `internal`, `internal-alt`, `http`); `smoke.py` logs in and
+  attaches to a terminal over https too (`--insecure`, `--connect`).
 - **`install.sh` — install on your own server in one command; agents get the whole server.**
   `curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash` (or
   `./install.sh` from a clone) on Ubuntu 22.04 / 24.04 or Debian 12 (x86_64, aarch64):

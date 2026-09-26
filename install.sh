@@ -6,10 +6,20 @@
 #   curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash
 #   ./install.sh                 (from a clone: installs that clone as it is)
 #
+# HTTPS is the default — the dashboard password never travels in clear text:
+#   ports 80 + 443 free → https://<your-ip-with-dashes>.sslip.io (a free name that resolves
+#                         to your IP; or your domain) with a Let's Encrypt certificate;
+#                         http on 80 redirects there
+#   443 taken, 80 free  → the same certificate, served on https://<name>:8443
+#   80 taken, no public IP, or no certificate within ~2 minutes (a cloud firewall blocking
+#   80/443, …)          → HTTPS on :8765 with a self-signed certificate (the browser warns
+#                         once; the connection is still encrypted)
+# Plain http on :8765 only with --http. The final message says which case and why.
+#
 #   --yes            never ask anything (sudo must then work without a password)
-#   --https [domain] HTTPS on ports 80/443 with a free Let's Encrypt certificate;
-#                    no domain → <your-ip>.sslip.io (a name that resolves to your IP)
-#   --http           back to plain http on :8765 (after --https)
+#   --https [domain] insist on a trusted certificate (refuses if port 80 is busy); a domain
+#                    instead of <your-ip>.sslip.io (or AGENTDECK_SITE=your-domain.com)
+#   --http           plain http on :8765 — no encryption, the password travels in clear
 #   --check          only the preflight checks, change nothing
 #   --telegram       also print how to connect a Telegram bot (set up in the dashboard)
 #   --uninstall      stop and remove the services (terminals, board, password stay)
@@ -26,14 +36,22 @@
 #   agentdeck-status    backend + login gate (status_server.py)
 #   agentdeck-tasks     task board (/tasks/)
 #   agentdeck-sessions  the one ttyd behind /sess/ (every terminal)
-#   agentdeck-caddy     proxy + login + HTTPS, on :8765 (or 80/443 with --https)
+#   agentdeck-caddy     proxy + login + HTTPS, on 80/443 (or :8443 / :8765, see above)
 #   agentdeck-reaper    .timer: idle_reaper.py once a minute
 # Why system units with User=<you> and not `systemctl --user` + linger: they need no user
 # D-Bus session or XDG_RUNTIME_DIR (a fresh SSH-less boot has neither), Caddy can get the
 # capability to bind 80/443 without root, and `systemctl status agentdeck-*` just works.
 #
 # Running it again upgrades / repairs; nothing is duplicated. It stops at the first error
-# and says what to do; after fixing that, run it again and it continues.
+# and says what to do; after fixing that, run it again and it continues. A re-run keeps the
+# mode the last install ended up with (trusted / self-signed / --http), unless --https or
+# --http changes it.
+#
+# Test-only env: AGENTDECK_TLS_INTERNAL=1 (Caddy's own CA instead of Let's Encrypt, the
+# readiness probe then skips verification), AGENTDECK_ACME_CA=<directory url>,
+# AGENTDECK_CERT_WAIT=<s> (default 120), AGENTDECK_CERT_POLL=<s> (default 3),
+# AGENTDECK_HTTP_PORT / AGENTDECK_HTTPS_PORT (the ports checked, default 80 / 443),
+# AGENTDECK_ALT_PORT (HTTPS when 443 is taken, default 8443).
 set -Eeuo pipefail
 
 REPO_URL="${AGENTDECK_REPO_URL:-https://github.com/yanhs/agentdeck.git}"
@@ -45,13 +63,26 @@ SYSTEMD_DIR="${AGENTDECK_SYSTEMD_DIR:-/etc/systemd/system}"
 PORT="${AGENTDECK_PORT:-8765}"
 HTTP_PORT="${AGENTDECK_HTTP_PORT:-80}"
 HTTPS_PORT="${AGENTDECK_HTTPS_PORT:-443}"
+ALT_PORT="${AGENTDECK_ALT_PORT:-8443}"
 SUDO="${SUDO-sudo}"
 UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.service agentdeck-reaper.timer"
 # the units that run (the reaper .service is started by its timer)
 RUN_UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.timer"
 SANDBOX_HINT="git clone https://github.com/yanhs/agentdeck && cd agentdeck && docker compose up -d"
+CERT_WAIT="${AGENTDECK_CERT_WAIT:-120}"
+CERT_POLL="${AGENTDECK_CERT_POLL:-3}"
 CHANGED_UNITS=()
 STEP="start"
+# SITE, what Caddy serves (recorded in install.env):
+#   <name>          trusted certificate on 443        <name>:<port>  … on another port
+#   https://:<port> self-signed on the dashboard port  :<port>        plain http (--http)
+# WHY says how it came to be: "" (trusted) | port80 | noip | cert | requested | kept
+WHY=""
+BUSY_BY=""        # the program on the port that forced the choice ("" = not visible)
+CERT_LOG=""       # Caddy's last words when WHY=cert
+SELF_IP=""        # this server's address (the URL; what a self-signed certificate names)
+CERT_NAME=""      # the name a trusted certificate was tried for
+WORKDIR=""        # where new terminals start (AGENTDECK_WORKDIR, default ~/projects)
 # What this installer set up is recorded here (outside the repo): the install folder,
 # whether the installer cloned it itself (only then may --purge delete it), the tmux
 # folder of the agents' own tmux server, and the site. --uninstall acts ONLY on these.
@@ -138,15 +169,66 @@ port_busy() {  # exit 0 when something listens on the port
   (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null
 }
 
+port_owner() {  # the program listening on the port, "" when not visible (needs root)
+  local p="$1" out=""
+  command -v ss >/dev/null 2>&1 || return 0
+  if [ -n "$SUDO" ]; then out="$($SUDO -n ss -ltnpH "sport = :$p" 2>/dev/null || true)"; fi
+  [ -n "$out" ] || out="$(ss -ltnpH "sport = :$p" 2>/dev/null || true)"
+  printf '%s\n' "$out" | sed -n 's/.*users:(("\([^"]*\)".*/\1/p' | head -n 1
+}
+
 port_is_ours() {  # a re-run: our own running Caddy serves this port already
   local site ports
   [ -f "$SYSTEMD_DIR/agentdeck-caddy.service" ] || return 1
   systemctl is-active --quiet agentdeck-caddy.service 2>/dev/null || return 1
   site="$(sed -n 's/^Environment="\{0,1\}AGENTDECK_SITE=\([^"]*\)"\{0,1\}$/\1/p' \
           "$SYSTEMD_DIR/agentdeck-caddy.service" | head -n 1)"
-  case "$site" in :*) ports="${site#:}" ;; "") return 1 ;; *) ports="$HTTP_PORT $HTTPS_PORT" ;; esac
+  site="${site%%,*}"
+  case "$site" in
+    "") return 1 ;;
+    :*|https://*) ports="${site##*:}" ;;                   # plain http / self-signed
+    *:*) ports="$HTTP_PORT ${site##*:}" ;;                 # trusted, on another port
+    *) ports="$HTTP_PORT $HTTPS_PORT" ;;
+  esac
   case " $ports " in *" $1 "*) return 0 ;; esac
   return 1
+}
+
+port_free() { ! port_busy "$1" || port_is_ours "$1"; }
+
+# what Caddy's site address is for SITE (the self-signed one names this server's address,
+# so Caddy makes a certificate for it, and also answers any other name)
+caddy_address() {
+  case "$SITE" in
+    https://:*) printf 'https://%s:%s, %s\n' "${SELF_IP:-127.0.0.1}" "${SITE##*:}" "$SITE" ;;
+    *) printf '%s\n' "$SITE" ;;
+  esac
+}
+
+# Caddy's extra global options for SITE (the Caddyfile imports them; one file, rewritten
+# on every install)
+caddy_global_conf() {
+  local ca="${AGENTDECK_ACME_CA:-}"
+  case "$SITE" in
+    :*) ;;
+    https://:*)
+      printf 'local_certs\nskip_install_trust\n'
+      # port 80 may be someone else's: no http->https redirect server on it
+      printf 'auto_https disable_redirects\n'
+      # browsers send no SNI to an IP address: hand them this server's certificate
+      printf 'default_sni %s\nfallback_sni %s\n' "${SELF_IP:-127.0.0.1}" "${SELF_IP:-127.0.0.1}" ;;
+    *)
+      if [ "${AGENTDECK_TLS_INTERNAL:-}" = 1 ]; then
+        printf 'local_certs\nskip_install_trust\n'
+      elif [ "${SITE##*:}" != "$SITE" ]; then
+        # 443 is someone else's: the TLS-ALPN challenge would land there — HTTP-01 on 80 only
+        printf 'cert_issuer acme {\n'
+        [ -n "$ca" ] && printf '\tdir %s\n' "$ca"
+        printf '\tdisable_tlsalpn_challenge\n}\n'
+      elif [ -n "$ca" ]; then
+        printf 'acme_ca %s\n' "$ca"
+      fi ;;
+  esac
 }
 
 # systemd value quoting: % → %%; a value with spaces goes in double quotes
@@ -165,7 +247,9 @@ unit_service_common() {
   sd_env PATH "${AGENTDECK_PATH:-$h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
   sd_env LANG C.UTF-8
   sd_env LC_ALL C.UTF-8
-  sd_env AGENTDECK_WORKDIR "$h"
+  # new terminals start here — not in the whole home (with ~/.ssh, ~/.claude, …), so
+  # Claude's "trust this folder?" is asked for ~/projects only
+  sd_env AGENTDECK_WORKDIR "${AGENTDECK_WORKDIR:-$h/projects}"
   sd_env AGENTDECK_PASSFILE "$d/.sessions/.dashpass"
   sd_env AGENTDECK_AUTH_SECRET "$d/.sessions/.agents_auth_secret"
   sd_env TRACKER_STATE "$d/.sessions/tasks-state.json"
@@ -247,6 +331,7 @@ Wants=network-online.target
 
 [Service]
 $(unit_service_common)
+$(sd_env AGENTDECK_CADDY_GLOBAL "$AGENTDECK_DIR/.sessions/caddy-global.caddy")
 # Let's Encrypt refuses an @example.* contact address (the Caddyfile default): drop it then
 ExecStartPre=/bin/sh -c 'case "\$\${AGENTDECK_EMAIL:-}" in ""|*@example.com|*@example.org|*@example.net) grep -v "^[[:space:]]*email " Caddyfile ;; *) cat Caddyfile ;; esac > .sessions/Caddyfile.run'
 ExecStart=/usr/local/bin/caddy run --config .sessions/Caddyfile.run --adapter caddyfile
@@ -325,13 +410,16 @@ purge_target() {
 usage() {
   cat <<'EOF'
 AgentDeck installer — agents get the whole server (use a dedicated VPS).
+HTTPS by default: a free Let's Encrypt certificate on https://<ip>.sslip.io when ports
+80/443 are free, otherwise a self-signed one on :8765 (the browser warns once).
 
   curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash
   ./install.sh [options]          (from a clone)
 
   --yes, -y          never ask anything (sudo must work without a password)
-  --https [domain]   HTTPS on 80/443 with Let's Encrypt; no domain → <ip>.sslip.io
-  --http             back to plain http on :8765
+  --https [domain]   insist on a trusted Let's Encrypt certificate (port 80 must be free);
+                     no domain → <ip>.sslip.io
+  --http             plain http on :8765 — no encryption (the password travels in clear)
   --check            preflight checks only, change nothing
   --telegram         also print how to connect a Telegram bot
   --uninstall        stop + remove the services (keeps terminals, board, password)
@@ -445,29 +533,100 @@ EOF
     return 0
   fi
 
-  # which address Caddy serves: --https [domain] / --http / the last install's choice
-  SITE=":$PORT"
-  local prev
-  prev="$(conf_get AGENTDECK_SITE)"
-  if [ "$HTTPS" = 1 ]; then
-    SITE="$(https_site "$DOMAIN")" || {
-      if [ -n "$DOMAIN" ]; then die "\"$DOMAIN\" is not a domain name (just the name, e.g. deck.example.com)"
-      else die "couldn't find this server's public IPv4 address for <ip>.sslip.io — pass your domain: --https your-domain.com (or set AGENTDECK_PUBLIC_IP)"; fi
-    }
-  elif [ "$HTTPS_OFF" = 0 ] && [ -n "$prev" ]; then
-    SITE="$prev"
-  fi
+  resolve_workdir
+  choose_site
+  plan_note
+}
 
-  local p ports
-  case "$SITE" in :*) ports="${SITE#:}" ;; *) ports="$HTTP_PORT $HTTPS_PORT" ;; esac
-  for p in $ports; do
-    if port_busy "$p" && ! port_is_ours "$p"; then
-      if [ "$ports" = "$PORT" ]; then
-        die "port $p is busy — another program listens on it. Free it, or pick another port: AGENTDECK_PORT=8766 ./install.sh"
-      fi
-      die "port $p is busy — HTTPS needs ports 80 and 443 free (another web server such as nginx/apache/caddy is on it). Stop it, or install without --https (plain http on :$PORT)."
+# where new terminals start: AGENTDECK_WORKDIR now, else the last install's, else ~/projects
+resolve_workdir() {
+  WORKDIR="${AGENTDECK_WORKDIR:-$(conf_get AGENTDECK_WORKDIR)}"
+  WORKDIR="${WORKDIR:-$HOME/projects}"
+  case "$WORKDIR" in
+    /*) WORKDIR="${WORKDIR%/}"; WORKDIR="${WORKDIR:-/}" ;;
+    *) die "AGENTDECK_WORKDIR must be an absolute path (got \"$WORKDIR\"), e.g. AGENTDECK_WORKDIR=\$HOME/projects" ;;
+  esac
+}
+
+# which address Caddy serves → SITE, WHY, BUSY_BY, SELF_IP (see the top of the file).
+# Explicit flags win, then the last install's choice, then the ladder: a trusted
+# certificate when port 80 is free and a name is known (AGENTDECK_SITE, else
+# <public-ip>.sslip.io) — on 443, or on ALT_PORT when 443 is taken — else self-signed.
+choose_site() {
+  local prev domain="$DOMAIN" name ip p
+  prev="$(conf_get AGENTDECK_SITE)"
+  SITE="" WHY="" BUSY_BY=""
+  ip="$(public_ip 2>/dev/null || true)"
+  SELF_IP="${ip:-$(hostname -I 2>/dev/null | awk '{print $1}' || true)}"
+  SELF_IP="${SELF_IP:-127.0.0.1}"
+  if [ "$HTTPS_OFF" = 1 ]; then
+    SITE=":$PORT" WHY=requested
+  elif [ "$HTTPS" = 0 ] && [ -z "$domain" ] && [ -n "$prev" ] \
+       && { [ "${prev#https://}" != "$prev" ] || { [ "${prev#:}" != "$prev" ] && [ "$(conf_get AGENTDECK_WHY)" = requested ]; }; }; then
+    # a re-run keeps a self-signed / asked-for-http install as it is
+    case "$prev" in https://*) SITE="https://:$PORT" ;; *) SITE=":$PORT" ;; esac
+    WHY=kept
+  fi
+  if [ -z "$SITE" ]; then
+    if [ "$HTTPS" = 0 ] && [ -z "$domain" ]; then
+      case "${AGENTDECK_SITE:-}" in :*|"") ;; *) domain="$AGENTDECK_SITE" ;; esac
+      # a re-run of a trusted install keeps its name (a domain, or the sslip.io one)
+      case "$prev" in :*|https://*|"") ;; *) [ -n "$domain" ] || domain="${prev%%:*}" ;; esac
     fi
+    if name="$(https_site "$domain")"; then
+      if ! port_free "$HTTP_PORT"; then
+        BUSY_BY="$(port_owner "$HTTP_PORT")"
+        if [ "$HTTPS" = 1 ]; then
+          die "port $HTTP_PORT is busy (${BUSY_BY:-another program} listens on it) — a trusted certificate needs it for Let's Encrypt's check. Free it and run this again — nothing was changed. Without --https the installer serves HTTPS with a self-signed certificate instead."
+        fi
+        SITE="https://:$PORT" WHY=port80
+      elif port_free "$HTTPS_PORT"; then
+        SITE="$name"
+      else
+        BUSY_BY="$(port_owner "$HTTPS_PORT")"
+        p="$(free_alt_port)" || die "ports $HTTPS_PORT and $ALT_PORT…$((ALT_PORT + 10)) are all busy — free one of them and run this again (or AGENTDECK_ALT_PORT=<port>)."
+        SITE="$name:$p"
+      fi
+    else
+      if [ -n "$domain" ]; then die "\"$domain\" is not a domain name (just the name, e.g. deck.example.com)"; fi
+      if [ "$HTTPS" = 1 ]; then
+        die "couldn't find this server's public IPv4 address for <ip>.sslip.io — pass your domain: --https your-domain.com (or set AGENTDECK_PUBLIC_IP)"
+      fi
+      SITE="https://:$PORT" WHY=noip
+    fi
+  fi
+  case "$SITE" in :*|https://*) check_dashboard_port ;; esac
+}
+
+free_alt_port() {  # ALT_PORT, or the next free one of the ten after it
+  local p
+  for p in $(seq "$ALT_PORT" $((ALT_PORT + 10))); do
+    port_free "$p" && { printf '%s\n' "$p"; return 0; }
   done
+  return 1
+}
+
+check_dashboard_port() {
+  if ! port_free "$PORT"; then
+    die "port $PORT is busy — another program listens on it. Free it, or pick another port: AGENTDECK_PORT=8766 ./install.sh"
+  fi
+}
+
+# the dashboard address for SITE
+dashboard_url() {
+  case "$SITE" in
+    :*) printf 'http://%s:%s\n' "$SELF_IP" "$PORT" ;;
+    https://*) printf 'https://%s:%s\n' "$SELF_IP" "${SITE##*:}" ;;
+    *) printf 'https://%s\n' "$SITE" ;;
+  esac
+}
+
+plan_note() {  # --check / preflight: what will be served
+  case "$SITE" in
+    :*|https://*) explain_mode ;;
+    *) say "Dashboard will be $(dashboard_url) — a free Let's Encrypt certificate is fetched during the install."
+       [ "${SITE##*:}" = "$SITE" ] || say "(port $HTTPS_PORT is used by ${BUSY_BY:-another program}, so HTTPS goes on port ${SITE##*:})" ;;
+  esac
 }
 
 apt_install() {  # only what is missing; apt waits for a lock (a fresh VPS runs unattended-upgrades)
@@ -608,12 +767,24 @@ PY
   fi
   mkdir -p "$DIR/$TMUX_SUBDIR"
   chmod 700 "$DIR/$TMUX_SUBDIR"
+  [ -n "$WORKDIR" ] || resolve_workdir
+  if [ ! -d "$WORKDIR" ]; then   # yours; outside your home it takes sudo to make
+    mkdir -p "$WORKDIR" 2>/dev/null \
+      || { $SUDO mkdir -p "$WORKDIR" && $SUDO chown "$(id -un)": "$WORKDIR"; }
+    say "new terminals start in $WORKDIR"
+  fi
+  write_record
+}
+
+write_record() {  # what the install set up — --uninstall and the next run read it
   mkdir -p "$(dirname "$CONF_FILE")"
   {
     printf 'AGENTDECK_DIR=%s\n' "$DIR"
     printf 'AGENTDECK_MANAGED=%s\n' "$([ -f "$DIR/$MARKER" ] && echo 1 || echo 0)"
     printf 'AGENTDECK_TMUX_TMPDIR=%s\n' "$DIR/$TMUX_SUBDIR"
     printf 'AGENTDECK_SITE=%s\n' "$SITE"
+    printf 'AGENTDECK_WHY=%s\n' "$WHY"
+    printf 'AGENTDECK_WORKDIR=%s\n' "$WORKDIR"
   } > "$CONF_FILE"
 }
 
@@ -630,9 +801,14 @@ install_guards() {
 
 install_services() {
   local u
-  AGENTDECK_DIR="$DIR" AGENTDECK_USER="$(id -un)" AGENTDECK_SITE="$SITE"
+  AGENTDECK_DIR="$DIR" AGENTDECK_USER="$(id -un)" AGENTDECK_SITE="$(caddy_address)"
+  mkdir -p "$DIR/.sessions"
+  { printf '# written by install.sh for AGENTDECK_SITE=%s — rewritten on every install\n' "$SITE"
+    caddy_global_conf; } > "$DIR/.sessions/caddy-global.caddy"
   AGENTDECK_HOME="$(getent passwd "$AGENTDECK_USER" | cut -d: -f6)"; AGENTDECK_HOME="${AGENTDECK_HOME:-$HOME}"
   AGENTDECK_CLAUDE_BIN="$CLAUDE"
+  [ -n "$WORKDIR" ] || resolve_workdir
+  AGENTDECK_WORKDIR="$WORKDIR"
   AGENTDECK_PATH="$AGENTDECK_HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
   case ":$AGENTDECK_PATH:" in *":$NODE_DIR:"*) ;; *) AGENTDECK_PATH="$NODE_DIR:$AGENTDECK_PATH" ;; esac
   for u in $UNITS; do write_unit "$u"; done
@@ -649,11 +825,59 @@ install_services() {
   $SUDO systemctl restart $RUN_UNITS
 }
 
+# trusted HTTPS: wait until Caddy serves the site with a certificate (probed on this host,
+# by name). Returns 1 after CERT_WAIT seconds without one.
+wait_cert() {
+  local code k=() end port="$HTTPS_PORT" name="$SITE"
+  [ "${AGENTDECK_TLS_INTERNAL:-}" = 1 ] && k=(-k)
+  [ "${SITE##*:}" = "$SITE" ] || { port="${SITE##*:}"; name="${SITE%:*}"; }
+  say "Getting a certificate for $name (up to $CERT_WAIT s)…"
+  end=$((SECONDS + CERT_WAIT))
+  while :; do
+    code="$(curl -s "${k[@]}" -o /dev/null -w '%{http_code}' --max-time 5 \
+              --resolve "$name:$port:127.0.0.1" "https://$name:$port/login" 2>/dev/null || true)"
+    case "$code" in 200|302) return 0 ;; esac
+    [ "$SECONDS" -ge "$end" ] && return 1
+    sleep "$CERT_POLL"
+  done
+}
+
+caddy_log_excerpt() {  # Caddy's certificate errors (the "error" field of its JSON log)
+  $SUDO journalctl -u agentdeck-caddy.service --no-pager -o cat -n 300 2>/dev/null \
+    | sed -n '/"level":"error"/{s/.*"error":"//;s/"[,}].*//;s/\\"/"/g;p;}' \
+    | awk '!seen[$0]++' | tail -n 3 | cut -c1-300 || true
+}
+
+# the services with SITE; for a trusted certificate, wait for it — and when none comes,
+# HTTPS with a self-signed certificate on the dashboard port instead
+bring_up() {
+  write_record
+  install_services
+  wait_healthy
+  case "$SITE" in :*|https://*) return 0 ;; esac
+  wait_cert && return 0
+  CERT_LOG="$(caddy_log_excerpt)"
+  CERT_NAME="${SITE%:*}"
+  say "No certificate for $CERT_NAME after $CERT_WAIT s — switching to HTTPS with a self-signed certificate on :$PORT."
+  if ! port_free "$PORT"; then
+    die "no certificate for $CERT_NAME after $CERT_WAIT s, and the fallback port $PORT is busy (another program listens on it). Open ports $HTTP_PORT/$HTTPS_PORT in the firewall and run install.sh --https again, or free port $PORT and run the installer again."
+  fi
+  SITE="https://:$PORT" WHY=cert
+  write_record
+  CHANGED_UNITS=()
+  install_services
+  wait_healthy
+}
+
 wait_healthy() {
-  local url code i
-  case "$SITE" in :*) url="http://127.0.0.1:$PORT/login" ;; *) url="http://127.0.0.1:$HTTP_PORT/" ;; esac
+  local url code i k=()
+  case "$SITE" in
+    :*) url="http://127.0.0.1:$PORT/login" ;;
+    https://*) url="https://127.0.0.1:${SITE##*:}/login"; k=(-k) ;;   # self-signed
+    *) url="http://127.0.0.1:$HTTP_PORT/" ;;          # Caddy's redirect to https
+  esac
   for i in $(seq 1 45); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$url" || true)"
+    code="$(curl -s "${k[@]}" -o /dev/null -w '%{http_code}' --max-time 3 "$url" || true)"
     case "$code" in 200|301|302|308) return 0 ;; esac
     sleep 1
   done
@@ -669,21 +893,71 @@ firewall_hint() {
   fi
 }
 
-finish() {
-  local url ip
+# what the dashboard's security is and why, in plain words — one paragraph per case
+explain_mode() {
+  local url me="${DIR:-~/agentdeck}/install.sh" p80="port $HTTP_PORT"
+  url="$(dashboard_url)"
   case "$SITE" in
-    :*) ip="$(public_ip 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || true)"
-        url="http://${ip:-<this-server-ip>}:$PORT" ;;
-    *) url="https://$SITE" ;;
+    :*)
+      if [ "$WHY" = requested ]; then
+        say "HTTP only, as requested (--http). Dashboard: $url"
+      else
+        say "HTTP only (you chose --http at the last install). Dashboard: $url"
+      fi
+      say "WARNING: no encryption — your password travels unencrypted and can be read on the way."
+      say "Consider $me --https (a free certificate, no domain needed)." ;;
+    https://*)
+      case "$WHY" in
+        port80)
+          say "HTTPS with a self-signed certificate: $p80 is taken, so Let's Encrypt can't check this server." ;;
+        cert)
+          say "No trusted certificate: Let's Encrypt couldn't reach this server on port $HTTP_PORT within $CERT_WAIT s —"
+          say "usually the cloud firewall / security group blocks ports $HTTP_PORT and $HTTPS_PORT$(case "${CERT_NAME:-}" in *.sslip.io|"") ;; *) printf ' (or %s does not point to this server yet)' "$CERT_NAME" ;; esac)."
+          if [ -n "$CERT_LOG" ]; then
+            say "Caddy log (last lines):"
+            printf '%s\n' "$CERT_LOG" | sed 's/^/  /'
+          fi ;;
+        noip)
+          say "No trusted certificate: couldn't find this server's public IPv4 address, so there is no"
+          say "<ip>.sslip.io name to get one for. With a domain pointing here: $me --https your-domain.com" ;;
+        *)
+          say "HTTPS with a self-signed certificate (kept from the last install)." ;;
+      esac
+      say "Dashboard: $url — HTTPS with a self-signed certificate: your browser will warn once"
+      say "('not secure / certificate not trusted') — continue anyway; the connection and your password are still encrypted."
+      case "$WHY" in
+        port80) say "For a trusted certificate free $p80 (it's used by ${BUSY_BY:-another program}) and run $me --https" ;;
+        cert)   say "For a trusted certificate open ports $HTTP_PORT and $HTTPS_PORT, then run $me --https" ;;
+        noip)   ;;
+        *)      say "For a trusted certificate (ports $HTTP_PORT and $HTTPS_PORT free and open) run $me --https" ;;
+      esac ;;
+    *)
+      if [ "${AGENTDECK_TLS_INTERNAL:-}" = 1 ]; then
+        say "Dashboard: $url — HTTPS is on (certificate from Caddy's internal test CA,"
+        say "AGENTDECK_TLS_INTERNAL=1: browsers will warn). Plain http is off."
+      else
+        say "Dashboard: $url — HTTPS is on (free certificate from Let's Encrypt for ${SITE%:*},"
+        say "renewed automatically). Plain http is off, so your password never travels unencrypted."
+      fi
+      if [ "${SITE##*:}" != "$SITE" ]; then
+        say "Port $HTTPS_PORT is used by ${BUSY_BY:-another program}, so the dashboard is on port ${SITE##*:};"
+        say "port $HTTP_PORT answers Let's Encrypt and redirects to it."
+      fi ;;
   esac
+}
+
+finish() {
   echo
-  say "AgentDeck is running:  $url"
+  say "AgentDeck is running:  $(dashboard_url)"
+  explain_mode
   say "  1. Open it — the first visit sets the password."
   say "  2. Then + New terminal, and sign in to Claude once (every terminal reuses the login)."
+  [ -n "$WORKDIR" ] || resolve_workdir
+  say "  New terminals open in ${WORKDIR/#$HOME/\~} (set AGENTDECK_WORKDIR to change)"
   case "$SITE" in
-    :*) say "  HTTPS instead (no domain needed): $DIR/install.sh --https"; firewall_hint "$PORT" ;;
-    *) say "  The certificate is fetched on the first visit (can take a minute)."
-       firewall_hint 80; firewall_hint 443 ;;
+    :*|https://*) firewall_hint "$PORT" ;;
+    *:*) firewall_hint "$HTTP_PORT"; firewall_hint "${SITE##*:}" ;;
+    *) firewall_hint "$HTTP_PORT"; firewall_hint "$HTTPS_PORT" ;;
   esac
   if [ "$TELEGRAM" = 1 ]; then
     say "  Telegram: in the dashboard open Telegram (/telegram), paste your bot token from"
@@ -773,8 +1047,7 @@ main() {
   install_guards
 
   step "systemd services"
-  install_services
-  wait_healthy
+  bring_up
   finish
 }
 

@@ -2,7 +2,7 @@
 """Smoke test of an installed AgentDeck, from outside, through Caddy (stdlib only).
 
     smoke.py BASE_URL --password PW [--first-run] [--new-terminal] [--expect-id ID]
-             [--id-file PATH]
+             [--id-file PATH] [--insecure] [--connect HOST:PORT]
 
   --first-run      the login page must be the "set a password" form; POST /login
                    pass/pass2 sets it. Otherwise log in with user admin + PW.
@@ -11,6 +11,9 @@
                    (proves ttyd -> open-session.sh -> tmux -> claude starts). The id is
                    written to --id-file.
   --expect-id ID   /api/library must still list ID (e.g. after a reboot).
+  --insecure       https: don't verify the certificate (self-signed / a test CA).
+  --connect H:P    open every connection to H:P instead of BASE's host — like curl
+                   --connect-to: the URL, Host header and TLS name stay BASE's.
 
 Always: /login 200, /api/library 200, /tasks/ 200, /api/server 200, and / without a
 cookie redirects to /login. Exit 0 = all passed; every check prints one line.
@@ -23,6 +26,7 @@ import http.cookiejar
 import json
 import os
 import socket
+import ssl
 import sys
 import time
 import urllib.error
@@ -54,11 +58,22 @@ def main():
     ap.add_argument("--expect-id")
     ap.add_argument("--id-file")
     ap.add_argument("--wait", type=int, default=60, help="seconds to wait for the login page")
+    ap.add_argument("--insecure", action="store_true")
+    ap.add_argument("--connect")
     a = ap.parse_args()
     base = a.base.rstrip("/")
+    if a.connect:
+        host, _, port = a.connect.rpartition(":")
+        real = socket.create_connection
+        socket.create_connection = lambda _addr, *x, **k: real((host, int(port)), *x, **k)
+    ctx = ssl.create_default_context()
+    if a.insecure:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
 
     jar = http.cookiejar.CookieJar()
-    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), NoRedirect)
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), NoRedirect,
+                                     urllib.request.HTTPSHandler(context=ctx))
 
     def req(method, path, data=None, headers=None):
         r = urllib.request.Request(base + path, data=data, method=method, headers=headers or {})
@@ -124,7 +139,7 @@ def main():
         code, _, body = req("GET", f"/sess/?arg={sid}")
         check("GET /sess/?arg=<id> 200", code == 200, f"got {code}")
         if sid:
-            out = ttyd_attach(base, jar, sid)
+            out = ttyd_attach(base, jar, sid, ctx)
             check("terminal attaches and prints output", len(out) > 0,
                   f"{len(out)} bytes: {out[-160:]!r}")
 
@@ -136,16 +151,18 @@ def main():
     return 0 if not FAILED else 1
 
 
-def ttyd_attach(base, jar, sid, seconds=20):
-    """Open /sess/ws?arg=<id> like the browser does and collect terminal output."""
+def ttyd_attach(base, jar, sid, ctx, seconds=20):
+    """Open /sess/ws?arg=<id> like the browser does (over TLS for https) and collect
+    terminal output."""
     u = urllib.parse.urlparse(base)
-    if u.scheme != "http":
-        return b"(skipped: https)"
-    host, port = u.hostname, u.port or 80
+    tls = u.scheme == "https"
+    host, port = u.hostname, u.port or (443 if tls else 80)
     cookie = "; ".join(f"{c.name}={c.value}" for c in jar)
     key = base64.b64encode(os.urandom(16)).decode()
     hostport = f"{host}:{port}" if u.port else host
     s = socket.create_connection((host, port), timeout=10)
+    if tls:
+        s = ctx.wrap_socket(s, server_hostname=host)
     s.sendall((f"GET /sess/ws?arg={sid} HTTP/1.1\r\nHost: {hostport}\r\n"
                f"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
                f"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: tty\r\n"

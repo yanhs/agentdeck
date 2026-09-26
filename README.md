@@ -22,6 +22,9 @@
   the actual `claude` TUI in its own persistent `tmux` session on your server, shown
   through `ttyd`. Close the tab, the laptop or the phone — it keeps working. Open it later
   from anywhere and it's the same terminal.
+- **Copy & paste like a desktop terminal.** Select with the mouse to copy, Ctrl+Shift+V
+  (⌘V on a Mac) to paste text, and paste or drop screenshots and images straight into the
+  agent.
 - **Full server control or a sandbox — your choice.** Install on the host and agents manage
   the whole server (packages, databases, nginx, HTTPS, Docker); or use the Docker sandbox,
   where they can't touch the host.
@@ -44,11 +47,15 @@ Full control of the server — best on a dedicated VPS (Ubuntu 22.04 / 24.04, De
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash
-# → http://<your-vps-ip>:8765 — the first visit sets the password
+# → https://<your-ip>.sslip.io — the first visit sets the password
 ```
 
-Then **＋ New terminal**, sign in to Claude once, and give the agent a task. HTTPS with no
-domain: `~/agentdeck/install.sh --https`. Details: [Quick start](#-quick-start).
+It comes up on **HTTPS automatically** — no domain needed: a trusted Let's Encrypt
+certificate for `https://<your-ip-with-dashes>.sslip.io` when ports 80/443 are free,
+otherwise still encrypted, with a self-signed certificate on `https://<your-ip>:8765` that
+the browser warns about once. Your password never travels in clear text. Then
+**＋ New terminal** (it opens in `~/projects`), sign in to Claude once, and give the agent a
+task. Details: [Quick start](#-quick-start).
 
 ## Try it in a sandbox (server control isn't available in this mode)
 
@@ -211,8 +218,10 @@ curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh |
 
 or, from a clone: `./install.sh`. Run it as a normal user with `sudo` (not as root). When sudo
 needs no password (the usual cloud `ubuntu` user) nothing is asked; `--yes` never asks.
-At the end it prints the address: open it, **the first visit sets the password**, then
-**＋ New terminal** and sign in to Claude once.
+At the end it prints the address and says, in plain words, which kind of HTTPS you got and
+why: open it, **the first visit sets the password**, then **＋ New terminal** and sign in
+to Claude once. New terminals open in `~/projects` (so Claude asks to trust that folder, not
+your whole home); `AGENTDECK_WORKDIR=/path` at install time changes it, and re-runs keep it.
 
 - **Supported:** Ubuntu 22.04 and 24.04, Debian 12 — x86_64 or aarch64. On anything else it
   stops without changing anything and points you to the Docker sandbox below.
@@ -222,12 +231,23 @@ At the end it prints the address: open it, **the first visit sets the password**
   `~/agentdeck`; the guard hooks in your `~/.claude` (merged, never overwritten;
   `AGENTDECK_GUARDS=0` skips them).
 - **How it runs:** systemd services running as you — `agentdeck-status`, `-tasks`,
-  `-sessions` (the one ttyd), `-caddy` (login + proxy on `:8765`) and an `agentdeck-reaper`
+  `-sessions` (the one ttyd), `-caddy` (login + proxy + HTTPS) and an `agentdeck-reaper`
   timer. They start at boot. `systemctl status 'agentdeck-*'`, `journalctl -u agentdeck-status`.
-- **HTTPS, no domain needed:** `~/agentdeck/install.sh --https` serves
-  `https://<your-ip-with-dashes>.sslip.io` with a free Let's Encrypt certificate (or
-  `--https your-domain.com`). Ports 80 and 443 must be free — if another web server holds
-  them, it stops and says so. `--http` goes back to `:8765`.
+- **HTTPS by default, no domain needed.** What you get depends on the server:
+  - ports 80 and 443 free → `https://<your-ip-with-dashes>.sslip.io` (a free name that
+    resolves to your IP) with a Let's Encrypt certificate, renewed automatically; http on
+    80 redirects there; `:8765` isn't served at all;
+  - 443 taken by another web server, 80 free → the same trusted certificate on
+    `https://<name>:8443`;
+  - 80 taken, no public IP, or the certificate doesn't arrive within ~2 minutes (usually a
+    cloud firewall / security group blocking 80 and 443) → HTTPS with a **self-signed**
+    certificate on `https://<your-ip>:8765`: the browser warns once ("not secure /
+    certificate not trusted") — continue; the connection and your password are still
+    encrypted. Fix the cause, then `~/agentdeck/install.sh --https` for a trusted one.
+
+  Your own domain: `--https your-domain.com` (or `AGENTDECK_SITE=your-domain.com`; its A
+  record must point here). `--http` is plain http on `:8765` — no encryption, only if you
+  really want it. Re-runs keep the mode the last install ended up with.
 - **Update or repair:** run the same command again — nothing is duplicated, running agents
   keep running. **Remove:** `~/agentdeck/install.sh --uninstall` stops the services and the
   agents' own tmux server (your own tmux sessions are never touched) and keeps your
@@ -532,8 +552,12 @@ running terminals.
 The installer has its own end-to-end test: `tests/install/run.sh ubuntu-24.04` (also
 `ubuntu-22.04`, `debian-12`, and `fedora-40` for the refusal) boots a fresh systemd
 container, runs `install.sh` the `curl | bash` way, logs in, opens a terminal, reboots,
-re-runs the installer and uninstalls. GitHub runs it on every push, plus `./install.sh --yes`
-on real Ubuntu 22.04 / 24.04 VMs (`.github/workflows/install.yml`).
+re-runs the installer and uninstalls. `SCENARIO=` picks the HTTPS case it meets (a public
+certificate can't be issued in a container): `cert-timeout` (default: no certificate in
+time → self-signed fallback), `port80-busy`, `internal` / `internal-alt` (the trusted-HTTPS
+path on 443 / 8443 with Caddy's own CA, `AGENTDECK_TLS_INTERNAL=1`) and `http`. GitHub runs
+it on every push, plus `./install.sh --yes` on real Ubuntu 22.04 / 24.04 VMs
+(`.github/workflows/install.yml`).
 
 ## 🗂️ Project layout
 

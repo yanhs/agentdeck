@@ -63,17 +63,26 @@ BODIES = {
     "id": 'case "$1" in -u) echo "${FAKE_UID:-1000}";; -un) echo "${FAKE_USER:-tester}";;'
           ' *) echo "uid=${FAKE_UID:-1000}";; esac',
     "uname": 'case "$1" in -m) echo "${FAKE_ARCH:-x86_64}";; *) echo Linux;; esac',
-    "curl": "exit 7",
+    # curl: every download / lookup fails; a status probe (-w %{http_code}) answers when
+    # set: FAKE_CURL_LOCAL_HTTPS (https://127.0.0.1…, the self-signed health check),
+    # FAKE_CURL_HTTPS (https by name, the certificate probe), FAKE_CURL_HTTP (http)
+    "curl": 'case "$*" in *http_code*) case "$*" in *https://127.0.0.1*) c="${FAKE_CURL_LOCAL_HTTPS:-}";;'
+            ' *https://*) c="${FAKE_CURL_HTTPS:-}";; *) c="${FAKE_CURL_HTTP:-}";; esac;'
+            ' [ -n "$c" ] && { printf "%s" "$c"; exit 0; };; esac; exit 7',
     # systemctl is-active: FAKE_ACTIVE names the active units (default: none)
     "systemctl": 'case "$*" in *is-active*) for u in ${FAKE_ACTIVE:-}; do'
                  ' case "$*" in *"$u"*) exit 0;; esac; done; exit 3;; esac; exit 0',
     "tmux": 'echo "tmux-env TMUX_TMPDIR=${TMUX_TMPDIR:-} $*" >> "$SHIM_LOG"; exit 0',
-    "ss": "exit 0",
+    # ss: FAKE_SS_BUSY="80:nginx 443:nginx" = those ports listen, owned by that program
+    "ss": 'for pp in ${FAKE_SS_BUSY:-}; do case "$*" in *"sport = :${pp%%:*}"*)'
+          ' echo "LISTEN 0 511 0.0.0.0:${pp%%:*} 0.0.0.0:* users:((\\"${pp#*:}\\",pid=1,fd=6))";'
+          ' exit 0;; esac; done; exit 0',
+    "journalctl": 'printf "%s\\n" "${FAKE_JOURNAL:-}"',
     "getent": 'echo "tester:x:1000:1000::$HOME:/bin/bash"',
     "hostname": "echo 192.0.2.10",
     "dpkg-query": "exit 1",
     **{n: "exit 0" for n in ("apt-get", "npm", "node", "git", "loginctl", "python3", "gpg",
-                              "tar", "ufw", "caddy", "ttyd", "journalctl", "env", "chown")},
+                              "tar", "ufw", "caddy", "ttyd", "env", "chown")},
 }
 
 GUARD = """#!{bash}
@@ -111,6 +120,10 @@ class Box:
         (self.repo / "status_server.py").write_text("# stub\n")
         (self.repo / "open-session.sh").write_text("# stub\n")
         self.log.write_text("")
+        # the box's ports, fixed for its lifetime; never the host's real 80/443 (a web
+        # server may listen there)
+        self.ports = {k: str(free_port()) for k in ("AGENTDECK_PORT", "AGENTDECK_HTTP_PORT",
+                                                    "AGENTDECK_HTTPS_PORT", "AGENTDECK_ALT_PORT")}
         for name, body in BODIES.items():
             self._exe(self.bin / name, SHIM.format(bash=BASH, name=name, body=body))
         realpath = shutil.which("realpath")
@@ -140,7 +153,7 @@ class Box:
              "SHIM_LOG": str(self.log), "SANDBOX": str(self.root), "LANG": "C.UTF-8",
              "AGENTDECK_SYSTEMD_DIR": str(self.root / "systemd"),
              "AGENTDECK_OS_RELEASE": self.os_release("ubuntu-24.04"),
-             "AGENTDECK_PUBLIC_IP": "203.0.113.7", "AGENTDECK_PORT": str(free_port())}
+             "AGENTDECK_PUBLIC_IP": "203.0.113.7", **self.ports}
         e.update({k: str(v) for k, v in extra.items()})
         return e
 
@@ -189,7 +202,7 @@ CHANGERS = ("sudo", "apt-get", "systemctl", "npm", "git", "loginctl", "tmux", "r
             "install", "python3", "curl")
 
 
-def changes(calls, allow=("sudo -n true",)):
+def changes(calls, allow=("sudo -n true", "sudo -n ss ")):   # read-only: sudo probes
     return [c for c in calls if c.split(" ", 1)[0] in CHANGERS
             and not any(c.startswith(a) for a in allow)]
 
@@ -228,7 +241,7 @@ def test_script_exists_and_is_valid_bash():
 def test_help_mentions_every_flag(box):
     r = box.run("--help")
     assert r.returncode == 0
-    for flag in ("--yes", "--https", "--uninstall", "--purge", "--check", "--telegram"):
+    for flag in ("--yes", "--https", "--http", "--uninstall", "--purge", "--check", "--telegram"):
         assert flag in r.stdout, flag
     assert not changes(box.calls())
 
@@ -387,7 +400,7 @@ def test_https_refuses_busy_port(box):
 def test_plain_mode_refuses_busy_dashboard_port(box):
     s, busy = listener()
     try:
-        r = box.run("--yes --check", AGENTDECK_PORT=busy)
+        r = box.run("--yes --check --http", AGENTDECK_PORT=busy)
     finally:
         s.close()
     assert r.returncode != 0
@@ -400,8 +413,9 @@ def test_rerun_our_own_caddy_on_the_port_is_not_busy(box):
     (box.root / "systemd" / "agentdeck-caddy.service").write_text(
         f"[Service]\nEnvironment=AGENTDECK_SITE=:{port}\n")
     try:
-        ok = box.run("--yes --check", AGENTDECK_PORT=port, FAKE_ACTIVE="agentdeck-caddy.service")
-        stopped = box.run("--yes --check", AGENTDECK_PORT=port)
+        ok = box.run("--yes --check --http", AGENTDECK_PORT=port,
+                     FAKE_ACTIVE="agentdeck-caddy.service")
+        stopped = box.run("--yes --check --http", AGENTDECK_PORT=port)
     finally:
         s.close()
     assert ok.returncode == 0, ok.stdout + ok.stderr
@@ -619,3 +633,431 @@ def test_purge_needs_uninstall(box):
     r = box.run("--purge --yes")
     assert r.returncode != 0 and "--uninstall" in r.stderr
     assert changes(box.calls()) == []
+
+
+
+# ── HTTPS by default ─────────────────────────────────────────────────────────────
+# The ladder (no flag): 80 + 443 free → a trusted certificate on https://<name>;
+# 443 busy → the same on https://<name>:<alt>; 80 busy / no public IP / no certificate in
+# time → HTTPS with a self-signed certificate on :8765. Plain http only with --http.
+# `--check` prints the decision and changes nothing; the bring-up (units, certificate
+# wait, fallback, final message) runs as a function with SUDO="" so the unit files land
+# in the sandbox's systemd dir, and every curl / journalctl answer is canned.
+SSLIP = "203-0-113-7.sslip.io"
+IP = "203.0.113.7"
+
+
+def out_of(r):
+    return r.stdout + r.stderr
+
+
+def P(box, key):
+    return box.ports[f"AGENTDECK_{key}"]
+
+
+SELF_SIGNED = ("self-signed certificate", "your browser will warn once",
+               "the connection and your password are still encrypted")
+
+
+def assert_self_signed(box, out):
+    for phrase in SELF_SIGNED:
+        assert phrase in out, phrase
+    assert f"https://{IP}:{P(box, 'PORT')}" in out
+    assert f"http://{IP}" not in out
+    assert "install.sh --https" in out
+
+
+def test_default_is_https_on_sslip_when_ports_free(box):
+    r = box.run("--yes --check")
+    assert r.returncode == 0, out_of(r)
+    assert f"https://{SSLIP}" in r.stdout
+    assert f"https://{SSLIP}:" not in r.stdout          # the standard port, no :443
+    assert "Let's Encrypt" in r.stdout
+    assert changes(box.calls()) == []
+
+
+def test_default_uses_a_domain_from_agentdeck_site(box):
+    r = box.run("--yes --check", AGENTDECK_SITE="deck.example.org")
+    assert r.returncode == 0, out_of(r)
+    assert "https://deck.example.org" in r.stdout
+    assert SSLIP not in r.stdout
+
+
+def test_default_with_a_bad_agentdeck_site_is_refused(box):
+    r = box.run("--yes --check", AGENTDECK_SITE="http://x.org/path")
+    assert r.returncode != 0
+    assert "not a domain name" in r.stderr
+    assert changes(box.calls()) == []
+
+
+def test_port_443_busy_keeps_a_trusted_certificate_on_another_port(box):
+    r = box.run("--yes --check", FAKE_SS_BUSY=f"{P(box, 'HTTPS_PORT')}:apache2")
+    assert r.returncode == 0, out_of(r)
+    assert f"https://{SSLIP}:{P(box, 'ALT_PORT')}" in r.stdout
+    assert "apache2" in r.stdout
+    assert "self-signed" not in r.stdout
+
+
+def test_alt_port_busy_takes_the_next_free_one(box):
+    s, alt = listener()
+    try:
+        r = box.run("--yes --check", AGENTDECK_ALT_PORT=alt,
+                    FAKE_SS_BUSY=f"{P(box, 'HTTPS_PORT')}:apache2")
+    finally:
+        s.close()
+    assert r.returncode == 0, out_of(r)
+    assert f"https://{SSLIP}:" in r.stdout
+    assert f"https://{SSLIP}:{alt}" not in r.stdout
+
+
+def test_port_80_busy_gives_self_signed_https_and_names_the_program(box):
+    r = box.run("--yes --check", FAKE_SS_BUSY=f"{P(box, 'HTTP_PORT')}:nginx")
+    assert r.returncode == 0, out_of(r)
+    assert_self_signed(box, r.stdout)
+    assert f"free port {P(box, 'HTTP_PORT')} (it's used by nginx)" in r.stdout
+    assert SSLIP not in r.stdout
+    assert changes(box.calls()) == []
+
+
+def test_port_80_busy_without_a_visible_program(box):
+    s, busy = listener()
+    try:
+        r = box.run("--yes --check", AGENTDECK_HTTP_PORT=busy)
+    finally:
+        s.close()
+    assert r.returncode == 0, out_of(r)
+    assert "self-signed certificate" in r.stdout
+    assert f"free port {busy} (it's used by another program)" in r.stdout
+
+
+def test_explicit_https_with_port_80_busy_refuses(box):
+    r = box.run("--yes --check --https", FAKE_SS_BUSY=f"{P(box, 'HTTP_PORT')}:apache2")
+    assert r.returncode != 0
+    assert "busy" in r.stderr and "apache2" in r.stderr
+    assert changes(box.calls()) == []
+
+
+def test_explicit_https_with_port_443_busy_uses_the_alt_port(box):
+    r = box.run("--yes --check --https", FAKE_SS_BUSY=f"{P(box, 'HTTPS_PORT')}:apache2")
+    assert r.returncode == 0, out_of(r)
+    assert f"https://{SSLIP}:{P(box, 'ALT_PORT')}" in r.stdout
+
+
+def test_no_public_ip_gives_self_signed_and_says_how_to_use_a_domain(box):
+    r = box.run("--yes --check", AGENTDECK_PUBLIC_IP="")
+    assert r.returncode == 0, out_of(r)
+    out = r.stdout
+    assert "public IPv4" in out and "--https your-domain.com" in out
+    for phrase in SELF_SIGNED:
+        assert phrase in out
+    assert f":{P(box, 'PORT')}" in out
+    assert "http://" not in out
+
+
+def test_self_signed_needs_the_dashboard_port(box):
+    s, busy = listener()
+    try:
+        r = box.run("--yes --check", AGENTDECK_PORT=busy,
+                    FAKE_SS_BUSY=f"{P(box, 'HTTP_PORT')}:nginx")
+    finally:
+        s.close()
+    assert r.returncode != 0
+    assert "busy" in r.stderr and str(busy) in r.stderr
+
+
+def test_http_flag_forces_plain_http_and_warns(box):
+    r = box.run("--yes --check --http")
+    assert r.returncode == 0, out_of(r)
+    out = r.stdout
+    assert "HTTP only, as requested (--http)" in out
+    assert "unencrypted" in out
+    assert "--https" in out.split("as requested (--http)", 1)[1]
+    assert SSLIP not in out
+
+
+def write_conf(box, site, why=""):
+    conf_path(box).parent.mkdir(parents=True, exist_ok=True)
+    conf_path(box).write_text(f"AGENTDECK_DIR={box.repo}\nAGENTDECK_MANAGED=0\n"
+                              f"AGENTDECK_SITE={site}\n" + (f"AGENTDECK_WHY={why}\n" if why else ""))
+
+
+def test_rerun_keeps_http_only_when_it_was_asked_for(box):
+    write_conf(box, f":{P(box, 'PORT')}", why="requested")
+    r = box.run("--yes --check")
+    assert r.returncode == 0, out_of(r)
+    assert SSLIP not in r.stdout
+    assert "HTTP only" in r.stdout and "last install" in r.stdout
+    assert "install.sh --https" in r.stdout
+
+
+def test_rerun_of_an_old_plain_http_install_moves_to_https(box):
+    # installs from before HTTPS-by-default recorded ":8765" without asking for it
+    write_conf(box, f":{P(box, 'PORT')}")
+    r = box.run("--yes --check")
+    assert r.returncode == 0, out_of(r)
+    assert f"https://{SSLIP}" in r.stdout
+
+
+def test_rerun_keeps_self_signed(box):
+    write_conf(box, f"https://:{P(box, 'PORT')}", why="cert")
+    r = box.run("--yes --check")
+    assert r.returncode == 0, out_of(r)
+    assert "self-signed certificate" in r.stdout and "last install" in r.stdout
+    assert "install.sh --https" in r.stdout
+    assert SSLIP not in r.stdout
+
+
+def test_rerun_keeps_the_https_name(box):
+    write_conf(box, "deck.example.org")
+    r = box.run("--yes --check")
+    assert r.returncode == 0, out_of(r)
+    assert "https://deck.example.org" in r.stdout
+
+
+def test_a_flag_overrides_the_recorded_mode(box):
+    write_conf(box, f"https://:{P(box, 'PORT')}", why="cert")
+    r = box.run("--yes --check --https")
+    assert r.returncode == 0, out_of(r)
+    assert f"https://{SSLIP}" in r.stdout and "self-signed" not in r.stdout
+    write_conf(box, "deck.example.org")
+    r = box.run("--yes --check --http")
+    assert r.returncode == 0, out_of(r)
+    assert "as requested (--http)" in r.stdout
+
+
+# ── what Caddy is told ───────────────────────────────────────────────────────────
+def caddy_site_blocks():
+    """Top-level blocks of the Caddyfile other than the global options block."""
+    text = (ROOT / "Caddyfile").read_text()
+    return [l for l in text.splitlines() if l.endswith("{") and not l[:1].isspace()
+            and not l.startswith("#") and l.strip() != "{"]
+
+
+def test_caddy_serves_one_site_only():
+    # the one site is AGENTDECK_SITE: nothing else could serve :8765 in plain http
+    assert caddy_site_blocks() == ["{$AGENTDECK_SITE::8765} {"]
+
+
+def test_caddyfile_imports_the_installers_global_options():
+    head = (ROOT / "Caddyfile").read_text().split("{$AGENTDECK_SITE", 1)[0]
+    assert 'import "{$AGENTDECK_CADDY_GLOBAL:/dev/null}"' in head
+
+
+def test_caddy_unit_points_at_the_global_options_file(box):
+    u = render(box, "agentdeck-caddy.service", AGENTDECK_SITE=SSLIP)
+    assert ("Environment=AGENTDECK_CADDY_GLOBAL=/home/tester/agentdeck/.sessions/"
+            "caddy-global.caddy") in u
+
+
+def caddy_view(box, site, **extra):
+    """caddy_address + caddy_global_conf for a SITE, as install.sh computes them."""
+    r = box.lib(f'SITE="{site}"; SELF_IP={IP}; echo "ADDR=$(caddy_address)"; caddy_global_conf',
+                **extra)
+    assert r.returncode == 0, r.stderr
+    addr, _, conf = r.stdout.partition("\n")
+    return addr.removeprefix("ADDR="), conf
+
+
+def test_trusted_https_on_443(box):
+    addr, conf = caddy_view(box, SSLIP)
+    assert addr == SSLIP
+    assert "local_certs" not in conf and "acme_ca" not in conf
+
+
+def test_trusted_https_on_the_alt_port_answers_the_challenge_on_80(box):
+    addr, conf = caddy_view(box, f"{SSLIP}:8443")
+    assert addr == f"{SSLIP}:8443"
+    assert "disable_tlsalpn_challenge" in conf       # 443 is someone else's
+    assert "local_certs" not in conf
+
+
+def test_self_signed_serves_tls_on_the_dashboard_port_only(box):
+    addr, conf = caddy_view(box, "https://:8765")
+    assert addr == f"https://{IP}:8765, https://:8765"
+    for opt in ("local_certs", "skip_install_trust", "auto_https disable_redirects",
+                f"default_sni {IP}", f"fallback_sni {IP}"):
+        assert opt in conf, opt
+
+
+def test_https_modes_never_serve_the_dashboard_port_in_clear(box):
+    for site in (SSLIP, f"{SSLIP}:8443"):
+        addr, _ = caddy_view(box, site)
+        assert ":8765" not in addr
+        u = render(box, "agentdeck-caddy.service", AGENTDECK_SITE=addr)
+        assert ":8765" not in u.replace("AGENTDECK_CADDY_GLOBAL", "")
+
+
+def test_plain_http_only_as_asked(box):
+    addr, conf = caddy_view(box, ":8765")
+    assert addr == ":8765" and conf.strip() == ""
+
+
+def test_test_only_ca_switches(box):
+    _, conf = caddy_view(box, SSLIP, AGENTDECK_TLS_INTERNAL=1)
+    assert "local_certs" in conf and "skip_install_trust" in conf
+    _, conf = caddy_view(box, SSLIP, AGENTDECK_ACME_CA="https://127.0.0.1:9/directory")
+    assert "acme_ca https://127.0.0.1:9/directory" in conf
+    _, conf = caddy_view(box, f"{SSLIP}:8443", AGENTDECK_ACME_CA="https://127.0.0.1:9/directory")
+    assert "dir https://127.0.0.1:9/directory" in conf and "disable_tlsalpn_challenge" in conf
+
+
+# ── bring-up: certificate wait, fallback, final message ──────────────────────────
+JOURNAL = ('{"level":"error","logger":"tls.obtain","msg":"could not get certificate from issuer",'
+           '"error":"Timeout during connect (likely firewall problem)"}')
+
+
+def bring_up(box, site, pre="", **extra):
+    code = (f'DIR="{box.repo}"; CLAUDE=/usr/bin/claude; NODE_DIR=/usr/bin; SITE="{site}"; '
+            f'SELF_IP={IP}; SUDO=""; {pre} bring_up; echo "SITE_NOW=$SITE"; finish')
+    defaults = {"FAKE_CURL_HTTP": "308", "FAKE_CURL_LOCAL_HTTPS": "200", "AGENTDECK_CERT_WAIT": "2",
+                "AGENTDECK_CERT_POLL": "1", "FAKE_JOURNAL": JOURNAL}
+    return box.lib(code, **{**defaults, **extra})
+
+
+def https_probes(box):
+    return [c for c in box.calls() if c.startswith("curl ") and "https://" in c]
+
+
+def global_file(box):
+    return (box.repo / ".sessions" / "caddy-global.caddy").read_text()
+
+
+def test_certificate_issued_keeps_https(box):
+    r = bring_up(box, SSLIP, FAKE_CURL_HTTPS="200")
+    assert r.returncode == 0, out_of(r)
+    out = r.stdout
+    assert f"Getting a certificate for {SSLIP} (up to 2 s)" in out
+    assert f"SITE_NOW={SSLIP}" in out
+    assert f"Dashboard: https://{SSLIP} — HTTPS is on (free certificate from Let's Encrypt" in out
+    assert "renewed automatically" in out
+    assert "Plain http is off, so your password never travels unencrypted" in out
+    assert f"AGENTDECK_SITE={SSLIP}\n" in conf_path(box).read_text()
+    caddy = (box.root / "systemd" / "agentdeck-caddy.service").read_text()
+    assert f"AGENTDECK_SITE={SSLIP}\n" in caddy
+    # the probe goes to this host, by name, and verifies the certificate
+    probe = https_probes(box)
+    assert probe and f"--resolve {SSLIP}:{P(box, 'HTTPS_PORT')}:127.0.0.1" in probe[0]
+    assert " -k " not in probe[0]
+
+
+def test_certificate_on_the_alt_port(box):
+    alt = P(box, "ALT_PORT")
+    r = bring_up(box, f"{SSLIP}:{alt}", pre="BUSY_BY=apache2;", FAKE_CURL_HTTPS="200")
+    assert r.returncode == 0, out_of(r)
+    out = r.stdout
+    assert f"Dashboard: https://{SSLIP}:{alt} — HTTPS is on" in out
+    assert "apache2" in out and alt in out
+    assert f"https://{SSLIP}:{alt}/login" in https_probes(box)[0]
+    assert "disable_tlsalpn_challenge" in global_file(box)
+
+
+def test_certificate_timeout_falls_back_to_self_signed(box):
+    port = P(box, "PORT")
+    r = bring_up(box, SSLIP)                  # FAKE_CURL_HTTPS unset: no answer on https
+    assert r.returncode == 0, out_of(r)
+    out = r.stdout
+    assert f"Getting a certificate for {SSLIP} (up to 2 s)" in out
+    assert f"SITE_NOW=https://:{port}" in out
+    assert f"Let's Encrypt couldn't reach this server on port {P(box, 'HTTP_PORT')} within 2 s" in out
+    assert "security group" in out
+    assert_self_signed(box, out)
+    assert "likely firewall problem" in out    # the Caddy log excerpt
+    # the units, Caddy's options and the record now say self-signed, so a re-run keeps it
+    caddy = (box.root / "systemd" / "agentdeck-caddy.service").read_text()
+    assert f'"AGENTDECK_SITE=https://{IP}:{port}, https://:{port}"' in caddy
+    assert "local_certs" in global_file(box)
+    conf = conf_path(box).read_text()
+    assert f"AGENTDECK_SITE=https://:{port}\n" in conf and "AGENTDECK_WHY=cert\n" in conf
+    restarts = [c for c in box.calls() if c.startswith("systemctl restart")]
+    assert len(restarts) == 2                  # trusted attempt, then self-signed
+
+
+def test_certificate_timeout_with_a_busy_dashboard_port_fails_loudly(box):
+    s, busy = listener()
+    try:
+        r = bring_up(box, SSLIP, AGENTDECK_PORT=busy)
+    finally:
+        s.close()
+    assert r.returncode != 0
+    assert "certificate" in r.stderr and str(busy) in r.stderr
+
+
+def test_self_signed_bring_up_probes_https_without_verification(box):
+    port = P(box, "PORT")
+    r = bring_up(box, f"https://:{port}", pre="WHY=port80; BUSY_BY=nginx;")
+    assert r.returncode == 0, out_of(r)
+    assert "Getting a certificate" not in r.stdout
+    probe = https_probes(box)
+    assert probe and f"https://127.0.0.1:{port}/login" in probe[0] and " -k " in probe[0]
+    assert_self_signed(box, r.stdout)
+    assert f"(it's used by nginx)" in r.stdout
+
+
+def test_tls_internal_probe_skips_verification(box):
+    r = bring_up(box, SSLIP, FAKE_CURL_HTTPS="200", AGENTDECK_TLS_INTERNAL="1")
+    assert r.returncode == 0, out_of(r)
+    assert " -k " in https_probes(box)[0]
+    assert "internal test CA" in r.stdout
+    assert "local_certs" in global_file(box)
+
+
+def test_http_bring_up_needs_no_certificate(box):
+    r = bring_up(box, f":{P(box, 'PORT')}", pre="WHY=requested;", FAKE_CURL_HTTP="200")
+    assert r.returncode == 0, out_of(r)
+    assert "Getting a certificate" not in r.stdout
+    assert not https_probes(box)
+    assert "HTTP only, as requested (--http)" in r.stdout
+    assert f"http://{IP}:{P(box, 'PORT')}" in r.stdout
+
+
+# ── where new terminals start: ~/projects, not the whole home ─────────────────────
+def test_units_start_terminals_in_projects_by_default(box):
+    for name in ("agentdeck-status.service", "agentdeck-sessions.service"):
+        assert "Environment=AGENTDECK_WORKDIR=/home/tester/projects" in render(box, name)
+
+
+def test_units_take_the_chosen_workdir(box):
+    u = render(box, "agentdeck-status.service", AGENTDECK_WORKDIR="/srv/work")
+    assert "Environment=AGENTDECK_WORKDIR=/srv/work" in u
+
+
+def workdir(box, **extra):
+    r = box.lib('resolve_workdir; echo "WORKDIR=$WORKDIR"', **extra)
+    return r
+
+
+def test_workdir_default_is_home_projects(box):
+    r = workdir(box)
+    assert r.returncode == 0, r.stderr
+    assert f"WORKDIR={box.home}/projects" in r.stdout
+
+
+def test_workdir_from_env_wins_then_the_record(box):
+    write_conf(box, ":8765")
+    conf_path(box).write_text(conf_path(box).read_text() + "AGENTDECK_WORKDIR=/srv/kept\n")
+    assert "WORKDIR=/srv/kept" in workdir(box).stdout                  # a re-run keeps it
+    assert "WORKDIR=/srv/new" in workdir(box, AGENTDECK_WORKDIR="/srv/new").stdout
+
+
+def test_workdir_must_be_absolute(box):
+    r = workdir(box, AGENTDECK_WORKDIR="projects")
+    assert r.returncode != 0 and "AGENTDECK_WORKDIR" in r.stderr
+
+
+def test_prepare_data_creates_and_records_the_workdir(box):
+    w = box.home / "projects"
+    r = box.lib(f'DIR="{box.repo}"; SITE=":8765"; prepare_data')
+    assert r.returncode == 0, r.stderr
+    assert w.is_dir()
+    assert f"AGENTDECK_WORKDIR={w}\n" in conf_path(box).read_text()
+
+
+def test_final_message_says_where_terminals_open(box):
+    r = box.lib(f'DIR="{box.repo}"; SITE=":8765"; WHY=requested; SELF_IP={IP}; '
+                f'WORKDIR="$HOME/projects"; finish')
+    assert r.returncode == 0, r.stderr
+    assert "New terminals open in ~/projects (set AGENTDECK_WORKDIR to change)" in r.stdout
+
+
+def test_docker_sandbox_keeps_work():
+    assert "AGENTDECK_WORKDIR=/work" in (ROOT / "Dockerfile").read_text()

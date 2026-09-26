@@ -4,6 +4,8 @@
 # (or <ip>.sslip.io) for automatic HTTPS; default is plain http on :8765.
 {
 	email {$AGENTDECK_EMAIL:you@example.com}
+	# install.sh's per-mode options (self-signed / alternate port); nothing without it
+	import "{$AGENTDECK_CADDY_GLOBAL:/dev/null}"
 }
 
 {$AGENTDECK_SITE::8765} {

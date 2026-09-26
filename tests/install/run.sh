@@ -18,6 +18,17 @@
 # Always tears down its own container + image; `docker ps -a` must be unchanged after.
 #
 # Env: KEEP=1 leaves the container running for a look (still removed on the next run).
+#      SCENARIO= which HTTPS case the install meets (a public certificate can't be issued
+#      in a container, so each case is made reachable on purpose; no Let's Encrypt traffic):
+#        cert-timeout (default)  80/443 free, but the ACME server is unreachable
+#                                (AGENTDECK_ACME_CA=https://127.0.0.1:9/…, 20 s wait) →
+#                                falls back to HTTPS with a self-signed certificate on :8765
+#        port80-busy             something else listens on 80 → self-signed on :8765
+#        internal                80/443 free, AGENTDECK_TLS_INTERNAL=1 (Caddy's own CA in place
+#                                of Let's Encrypt) → https://<name> on 443, 80 redirects, no :8765
+#        internal-alt            443 taken → https://<name>:8443 with Caddy's own CA
+#        http                    ./install.sh --http → plain http on :8765
+#      The smoke test (login, new terminal over the websocket, board) runs over that URL.
 set -Eeuo pipefail
 
 DISTRO="${1:?usage: run.sh <ubuntu-22.04|ubuntu-24.04|debian-12|fedora-40>}"
@@ -100,8 +111,41 @@ if [ "$DISTRO" = fedora-40 ]; then
 fi
 
 # ── supported distro: full install ───────────────────────────────────────────
-PORT="$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')"
-BASE="http://127.0.0.1:$PORT"
+freeport() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
+PORT="$(freeport)" H80="$(freeport)" H443="$(freeport)" HALT="$(freeport)"
+SCENARIO="${SCENARIO:-cert-timeout}"
+IP=203.0.113.7                    # a documentation address: no real lookup, no real name
+NAME_SSLIP="203-0-113-7.sslip.io"
+# env for every installer run of this scenario (re-runs too) + how the smoke test reaches it
+INSTALL_ENV=(-e AGENTDECK_REPO_URL=/opt/agentdeck.git -e AGENTDECK_PUBLIC_IP=$IP)
+INSTALL_ARGS=""
+SMOKE_ARGS=()
+case "$SCENARIO" in
+  cert-timeout)
+    INSTALL_ENV+=(-e AGENTDECK_ACME_CA=https://127.0.0.1:9/directory -e AGENTDECK_CERT_WAIT=20)
+    BASE="https://127.0.0.1:$PORT"; SMOKE_ARGS=(--insecure) ;;
+  port80-busy)
+    BASE="https://127.0.0.1:$PORT"; SMOKE_ARGS=(--insecure) ;;
+  internal)
+    INSTALL_ENV+=(-e AGENTDECK_TLS_INTERNAL=1)
+    BASE="https://$NAME_SSLIP"; SMOKE_ARGS=(--insecure --connect "127.0.0.1:$H443") ;;
+  internal-alt)
+    INSTALL_ENV+=(-e AGENTDECK_TLS_INTERNAL=1)
+    BASE="https://$NAME_SSLIP:8443"; SMOKE_ARGS=(--insecure --connect "127.0.0.1:$HALT") ;;
+  http)
+    INSTALL_ARGS="--http"; BASE="http://127.0.0.1:$PORT" ;;
+  *) echo "unknown SCENARIO=$SCENARIO" >&2; exit 2 ;;
+esac
+smoke() { python3 "$HERE/smoke.py" "$BASE" "${SMOKE_ARGS[@]}" "$@"; }
+# curl the dashboard from the host the way the smoke test does
+dash_curl() {
+  case "$SCENARIO" in
+    internal) curl -sk --connect-to "$NAME_SSLIP:443:127.0.0.1:$H443" "$@" ;;
+    internal-alt) curl -sk --connect-to "$NAME_SSLIP:8443:127.0.0.1:$HALT" "$@" ;;
+    *) curl -sk "$@" ;;
+  esac
+}
+say "scenario: $SCENARIO — dashboard expected at $BASE"
 
 wait_systemd() {
   local st=""
@@ -116,7 +160,8 @@ wait_systemd() {
 say "boot $NAME (systemd PID 1), dashboard -> $BASE"
 docker run -d --name "$NAME" --hostname agentdeck-test --privileged --cgroupns=private \
   --tmpfs /run --tmpfs /run/lock \
-  -p "127.0.0.1:$PORT:8765" "$IMAGE" >/dev/null
+  -p "127.0.0.1:$PORT:8765" -p "127.0.0.1:$H80:80" -p "127.0.0.1:$H443:443" \
+  -p "127.0.0.1:$HALT:8443" "$IMAGE" >/dev/null
 expect "systemd is up" wait_systemd
 expect "PID 1 is systemd" test "$(docker exec "$NAME" cat /proc/1/comm)" = systemd
 
@@ -131,17 +176,65 @@ docker cp "$WORK/agentdeck.git" "$NAME:/opt/agentdeck.git"
 # repo owned by someone else ("dubious ownership") — e.g. uid 1001 on a GitHub runner
 docker exec "$NAME" chown -R ubuntu:ubuntu /opt/agentdeck.git
 
-say "install: bash < install.sh (the curl | bash path), as user ubuntu, no flags"
+# something else on a port the installer wants (root, like nginx would be)
+hold_port() {
+  docker exec -d "$NAME" perl -MIO::Socket::INET -e \
+    "my \$s = IO::Socket::INET->new(LocalPort => $1, Listen => 5, ReuseAddr => 1) or die; sleep 1e6"
+  sleep 1
+}
+case "$SCENARIO" in port80-busy) hold_port 80 ;; internal-alt) hold_port 443 ;; esac
+
+say "install: bash < install.sh (the curl | bash path), as user ubuntu${INSTALL_ARGS:+, $INSTALL_ARGS}"
 set +e
-docker exec -i -u ubuntu -w /home/ubuntu -e AGENTDECK_REPO_URL=/opt/agentdeck.git "$NAME" \
-  bash < "$REPO/install.sh" 2>&1 | tee "$WORK/install1.log"
+docker exec -i -u ubuntu -w /home/ubuntu "${INSTALL_ENV[@]}" "$NAME" \
+  bash -s -- $INSTALL_ARGS < "$REPO/install.sh" 2>&1 | tee "$WORK/install1.log"
 rc=${PIPESTATUS[0]}
 set -e
+L1="$WORK/install1.log"
 expect "install.sh exit 0" test "$rc" = 0
-expect "prints the URL" grep -Eq "http://[0-9.]+:8765" "$WORK/install1.log"
-expect "says first visit sets the password" grep -qi "first visit sets the password" "$WORK/install1.log"
-expect "says + New terminal / sign in to Claude" grep -qi "sign in to Claude" "$WORK/install1.log"
+case "$SCENARIO" in
+  cert-timeout)
+    expect "waited for the certificate" grep -q "Getting a certificate for $NAME_SSLIP (up to 20 s)" "$L1"
+    expect "says Let's Encrypt couldn't reach it" grep -q "Let's Encrypt couldn't reach this server on port 80 within 20 s" "$L1"
+    expect "says how to retry" grep -q "install.sh --https" "$L1"
+    expect "prints the self-signed URL" grep -q "https://$IP:8765" "$L1" ;;
+  port80-busy)
+    expect "names the program on port 80" grep -q "it's used by perl" "$L1"
+    expect "prints the self-signed URL" grep -q "https://$IP:8765" "$L1" ;;
+  internal)
+    expect "HTTPS is on at https://<name>" grep -q "Dashboard: https://$NAME_SSLIP — HTTPS is on" "$L1" ;;
+  internal-alt)
+    expect "HTTPS is on at https://<name>:8443" grep -q "Dashboard: https://$NAME_SSLIP:8443 — HTTPS is on" "$L1"
+    expect "says 443 is taken" grep -q "Port 443 is used by perl" "$L1" ;;
+  http)
+    expect "warns: HTTP only, as requested" grep -q "HTTP only, as requested (--http)" "$L1"
+    expect "prints the URL" grep -q "http://$IP:8765" "$L1" ;;
+esac
+case "$SCENARIO" in cert-timeout|port80-busy)
+  expect "explains the browser warning" grep -q "your browser will warn once" "$L1"
+  expect "says it is still encrypted" grep -q "the connection and your password are still encrypted" "$L1" ;;
+esac
+expect "says first visit sets the password" grep -qi "first visit sets the password" "$L1"
+expect "says + New terminal / sign in to Claude" grep -qi "sign in to Claude" "$L1"
+expect "says terminals open in ~/projects" grep -q "New terminals open in ~/projects" "$L1"
 [ "$rc" = 0 ] || exit 1
+
+say "transport ($SCENARIO)"
+listening() { docker exec "$NAME" ss -ltnH "sport = :$1" | grep -q .; }
+case "$SCENARIO" in
+  cert-timeout|port80-busy)
+    expect ":8765 answers https (self-signed)" test "$(dash_curl -o /dev/null -w '%{http_code}' "$BASE/login")" = 200
+    expect ":8765 serves no plain http" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/login)\" != 200 ]"
+    expect "Caddy holds no port 80 / 443" bash -c "! docker exec $NAME ss -ltnpH | grep caddy | grep -Eq ':(80|443) '" ;;
+  internal|internal-alt)
+    expect "the dashboard port :8765 is not served at all" bash -c "! docker exec $NAME ss -ltnH 'sport = :8765' | grep -q ."
+    loc="$(curl -s -o /dev/null -w '%{redirect_url}' --connect-to "$NAME_SSLIP:80:127.0.0.1:$H80" "http://$NAME_SSLIP/login")"
+    want="https://$NAME_SSLIP/login"; [ "$SCENARIO" = internal-alt ] && want="https://$NAME_SSLIP:8443/login"
+    expect "http on 80 redirects to $want (got $loc)" test "$loc" = "$want" ;;
+  http)
+    expect ":8765 answers plain http" test "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/login")" = 200 ;;
+esac
+expect "~/projects exists, owned by ubuntu" docker exec "$NAME" bash -c '[ "$(stat -c %U /home/ubuntu/projects)" = ubuntu ]'
 
 UNITS_ACTIVE="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.timer"
 units_active() {
@@ -175,15 +268,17 @@ expect "claude installed for the user" docker exec -u ubuntu "$NAME" bash -lc 'c
 expect "ttyd + caddy + node in place" docker exec "$NAME" bash -c 'ttyd --version && caddy version && node --version'
 
 say "smoke (first run)"
-expect "smoke: first run + new terminal" python3 "$HERE/smoke.py" "$BASE" --password "$PW" \
+expect "smoke: first run + new terminal" smoke --password "$PW" \
   --first-run --new-terminal --id-file "$WORK/id"
 SID="$(cat "$WORK/id" 2>/dev/null || true)"
 tmux_has() {
   docker exec -u ubuntu -e TMUX_TMPDIR=/home/ubuntu/agentdeck/.sessions/tmux "$NAME" \
-    tmux list-panes -a -F '#{session_name} #{pane_current_command}' \
-    | tee "$WORK/panes" | grep -Eq "^cs-$SID (claude|node)"
+    tmux list-panes -a -F '#{session_name} #{pane_current_command} #{pane_current_path}' \
+    | tee "$WORK/panes" | grep -Eq "^cs-$SID (claude|node) "
 }
+starts_in_projects() { grep -Eq "^cs-$SID .* /home/ubuntu/projects$" "$WORK/panes"; }
 expect "cs-$SID runs claude in the agents' own tmux server" tmux_has
+expect "the new terminal starts in ~/projects" starts_in_projects
 default_has_no_agents() {  # the user's default tmux server knows nothing of the agents
   ! docker exec -u ubuntu "$NAME" tmux list-sessions -F '#{session_name}' 2>/dev/null | grep -q '^cs-'
 }
@@ -196,25 +291,28 @@ expect "guard hooks installed into ~/.claude/settings.json" test "$G1" -ge 1
 say "reboot"
 docker restart "$NAME" >/dev/null
 expect "systemd is up after reboot" wait_systemd
+# the other program on 80 / 443 comes back at boot too
+case "$SCENARIO" in port80-busy) hold_port 80 ;; internal-alt) hold_port 443 ;; esac
 sleep 3
 expect "all agentdeck units active after reboot" units_active
-expect "smoke after reboot: login + terminal still listed" python3 "$HERE/smoke.py" "$BASE" \
+expect "smoke after reboot: login + terminal still listed" smoke \
   --password "$PW" --expect-id "$SID"
 
 say "re-run: ./install.sh --yes (idempotent)"
 set +e
-docker exec -u ubuntu -w /home/ubuntu "$NAME" bash -c 'cd ~/agentdeck && ./install.sh --yes' 2>&1 \
-  | tee "$WORK/install2.log"
+docker exec -u ubuntu -w /home/ubuntu "${INSTALL_ENV[@]}" "$NAME" \
+  bash -c 'cd ~/agentdeck && ./install.sh --yes' 2>&1 | tee "$WORK/install2.log"
 rc=${PIPESTATUS[0]}
 set -e
 expect "re-run exit 0" test "$rc" = 0
+expect "re-run keeps the mode (same URL)" grep -qF "AgentDeck is running:  $(sed -n 's/^AgentDeck is running:  //p' "$WORK/install1.log" | tail -n 1)" "$WORK/install2.log"
 docker exec "$NAME" systemctl list-units 'agentdeck*' --all --no-legend --plain > "$WORK/units2"
 expect "same units after re-run" diff <(awk '{print $1}' "$WORK/units1") <(awk '{print $1}' "$WORK/units2")
 expect "guard hooks not duplicated" test "$(guards)" = "$G1"
 expect "one ttyd, one caddy, one status_server" docker exec "$NAME" bash -c \
   '[ "$(pgrep -xc ttyd)" = 1 ] && [ "$(pgrep -xc caddy)" = 1 ] && [ "$(pgrep -fc "[s]tatus_server.py")" = 1 ]'
 expect "units active after re-run" units_active
-expect "smoke after re-run" python3 "$HERE/smoke.py" "$BASE" --password "$PW" --expect-id "$SID"
+expect "smoke after re-run" smoke --password "$PW" --expect-id "$SID"
 
 say "uninstall (keeps data)"
 # a tmux session of the user's own — uninstall must leave it alone
@@ -225,7 +323,8 @@ rc=${PIPESTATUS[0]}
 set -e
 expect "uninstall exit 0" test "$rc" = 0
 expect "no agentdeck units left" test -z "$(docker exec "$NAME" bash -c 'ls /etc/systemd/system/ | grep agentdeck; systemctl list-units "agentdeck*" --no-legend --plain' )"
-expect "dashboard port closed" bash -c "! curl -s -o /dev/null --max-time 3 $BASE/login"
+dash_closed() { ! dash_curl -o /dev/null --max-time 3 "$BASE/login"; }
+expect "dashboard closed" dash_closed
 expect "data kept (.sessions/library.json)" docker exec -u ubuntu "$NAME" test -s /home/ubuntu/agentdeck/.sessions/library.json
 expect "guard hooks removed" test "$(guards)" = 0
 expect "the user's own tmux session survived" docker exec -u ubuntu "$NAME" tmux has-session -t =mine
