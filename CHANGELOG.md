@@ -2,7 +2,7 @@
 
 All notable changes to AgentDeck. Newest first.
 
-## Unreleased
+## v1.7.3 — Ctrl+V from dictation apps (Wispr Flow) works on a Russian layout
 
 ### Terminal
 - **Ctrl+V from dictation apps on a non-Latin layout.** Wispr Flow and similar apps simulate Ctrl+V; on a Russian layout that event has no physical key code, only keyCode 86, so it reached Claude as ^V ("no image in clipboard"). The letter now also comes from keyCode.
