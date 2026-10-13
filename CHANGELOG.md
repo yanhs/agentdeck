@@ -2,10 +2,10 @@
 
 All notable changes to AgentDeck. Newest first.
 
-## v1.7.3 — copy & paste with Ctrl+C / Ctrl+V like any app, dictation apps (Wispr Flow) included, on any keyboard layout
+## v1.7.3 — Ctrl+V pastes like in any app, dictation apps (Wispr Flow) included
 
 ### Terminal
-- **Ctrl+V from dictation apps on a non-Latin layout.** Wispr Flow and similar apps simulate Ctrl+V; on a Russian layout that event has no physical key code, only keyCode 86, so it reached Claude as ^V ("no image in clipboard"). The letter now also comes from keyCode.
+- **Ctrl+V pastes like in any app.** Text and images; dictation apps such as Wispr Flow, which paste with Ctrl+V for you, now get their text into the terminal. Ctrl+Shift+V and ⌘V on a Mac still work.
 
 ## v1.7.2 — Ctrl+V pastes text and images (dictation apps like Wispr Flow work), Ctrl+C copies a selection
 
