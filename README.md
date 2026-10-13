@@ -26,9 +26,10 @@
   every terminal stays in the list and reopens the same Claude conversation where it left
   off (`claude --resume`), even in ultracode mode. Unloaded and archived terminals come
   back the same way.
-- **Copy & paste like a desktop terminal.** Select with the mouse to copy, Ctrl+Shift+V
-  (⌘V on a Mac) to paste text, and paste or drop screenshots and images straight into the
-  agent.
+- **Copy & paste like a desktop terminal.** Ctrl+V pastes text and images, so dictation
+  apps like Wispr Flow work; Ctrl+C copies a selection (and still interrupts when nothing
+  is selected). Select with the mouse to copy; Ctrl+Shift+V and ⌘V on a Mac paste too;
+  drop screenshots and images straight into the agent.
 - **Full server control or a sandbox — your choice.** Install on the host and agents manage
   the whole server (packages, databases, nginx, HTTPS, Docker); or use the Docker sandbox,
   where they can't touch the host.

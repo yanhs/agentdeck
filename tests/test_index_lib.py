@@ -2407,3 +2407,244 @@ def test_open_terminal_follows_two_switches_seen_in_one_poll(page, api):
     _after_next_poll(page, api)
     _after_next_poll(page, api)
     assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=eeee0009"
+
+
+# ── standard paste & copy in the terminal (owner, 2026-10-13) ───────────────
+# Ctrl+V (no Shift) pastes TEXT like any app, so dictation apps that put text on the
+# clipboard and press Ctrl+V for you (Wispr Flow) work; an image on the clipboard
+# still uploads. Ctrl+C copies a selection (like Windows Terminal) and only sends
+# the interrupt (^C) when nothing is selected.
+# The stub below behaves like ttyd's xterm.js: a focused helper textarea; on keydown
+# Ctrl+V / Ctrl+C it sends ^V / ^C to the "pty" and cancels the event; a paste event
+# on the textarea is pasted as text (term.paste). `window.sent` is the pty stream.
+TERM_STUB = """<html><body style='margin:0;background:#000;color:#0f0'>
+<div class='xterm' style='width:100vw;height:100vh;font:14px monospace'>
+ubuntu@server:~$ ls -la<br>total 42
+<textarea class='xterm-helper-textarea' style='position:absolute;opacity:0;left:0;top:0'></textarea></div>
+<script>
+window.sent = []; window.pasted = []; window.__sel = '';
+const ta = document.querySelector('textarea');
+window.term = {
+  paste(t) { pasted.push(t); sent.push(t); },
+  hasSelection() { return !!window.__sel; },
+  getSelection() { return window.__sel; },
+  clearSelection() { window.__sel = ''; },
+  focus() { ta.focus(); },
+};
+ta.addEventListener('keydown', e => {
+  if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+  const k = e.key.toLowerCase();
+  if (k === 'v') { sent.push('\\x16'); e.preventDefault(); }
+  if (k === 'c') { sent.push('\\x03'); e.preventDefault(); }
+});
+ta.addEventListener('paste', e => {
+  const t = e.clipboardData && e.clipboardData.getData('text/plain');
+  if (t) { e.preventDefault(); term.paste(t); }
+});
+</script></body></html>"""
+
+WISPR_TEXT = "Hello from Wispr Flow, dictated."
+
+
+def _paste_page(browser, site, **kw):
+    ctx, pg = _copy_page(browser, site, **kw)
+    pg.route(re.compile(r"/sess/"),
+             lambda r: r.fulfill(status=200, content_type="text/html", body=TERM_STUB))
+    uploads = []
+
+    def upload(route):
+        uploads.append(route.request.headers.get("content-type"))
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"path": "/tmp/paste/shot.png"}))
+    pg.route(re.compile(r"/api/paste-image"), upload)
+    return ctx, pg, uploads
+
+
+def _term_frame(pg):
+    return next(f for f in pg.frames if "/sess/" in f.url)
+
+
+def _open_and_focus(pg):
+    _open_terminal(pg)
+    pg.frame_locator("#wrap iframe").locator("textarea").focus()
+
+
+def _sent(pg):
+    return _term_frame(pg).evaluate("window.sent")
+
+
+def _pasted(pg):
+    return _term_frame(pg).evaluate("window.pasted")
+
+
+def _clip_text(pg, text):
+    pg.evaluate("t => navigator.clipboard.writeText(t)", text)
+
+
+def _clip_image(pg):
+    pg.evaluate("""async () => {
+        const c = document.createElement('canvas'); c.width = c.height = 4;
+        const b = await new Promise(r => c.toBlob(r, 'image/png'));
+        await navigator.clipboard.write([new ClipboardItem({'image/png': b})]); }""")
+
+
+def test_ctrl_v_pastes_clipboard_text_into_the_terminal_once(browser, site):
+    ctx, pg, uploads = _paste_page(browser, site)
+    try:
+        _open_and_focus(pg)
+        _clip_text(pg, "echo hi")
+        pg.keyboard.press("Control+V")
+        pg.wait_for_timeout(600)
+        assert _pasted(pg) == ["echo hi"]
+        assert "\x16" not in _sent(pg)
+        assert uploads == []
+    finally:
+        ctx.close()
+
+
+def test_ctrl_v_with_an_image_still_uploads_it(browser, site):
+    ctx, pg, uploads = _paste_page(browser, site)
+    try:
+        _open_and_focus(pg)
+        _clip_image(pg)
+        pg.keyboard.press("Control+V")
+        pg.wait_for_function("() => [...document.querySelectorAll('iframe')].some(f => "
+                             "(f.contentWindow.pasted || []).length)", timeout=4000)
+        pg.wait_for_timeout(300)
+        assert _pasted(pg) == ["/tmp/paste/shot.png "]
+        assert len(uploads) == 1
+        assert "\x16" not in _sent(pg)
+    finally:
+        ctx.close()
+
+
+def test_wispr_flow_style_paste_inserts_the_text(browser, site):
+    # Wispr Flow: puts the text on the clipboard, then the OS delivers a Ctrl+V
+    # keydown and the browser fires the paste event that carries the text.
+    ctx, pg, uploads = _paste_page(browser, site)
+    try:
+        _open_and_focus(pg)
+        _clip_text(pg, WISPR_TEXT)
+        prevented = _term_frame(pg).evaluate("""t => {
+            const ta = document.querySelector('textarea');
+            const kd = new KeyboardEvent('keydown', {key: 'v', code: 'KeyV', ctrlKey: true,
+                                                     bubbles: true, cancelable: true});
+            ta.dispatchEvent(kd);
+            const dt = new DataTransfer(); dt.setData('text/plain', t);
+            ta.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true,
+                                                          cancelable: true}));
+            return kd.defaultPrevented; }""", WISPR_TEXT)
+        pg.wait_for_timeout(600)
+        assert prevented is False                 # the browser's own paste must happen
+        assert _pasted(pg) == [WISPR_TEXT]
+        assert "\x16" not in _sent(pg)
+        assert uploads == []
+    finally:
+        ctx.close()
+
+
+def test_ctrl_shift_v_still_pastes_text(browser, site):
+    ctx, pg, uploads = _paste_page(browser, site)
+    try:
+        _open_and_focus(pg)
+        _clip_text(pg, "shifted")
+        pg.keyboard.press("Control+Shift+V")
+        pg.wait_for_timeout(600)
+        assert _pasted(pg) == ["shifted"]
+        assert uploads == []
+    finally:
+        ctx.close()
+
+
+def test_cmd_v_on_a_mac_is_left_to_the_browser(browser, site):
+    ctx, pg, uploads = _paste_page(browser, site, user_agent=MAC_UA)
+    try:
+        _open_and_focus(pg)
+        prevented = _term_frame(pg).evaluate("""() => {
+            const ta = document.querySelector('textarea');
+            const kd = new KeyboardEvent('keydown', {key: 'v', code: 'KeyV', metaKey: true,
+                                                     bubbles: true, cancelable: true});
+            ta.dispatchEvent(kd);
+            const dt = new DataTransfer(); dt.setData('text/plain', 'mac text');
+            ta.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true,
+                                                          cancelable: true}));
+            return kd.defaultPrevented; }""")
+        pg.wait_for_timeout(400)
+        assert prevented is False
+        assert _pasted(pg) == ["mac text"]
+        assert uploads == []
+    finally:
+        ctx.close()
+
+
+def test_ctrl_c_with_a_selection_copies_and_sends_no_interrupt(browser, site):
+    ctx, pg, _ = _paste_page(browser, site)
+    try:
+        _open_and_focus(pg)
+        _clip_text(pg, "old clipboard")
+        _term_frame(pg).evaluate("window.__sel = 'selected words'")
+        pg.keyboard.press("Control+C")
+        pg.wait_for_timeout(500)
+        assert "\x03" not in _sent(pg)
+        assert pg.evaluate("navigator.clipboard.readText()") == "selected words"
+        _wait_hint(pg)
+        # the selection is gone after the copy: the next Ctrl+C interrupts
+        pg.keyboard.press("Control+C")
+        pg.wait_for_timeout(300)
+        assert _sent(pg) == ["\x03"]
+    finally:
+        ctx.close()
+
+
+def test_ctrl_c_without_a_selection_sends_the_interrupt(browser, site):
+    ctx, pg, _ = _paste_page(browser, site)
+    try:
+        _open_and_focus(pg)
+        _clip_text(pg, "untouched")
+        pg.keyboard.press("Control+C")
+        pg.wait_for_timeout(400)
+        assert _sent(pg) == ["\x03"]
+        assert pg.evaluate("navigator.clipboard.readText()") == "untouched"
+    finally:
+        ctx.close()
+
+
+def test_ctrl_c_right_after_a_mouse_selection_copies_it(browser, site):
+    # tmux selects with the mouse (the tmux buffer flow), not xterm: Ctrl+C right
+    # after the drag copies that selection instead of interrupting; any other key
+    # or a new click ends it, and Ctrl+C interrupts again.
+    ctx, pg, _ = _paste_page(browser, site)
+    try:
+        _open_terminal(pg)
+        _select(pg)
+        _wait_hint(pg)
+        pg.frame_locator("#wrap iframe").locator("textarea").focus()
+        _clip_text(pg, "overwritten")
+        pg.keyboard.press("Control+C")
+        pg.wait_for_timeout(600)
+        assert "\x03" not in _sent(pg)
+        assert pg.evaluate("navigator.clipboard.readText()") == "ls -la"
+        pg.keyboard.press("Control+C")
+        pg.wait_for_timeout(300)
+        assert _sent(pg) == ["\x03"]
+    finally:
+        ctx.close()
+
+
+def test_dashboard_text_fields_keep_their_normal_paste(browser, site):
+    ctx, pg, uploads = _paste_page(browser, site)
+    try:
+        _open_terminal(pg)
+        _clip_text(pg, "find me")
+        pg.focus("#search")
+        pg.keyboard.press("Control+V")
+        pg.wait_for_timeout(500)
+        assert pg.input_value("#search") == "find me"
+        assert _pasted(pg) == []
+        assert uploads == []
+        pg.fill("#search", "")
+        pg.keyboard.press("Control+C")          # copy in a field: no terminal involved
+        pg.wait_for_timeout(200)
+        assert _sent(pg) == []
+    finally:
+        ctx.close()

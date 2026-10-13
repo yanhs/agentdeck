@@ -1836,7 +1836,7 @@
             // anchor — otherwise we'd grab the PREVIOUS selection (the off-by-one bug
             // where you had to copy twice to paste the current text).
             let anchorPromise = Promise.resolve(''), _downX = 0, _downY = 0, _gen = 0;
-            doc.addEventListener('mousedown', (e) => { _downX = e.clientX; _downY = e.clientY; anchorPromise = readBuf(); });
+            doc.addEventListener('mousedown', (e) => { _downX = e.clientX; _downY = e.clientY; anchorPromise = readBuf(); _tmuxSel = null; });
             doc.addEventListener('mouseup', (e) => {
               // only a real drag is a selection — a plain click shouldn't touch the clipboard
               if (Math.abs(e.clientX - _downX) < 4 && Math.abs(e.clientY - _downY) < 4) return;
@@ -1863,6 +1863,10 @@
                   resolve(new Blob([last], {type: 'text/plain'}));   // fallback: copy current buffer (never reject)
                 })();
               });
+              // Ctrl+C right after this drag copies it again instead of sending ^C
+              const sel = { text: null, promise: textPromise.then(b => b.text()).catch(() => '') };
+              sel.promise.then(t => { sel.text = (t && t.trim()) ? t : ''; });
+              _tmuxSel = sel;
               // the "Copied" chip only when non-empty text really reached the clipboard
               const copied = () => textPromise.then(b => b.text())
                 .then(t => { if (t && t.trim()) showCopyHint(); }).catch(() => {});
@@ -1940,26 +1944,109 @@
       }
     }
 
-    // Ctrl+V (no Shift) → paste image from the BROWSER clipboard. Claude Code binds
-    // Ctrl+V to image paste but reads the SERVER's (empty) clipboard; we intercept it
-    // in the browser and read the real one. Ctrl+Shift+V stays the terminal's text paste.
+    // Ctrl+V (no Shift) is the standard paste, like any app: we only stop xterm from
+    // turning it into a ^V byte and let the BROWSER paste — the native 'paste' event
+    // carries the clipboard's text and files (no permission prompt, works on http).
+    // Text goes to the terminal through xterm's own paste listener (exactly once);
+    // an image is caught by _onImagePaste and uploaded. That is also what makes
+    // dictation apps work that put text on the clipboard and press Ctrl+V for you
+    // (Wispr Flow). On a Mac, Ctrl+V is not the paste key (⌘V is, and it is left to
+    // the browser), so there Ctrl+V keeps reading an image straight off the clipboard.
+    // Ctrl+Shift+V stays the terminal's text paste.
+    // Ctrl+C (no Shift) in the terminal copies a selection, like Windows Terminal,
+    // and only sends the interrupt (^C) when nothing is selected. Not on a Mac (⌘C).
+    let _tmuxSel = null;          // {text|null} — the last mouse selection copied from tmux
+    function _isModifierKey(e) { return /^(Control|Shift|Alt|Meta|AltGraph|CapsLock)$/.test(e.key || ''); }
+    function _copyText(doc, t) {
+      const viaExec = () => {
+        try {
+          const ta = doc.createElement('textarea'); ta.value = t;
+          ta.style.cssText = 'position:fixed;opacity:0;left:0;top:0';
+          const back = doc.activeElement;
+          doc.body.appendChild(ta); ta.select();
+          const ok = doc.execCommand('copy'); ta.remove();
+          try { back && back.focus && back.focus(); } catch (_) {}
+          if (ok) showCopyHint();
+        } catch (_) {}
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText)
+        navigator.clipboard.writeText(t).then(showCopyHint, viaExec);
+      else viaExec();
+    }
+    function _copySelectionOnCtrlC(e) {
+      const doc = (e.target && e.target.ownerDocument) || document;
+      const term = doc.defaultView && doc.defaultView.term;
+      let text = '';
+      try { if (term && term.hasSelection && term.hasSelection()) text = term.getSelection() || ''; } catch (_) {}
+      if (text) {
+        try { term.clearSelection(); } catch (_) {}
+        _tmuxSel = null;
+      } else if (_tmuxSel && _tmuxSel.text !== '') {
+        const sel = _tmuxSel; _tmuxSel = null;
+        if (sel.text) text = sel.text;
+        else {                                         // the buffer read is still running
+          e.preventDefault(); e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          sel.promise.then(t => { if (t && t.trim()) _copyText(doc, t); });
+          return true;
+        }
+      }
+      if (!text) return false;
+      e.preventDefault(); e.stopPropagation(); if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      _copyText(doc, text);
+      return true;
+    }
     function _onTermKeydown(e, scope) {
+      const key = (e.key || '').toLowerCase();
+      const ctrlC = scope !== 'parent' && !_isMac && e.ctrlKey && !e.shiftKey && !e.altKey
+                    && !e.metaKey && key === 'c';
+      if (ctrlC) { if (!_copySelectionOnCtrlC(e)) _tmuxSel = null; return; }
+      if (scope !== 'parent' && !_isModifierKey(e)) _tmuxSel = null;   // typing ends the selection
       if (!e.ctrlKey || e.altKey || e.metaKey) return;
-      if ((e.key || '').toLowerCase() !== 'v') return;
+      if (key !== 'v') return;
       _clientlog({ ev: 'ctrlv-seen', scope: scope || 'iframe', shift: e.shiftKey });
       if (e.shiftKey) return;                         // Ctrl+Shift+V = text paste, leave it
-      // on the parent, don't hijack Ctrl+V in real text fields (project name, etc.)
+      // on the parent, don't touch Ctrl+V in real text fields (project name, etc.)
       if (scope === 'parent') {
         const t = e.target, tag = (t && t.tagName || '').toLowerCase();
         if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable)) return;
       }
-      e.preventDefault(); e.stopPropagation();
+      if (_isMac) {                                   // Mac: Ctrl+V = image hotkey (⌘V pastes)
+        e.preventDefault(); e.stopPropagation();
+        if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+        _pasteImageFromClipboard('ctrlv-' + (scope || 'iframe'));
+        return;
+      }
+      // keep xterm from sending ^V, but NOT preventDefault: the browser's paste follows
+      e.stopPropagation();
       if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-      _clientlog({ ev: 'ctrlv-keydown', scope: scope || 'iframe' });
-      _pasteImageFromClipboard('ctrlv-' + (scope || 'iframe'));
     }
     // page-level Ctrl+V (focus on the dashboard / a button, not inside the terminal)
     document.addEventListener('keydown', (e) => _onTermKeydown(e, 'parent'), true);
+
+    // type text into the open terminal as a paste; returns how ('none' = not ready)
+    function _insertIntoTerminal(f, text) {
+      // ttyd's xterm has no .input(); term.paste() is the proper API, _onData.fire fallback
+      let term = null;
+      try { term = f.contentWindow.term; } catch (_) {}
+      let how = 'none';
+      if (term && typeof term.paste === 'function') { term.paste(text); how = 'paste'; }
+      else if (term && typeof term.input === 'function') { term.input(text); how = 'input'; }
+      else if (term && term._core && term._core._onData) { try { term._core._onData.fire(text); how = 'onData'; } catch (_) {} }
+      if (how === 'none') return how;
+      // restore focus to the terminal's INPUT (not just the iframe window) so Enter
+      // sends immediately — the button click / Ctrl+V had moved focus away.
+      const refocus = () => {
+        try { f.contentWindow.focus(); } catch (_) {}
+        try { if (term && typeof term.focus === 'function') term.focus(); } catch (_) {}
+        try {
+          const ta = (f.contentDocument || f.contentWindow.document).querySelector('.xterm-helper-textarea');
+          if (ta) ta.focus();
+        } catch (_) {}
+      };
+      refocus();
+      setTimeout(refocus, 60);                        // again after the gesture settles
+      return how;
+    }
 
     async function _uploadAndInsertImage(blob) {
       const f = document.querySelector('#wrap iframe');
@@ -1974,27 +2061,7 @@
         if (!r.ok) { _clientlog({ ev: 'upload-http-fail', status: r.status }); _toast('⚠️ Upload error (HTTP ' + r.status + ')'); return; }
         const d = await r.json();
         if (!d || !d.path) { _toast('⚠️ Server returned no path'); return; }
-        // ttyd's xterm has no .input(); term.paste() is the proper API, _onData.fire fallback
-        const term = f.contentWindow.term;
-        const text = d.path + ' ';
-        let how = 'none';
-        if (term && typeof term.paste === 'function') { term.paste(text); how = 'paste'; }
-        else if (term && typeof term.input === 'function') { term.input(text); how = 'input'; }
-        else if (term && term._core && term._core._onData) { try { term._core._onData.fire(text); how = 'onData'; } catch (_) {} }
-        _clientlog({ ev: 'inserted', path: d.path, how: how, hasTerm: !!term });
-        if (how === 'none') { _toast('⚠️ Terminal not ready'); return; }
-        // restore focus to the terminal's INPUT (not just the iframe window) so Enter
-        // sends immediately — the button click / Ctrl+V had moved focus away.
-        const refocus = () => {
-          try { f.contentWindow.focus(); } catch (_) {}
-          try { if (term && typeof term.focus === 'function') term.focus(); } catch (_) {}
-          try {
-            const ta = (f.contentDocument || f.contentWindow.document).querySelector('.xterm-helper-textarea');
-            if (ta) ta.focus();
-          } catch (_) {}
-        };
-        refocus();
-        setTimeout(refocus, 60);                        // again after the gesture settles
+        if (_insertIntoTerminal(f, d.path + ' ') === 'none') { _toast('⚠️ Terminal not ready'); return; }
         _toast('✅ Image pasted');
       } catch (e) { _clientlog({ ev: 'upload-error', error: String(e && e.message || e) }); _toast('⚠️ ' + String(e && e.message || e).slice(0, 50)); }
     }
@@ -2002,15 +2069,33 @@
     function _onImagePaste(e) {
       const blob = _imageFromData(e.clipboardData);
       _clientlog({ ev: 'paste-event', gotImage: !!blob, types: e.clipboardData ? Array.from(e.clipboardData.types || []) : 'null' });
-      if (!blob) return;                              // not an image → let the terminal paste text
-      e.preventDefault(); e.stopPropagation();
-      _uploadAndInsertImage(blob);
+      if (blob) { e.preventDefault(); e.stopPropagation(); _uploadAndInsertImage(blob); return; }
+      const dt = e.clipboardData, text = dt ? dt.getData('text/plain') : '';
+      if (text) return;                               // text → xterm's own paste listener, once
+      // neither text nor an image file in the event (some image formats aren't exposed
+      // as files): read the clipboard directly, as the Ctrl+V hotkey used to
+      if (dt && Array.from(dt.types || []).some(t => /^image\//.test(t))) {
+        e.preventDefault(); e.stopPropagation();
+        _pasteImageFromClipboard('paste-event');
+      }
     }
 
-    // catch the paste wherever focus is: parent document … (image pastes only — text
-    // pastes pass through; NO global Ctrl+V keydown intercept here, or it would hijack
-    // text paste in dashboard inputs — that's bound only inside the terminal iframe).
-    document.addEventListener('paste', _onImagePaste, true);
+    // a paste on the dashboard itself (focus on a button / the page, not in a text
+    // field): an image uploads as before; text goes into the open terminal.
+    function _onParentPaste(e) {
+      if (_imageFromData(e.clipboardData)) return _onImagePaste(e);
+      const t = e.target, tag = (t && t.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (t && t.isContentEditable)) return;
+      const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+      const f = document.querySelector('#wrap iframe');
+      if (!text || !f || !f.contentWindow || !('term' in f.contentWindow)) return;
+      e.preventDefault(); e.stopPropagation();
+      _insertIntoTerminal(f, text);
+    }
+
+    // catch the paste wherever focus is: parent document … (text fields on the
+    // dashboard keep their normal text paste — see _onParentPaste).
+    document.addEventListener('paste', _onParentPaste, true);
     window.addEventListener('drop', (e) => {
       const blob = _imageFromData(e.dataTransfer);
       if (!blob) return;

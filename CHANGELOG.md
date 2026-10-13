@@ -2,6 +2,20 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## Unreleased
+
+### Terminals
+- **Ctrl+V pastes text and images, so dictation apps like Wispr Flow work; Ctrl+C copies
+  a selection.** Ctrl+V in the terminal used to read only an image off the clipboard and
+  dropped text, so voice dictation that puts text on the clipboard and presses Ctrl+V
+  (Wispr Flow) typed nothing. Now Ctrl+V is the browser's own paste: text goes into the
+  terminal exactly once, an image still uploads and its path is typed in, Ctrl+Shift+V and
+  ⌘V on a Mac work as before, and text fields on the dashboard keep their normal paste.
+  Ctrl+C with a selection (xterm's, or the mouse selection just copied from tmux) copies it
+  and sends nothing, like Windows Terminal; with no selection it sends the interrupt (^C)
+  as always. On a Mac, Ctrl+C stays the interrupt and Ctrl+V the image hotkey (⌘C/⌘V copy
+  and paste).
+
 ## v1.7.1 — one number per terminal; a stray pkill can no longer take every terminal down
 
 ### Terminals
