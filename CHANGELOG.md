@@ -13,7 +13,10 @@ All notable changes to AgentDeck. Newest first.
   ⌘V on a Mac work as before, and text fields on the dashboard keep their normal paste.
   Ctrl+C with a selection (xterm's, or the mouse selection just copied from tmux) copies it
   and sends nothing, like Windows Terminal; with no selection it sends the interrupt (^C)
-  as always. On a Mac, Ctrl+C stays the interrupt and Ctrl+V the image hotkey (⌘C/⌘V copy
+  as always. A tmux mouse selection counts only for 3 seconds after the drag and only in
+  the terminal it was made in (tmux clears the highlight at once, so a later Ctrl+C is
+  always the interrupt). Both keys also work on a Russian or other non-Latin keyboard
+  layout. On a Mac, Ctrl+C stays the interrupt and Ctrl+V the image hotkey (⌘C/⌘V copy
   and paste).
 
 ## v1.7.1 — one number per terminal; a stray pkill can no longer take every terminal down

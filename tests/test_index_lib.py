@@ -2433,7 +2433,8 @@ window.term = {
 };
 ta.addEventListener('keydown', e => {
   if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
-  const k = e.key.toLowerCase();
+  // like xterm.js: the key CODE decides (Ctrl+V on a Russian layout is key 'м', keyCode 86)
+  const k = e.keyCode === 86 ? 'v' : e.keyCode === 67 ? 'c' : '';
   if (k === 'v') { sent.push('\\x16'); e.preventDefault(); }
   if (k === 'c') { sent.push('\\x03'); e.preventDefault(); }
 });
@@ -2646,5 +2647,96 @@ def test_dashboard_text_fields_keep_their_normal_paste(browser, site):
         pg.keyboard.press("Control+C")          # copy in a field: no terminal involved
         pg.wait_for_timeout(200)
         assert _sent(pg) == []
+    finally:
+        ctx.close()
+
+
+# ── adversarial review of 2a34986: a tmux mouse selection is already cancelled
+# by tmux on mouseup (copy-selection-and-cancel), so nothing stays highlighted.
+# Ctrl+C may take it as "copy" only RIGHT after the drag, in the same terminal —
+# never seconds later, never in another terminal, or
+# the interrupt for Claude is silently swallowed.
+def _drag_then_focus(pg):
+    _open_terminal(pg)
+    _select(pg)
+    _wait_hint(pg)
+    pg.frame_locator("#wrap iframe").locator("textarea").focus()
+
+
+def test_ctrl_c_a_while_after_a_mouse_selection_interrupts(browser, site):
+    ctx, pg, _ = _paste_page(browser, site)
+    try:
+        _drag_then_focus(pg)
+        pg.wait_for_timeout(3300)                 # the user read for a few seconds
+        pg.keyboard.press("Control+C")
+        pg.wait_for_timeout(300)
+        assert _sent(pg) == ["\x03"]
+    finally:
+        ctx.close()
+
+
+def test_ctrl_c_in_another_terminal_after_a_selection_interrupts(browser, site):
+    ctx, pg, _ = _paste_page(browser, site)
+    try:
+        _open_terminal(pg)
+        _select(pg)
+        _wait_hint(pg)
+        pg.click(row("bbbb0002") + " .proj")             # switch terminals, no click inside
+        pg.wait_for_selector("#wrap iframe[src$='bbbb0002']")
+        pg.frame_locator("#wrap iframe").locator("textarea").wait_for(state="attached")
+        pg.wait_for_timeout(300)
+        pg.frame_locator("#wrap iframe").locator("textarea").focus()
+        _clip_text(pg, "untouched")
+        pg.keyboard.press("Control+C")
+        pg.wait_for_timeout(300)
+        assert _sent(pg) == ["\x03"]
+        assert pg.evaluate("navigator.clipboard.readText()") == "untouched"
+    finally:
+        ctx.close()
+
+
+# On a Russian (or any non-Latin) layout the browser reports Ctrl+V as key 'м' and
+# Ctrl+C as 'с' — xterm still sends ^V / ^C (it goes by keyCode), so the check must
+# not rely on e.key alone, or dictated Russian text (Wispr Flow) is never pasted.
+def _ctrl_key_in_term(pg, key, code, key_code, paste_text=None):
+    return _term_frame(pg).evaluate("""([key, code, kc, t]) => {
+        const ta = document.querySelector('textarea');
+        const kd = new KeyboardEvent('keydown', {key, code, keyCode: kc, ctrlKey: true,
+                                                 bubbles: true, cancelable: true});
+        ta.dispatchEvent(kd);
+        if (t !== null && !kd.defaultPrevented) {
+            const dt = new DataTransfer(); dt.setData('text/plain', t);
+            ta.dispatchEvent(new ClipboardEvent('paste', {clipboardData: dt, bubbles: true,
+                                                          cancelable: true}));
+        }
+        return kd.defaultPrevented; }""", [key, code, key_code, paste_text])
+
+
+def test_ctrl_v_on_a_russian_layout_pastes_text(browser, site):
+    ctx, pg, uploads = _paste_page(browser, site)
+    try:
+        _open_and_focus(pg)
+        prevented = _ctrl_key_in_term(pg, "м", "KeyV", 86, "Привет из Wispr Flow")
+        pg.wait_for_timeout(400)
+        assert prevented is False
+        assert "\x16" not in _sent(pg)
+        assert _pasted(pg) == ["Привет из Wispr Flow"]
+        assert uploads == []
+    finally:
+        ctx.close()
+
+
+def test_ctrl_c_on_a_russian_layout_copies_a_selection(browser, site):
+    ctx, pg, _ = _paste_page(browser, site)
+    try:
+        _open_and_focus(pg)
+        _term_frame(pg).evaluate("window.__sel = 'выделено'")
+        _ctrl_key_in_term(pg, "с", "KeyC", 67)
+        pg.wait_for_timeout(500)
+        assert "\x03" not in _sent(pg)
+        assert pg.evaluate("navigator.clipboard.readText()") == "выделено"
+        _ctrl_key_in_term(pg, "с", "KeyC", 67)              # nothing selected now
+        pg.wait_for_timeout(300)
+        assert _sent(pg) == ["\x03"]
     finally:
         ctx.close()

@@ -1542,6 +1542,7 @@
       const wrap = document.getElementById('wrap');
       const ph = document.getElementById('ph'); if (ph) ph.remove();
       const old = wrap.querySelector('iframe'); if (old) old.remove();
+      _tmuxSel = null;                                // a selection belongs to the old terminal
       const f = document.createElement('iframe'); f.src = path;
       wrap.appendChild(f);
       hideCopyHint();
@@ -1864,7 +1865,8 @@
                 })();
               });
               // Ctrl+C right after this drag copies it again instead of sending ^C
-              const sel = { text: null, promise: textPromise.then(b => b.text()).catch(() => '') };
+              const sel = { text: null, doc: doc, at: Date.now(),
+                            promise: textPromise.then(b => b.text()).catch(() => '') };
               sel.promise.then(t => { sel.text = (t && t.trim()) ? t : ''; });
               _tmuxSel = sel;
               // the "Copied" chip only when non-empty text really reached the clipboard
@@ -1955,7 +1957,18 @@
     // Ctrl+Shift+V stays the terminal's text paste.
     // Ctrl+C (no Shift) in the terminal copies a selection, like Windows Terminal,
     // and only sends the interrupt (^C) when nothing is selected. Not on a Mac (⌘C).
-    let _tmuxSel = null;          // {text|null} — the last mouse selection copied from tmux
+    // tmux cancels its selection on mouseup (copy-selection-and-cancel), so nothing stays
+    // highlighted: the drag counts for Ctrl+C only RIGHT after it (a few seconds), in the
+    // same terminal — otherwise Claude's interrupt would be silently swallowed later.
+    let _tmuxSel = null;          // {text|null, doc, at} — the last mouse selection copied from tmux
+    const TMUX_SEL_MS = 3000;
+    // Ctrl+<letter> by the key's CODE when the layout isn't Latin (Russian: Ctrl+V is 'м')
+    function _ctrlLetter(e) {
+      const k = (e.key || '').toLowerCase();
+      if (/^[a-z]$/.test(k)) return k;
+      const m = /^Key([A-Z])$/.exec(e.code || '');
+      return m ? m[1].toLowerCase() : k;
+    }
     function _isModifierKey(e) { return /^(Control|Shift|Alt|Meta|AltGraph|CapsLock)$/.test(e.key || ''); }
     function _copyText(doc, t) {
       const viaExec = () => {
@@ -1981,7 +1994,8 @@
       if (text) {
         try { term.clearSelection(); } catch (_) {}
         _tmuxSel = null;
-      } else if (_tmuxSel && _tmuxSel.text !== '') {
+      } else if (_tmuxSel && _tmuxSel.text !== '' && _tmuxSel.doc === doc
+                 && Date.now() - _tmuxSel.at < TMUX_SEL_MS) {
         const sel = _tmuxSel; _tmuxSel = null;
         if (sel.text) text = sel.text;
         else {                                         // the buffer read is still running
@@ -1996,7 +2010,7 @@
       return true;
     }
     function _onTermKeydown(e, scope) {
-      const key = (e.key || '').toLowerCase();
+      const key = _ctrlLetter(e);
       const ctrlC = scope !== 'parent' && !_isMac && e.ctrlKey && !e.shiftKey && !e.altKey
                     && !e.metaKey && key === 'c';
       if (ctrlC) { if (!_copySelectionOnCtrlC(e)) _tmuxSel = null; return; }
@@ -2119,7 +2133,7 @@
             doc.__pasteImgBound = true;
             _clientlog({ ev: 'iframe-bound' });
             doc.addEventListener('paste', _onImagePaste, true);
-            doc.addEventListener('keydown', (e) => _onTermKeydown(e, 'iframe'), true);   // Ctrl+V image hotkey inside the terminal
+            doc.addEventListener('keydown', (e) => _onTermKeydown(e, 'iframe'), true);   // Ctrl+V paste / Ctrl+C copy inside the terminal
             doc.addEventListener('drop', (e) => {
               const blob = _imageFromData(e.dataTransfer);
               if (!blob) return;
