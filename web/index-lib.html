@@ -1967,7 +1967,11 @@
       const k = (e.key || '').toLowerCase();
       if (/^[a-z]$/.test(k)) return k;
       const m = /^Key([A-Z])$/.exec(e.code || '');
-      return m ? m[1].toLowerCase() : k;
+      if (m) return m[1].toLowerCase();
+      // simulated keys (Wispr Flow and other dictation apps press Ctrl+V for you) come
+      // without a physical code on a non-Latin layout: only keyCode tells the letter
+      const kc = e.keyCode || e.which || 0;
+      return (kc >= 65 && kc <= 90) ? String.fromCharCode(kc + 32) : k;
     }
     function _isModifierKey(e) { return /^(Control|Shift|Alt|Meta|AltGraph|CapsLock)$/.test(e.key || ''); }
     function _copyText(doc, t) {

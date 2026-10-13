@@ -2726,6 +2726,22 @@ def test_ctrl_v_on_a_russian_layout_pastes_text(browser, site):
         ctx.close()
 
 
+def test_ctrl_v_synthetic_russian_layout_without_code_pastes_text(browser, site):
+    """Wispr Flow (and other dictation apps) SIMULATE Ctrl+V: on a Russian layout the
+    event has key 'м', NO physical code (''), only keyCode 86. It must still paste."""
+    ctx, pg, uploads = _paste_page(browser, site)
+    try:
+        _open_and_focus(pg)
+        prevented = _ctrl_key_in_term(pg, "м", "", 86, "Привет из Wispr Flow")
+        pg.wait_for_timeout(400)
+        assert prevented is False
+        assert "\x16" not in _sent(pg)
+        assert _pasted(pg) == ["Привет из Wispr Flow"]
+        assert uploads == []
+    finally:
+        ctx.close()
+
+
 def test_ctrl_c_on_a_russian_layout_copies_a_selection(browser, site):
     ctx, pg, _ = _paste_page(browser, site)
     try:
