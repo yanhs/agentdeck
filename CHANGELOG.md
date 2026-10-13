@@ -2,7 +2,7 @@
 
 All notable changes to AgentDeck. Newest first.
 
-## Unreleased
+## v1.7.2 — Ctrl+V pastes text and images (dictation apps like Wispr Flow work), Ctrl+C copies a selection
 
 ### Terminals
 - **Ctrl+V pastes text and images, so dictation apps like Wispr Flow work; Ctrl+C copies
