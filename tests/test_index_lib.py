@@ -2836,3 +2836,286 @@ def test_phone_keybar_fits_a_320px_phone(browser, site):
         shot(pg, "keybar-mobile-320.png")
     finally:
         ctx.close()
+
+
+# ── phone: long press selects, a tap is one click (owner, 2026-10-23) ──────
+# Claude's fullscreen renderer tracks the mouse, so tmux hands every touch-made mouse
+# event to Claude. The old handler sent a fake mousedown on every touchstart (a tap =
+# two presses = Claude's double-click word selection) and a vertical-first drag could
+# only scroll. Now a tap sends nothing synthetic; a long press then a drag in any
+# direction drives xterm.js's OWN selection (Shift = "force selection" while the pane
+# tracks the mouse; Alt on a Mac), and touchend copies term.getSelection() inside the
+# gesture. The stub below records the synthetic (untrusted) mouse/wheel events apart
+# from the browser's own (trusted) ones; dragging with the button held "selects".
+TOUCH_SEL = "line 01\nline 02\nline 03"
+TOUCH_STUB = """<html><body style='margin:0;background:#000;color:#0f0'>
+<div class='xterm enable-mouse-events' style='width:100vw;height:100vh'>
+<div class='xterm-screen' style='width:100%;height:100%;font:14px monospace'>
+line 01<br>line 02<br>line 03</div></div>
+<script>
+window.fake = []; window.real = []; window.dragged = false; window.selText = null;
+window.term = { rows: 40, opts: {},
+  getSelection() { return window.selText !== null ? window.selText
+                          : (window.dragged ? 'line 01\\nline 02\\nline 03' : ''); },
+  clearSelection() { window.dragged = false; },
+  setOption(k, v) { this.opts[k] = v; } };
+for (const t of ['mousedown', 'mousemove', 'mouseup', 'wheel'])
+  document.addEventListener(t, e => {
+    const r = {type: t, shift: e.shiftKey, alt: e.altKey, detail: e.detail,
+               x: e.clientX, y: e.clientY, dy: e.deltaY || 0};
+    if (e.isTrusted) { real.push(r); return; }
+    fake.push(r);
+    if (t === 'mousemove' && e.buttons) window.dragged = true;
+  }, true);
+</script></body></html>"""
+# ttyd 1.7 bundles xterm.js 5: options are assigned on term.options, setOption is gone
+TOUCH_STUB_XTERM5 = TOUCH_STUB.replace("setOption(k, v) { this.opts[k] = v; } };",
+                                       "options: {} };")
+assert TOUCH_STUB_XTERM5 != TOUCH_STUB
+
+
+def _touch_page(browser, site, stub=TOUCH_STUB, **kw):
+    ctx, pg = _open(browser, site, FakeAPI(), width=390, height=844, mobile=True, **kw)
+    ctx.grant_permissions(["clipboard-read", "clipboard-write"],
+                          origin=site.rsplit("/", 1)[0])
+    pg.route(re.compile(r"/sess/"),
+             lambda r: r.fulfill(status=200, content_type="text/html", body=stub))
+    reads = []
+
+    def buf(route):
+        reads.append(route.request.url)
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"text": "stale buffer"}))
+    pg.route(re.compile(r"/api/tmux-buffer/"), buf)
+    pg.tap(row("dddd0004") + " .proj")
+    pg.wait_for_selector("#wrap iframe[src^='/sess/']")
+    pg.frame_locator("#wrap iframe").locator(".xterm-screen").wait_for()
+    pg.wait_for_timeout(400)                         # the touch handler polls every 100ms
+    _clip_text(pg, "untouched")
+    return ctx, pg, ctx.new_cdp_session(pg), reads
+
+
+def _touch(cdp, kind, *pts):
+    cdp.send("Input.dispatchTouchEvent", {
+        "type": kind, "touchPoints": [{"x": x, "y": y, "id": i} for i, (x, y) in enumerate(pts)]})
+
+
+def _frame_box(pg):
+    return pg.query_selector("#wrap iframe").bounding_box()
+
+
+def _start(pg):
+    b = _frame_box(pg)
+    return b["x"] + 40, b["y"] + 120
+
+
+def _long_press_drag(pg, cdp, end="touchEnd", dx=0, dy=120):
+    x, y = _start(pg)
+    _touch(cdp, "touchStart", (x, y))
+    pg.wait_for_timeout(600)                         # past the 450 ms long press
+    for i in range(1, 9):
+        _touch(cdp, "touchMove", (x + dx * i / 8, y + dy * i / 8))
+        pg.wait_for_timeout(20)
+    _touch(cdp, end)
+    pg.wait_for_timeout(400)
+
+
+def _fake(pg, kind=None):
+    ev = _term_frame(pg).evaluate("window.fake")
+    return [e for e in ev if kind is None or e["type"] == kind]
+
+
+def _clip(pg):
+    return pg.evaluate("navigator.clipboard.readText()")
+
+
+def test_phone_tap_sends_no_synthetic_mouse_events(browser, site):
+    ctx, pg, cdp, _ = _touch_page(browser, site)
+    try:
+        x, y = _start(pg)
+        _touch(cdp, "touchStart", (x, y))
+        pg.wait_for_timeout(60)
+        _touch(cdp, "touchEnd")
+        pg.wait_for_timeout(400)
+        assert _fake(pg) == []
+        # the browser's own click still reaches the terminal, once
+        real = _term_frame(pg).evaluate("window.real")
+        assert [e["type"] for e in real if e["type"] != "mousemove"] == ["mousedown", "mouseup"]
+        assert _clip(pg) == "untouched" and not _hint_shown(pg)
+    finally:
+        ctx.close()
+
+
+def test_phone_long_press_vertical_drag_selects_and_copies(browser, site):
+    ctx, pg, cdp, reads = _touch_page(browser, site)
+    try:
+        _long_press_drag(pg, cdp)
+        downs, moves, ups = (_fake(pg, k) for k in ("mousedown", "mousemove", "mouseup"))
+        assert len(downs) == 1 and len(ups) == 1 and len(moves) >= 4
+        for e in downs + moves + ups:
+            assert e["shift"] is True and e["alt"] is False and e["detail"] == 1, e
+        b = _frame_box(pg)
+        x, y = _start(pg)
+        assert abs(downs[0]["x"] - (x - b["x"])) < 2 and abs(downs[0]["y"] - (y - b["y"])) < 2
+        assert moves[-1]["y"] > downs[0]["y"] + 100                 # dragged straight down
+        assert _fake(pg, "wheel") == []
+        _wait_hint(pg)
+        assert _clip(pg) == TOUCH_SEL
+        assert reads == []                       # the phone never reads the tmux buffer
+    finally:
+        ctx.close()
+
+
+def test_phone_long_press_works_in_any_direction(browser, site):
+    ctx, pg, cdp, _ = _touch_page(browser, site)
+    try:
+        _long_press_drag(pg, cdp, dx=120, dy=-60)
+        assert len(_fake(pg, "mousedown")) == 1 and _fake(pg, "wheel") == []
+        assert _clip(pg) == TOUCH_SEL
+    finally:
+        ctx.close()
+
+
+def test_phone_swipe_scrolls_with_wheel_at_the_finger(browser, site):
+    ctx, pg, cdp, _ = _touch_page(browser, site)
+    try:
+        b = _frame_box(pg)
+        x, y0 = b["x"] + 60, b["y"] + 500
+        _touch(cdp, "touchStart", (x, y0))
+        for i in range(1, 16):
+            _touch(cdp, "touchMove", (x, y0 - 20 * i))
+            pg.wait_for_timeout(15)
+        _touch(cdp, "touchEnd")
+        pg.wait_for_timeout(300)
+        assert [e for e in _fake(pg) if e["type"] != "wheel"] == []
+        wheels = _fake(pg, "wheel")
+        h = _term_frame(pg).evaluate(
+            "document.querySelector('.xterm-screen').getBoundingClientRect().height")
+        step = 3 * h / 40                                # three cell heights per event
+        assert abs(len(wheels) - 300 / step) <= 1, (len(wheels), step)
+        for w in wheels:
+            assert w["dy"] > 0                           # finger up = scroll down
+            assert abs(w["x"] - (x - b["x"])) < 2        # aimed at the finger,
+            assert y0 - 300 - b["y"] - 2 <= w["y"] <= y0 - b["y"] + 2   # not the centre
+        assert _clip(pg) == "untouched"
+    finally:
+        ctx.close()
+
+
+def test_phone_touchcancel_ends_the_selection_without_copying(browser, site):
+    ctx, pg, cdp, _ = _touch_page(browser, site)
+    try:
+        _long_press_drag(pg, cdp, end="touchCancel")
+        assert len(_fake(pg, "mousedown")) == 1 and len(_fake(pg, "mouseup")) == 1
+        assert _clip(pg) == "untouched" and not _hint_shown(pg)
+    finally:
+        ctx.close()
+
+
+def test_phone_empty_selection_leaves_the_clipboard(browser, site):
+    ctx, pg, cdp, _ = _touch_page(browser, site)
+    try:
+        _term_frame(pg).evaluate("window.selText = ''")
+        _long_press_drag(pg, cdp)
+        assert len(_fake(pg, "mouseup")) == 1
+        assert _clip(pg) == "untouched" and not _hint_shown(pg)
+    finally:
+        ctx.close()
+
+
+def test_phone_no_shift_when_the_pane_does_not_track_the_mouse(browser, site):
+    """Shift on a pane without mouse tracking would extend the old selection."""
+    ctx, pg, cdp, _ = _touch_page(browser, site)
+    try:
+        _term_frame(pg).evaluate(
+            "document.querySelector('.xterm').classList.remove('enable-mouse-events')")
+        _long_press_drag(pg, cdp)
+        ev = _fake(pg)
+        assert ev and all(e["shift"] is False and e["detail"] == 1 for e in ev), ev
+        assert _clip(pg) == TOUCH_SEL
+    finally:
+        ctx.close()
+
+
+def test_phone_two_fingers_send_nothing(browser, site):
+    ctx, pg, cdp, _ = _touch_page(browser, site)
+    try:
+        x, y = _start(pg)
+        _touch(cdp, "touchStart", (x, y), (x + 80, y + 40))
+        pg.wait_for_timeout(600)
+        for i in range(1, 9):
+            _touch(cdp, "touchMove", (x, y + 15 * i), (x + 80, y + 40 + 15 * i))
+            pg.wait_for_timeout(20)
+        _touch(cdp, "touchEnd")
+        pg.wait_for_timeout(300)
+        assert _fake(pg) == []
+        assert _clip(pg) == "untouched"
+    finally:
+        ctx.close()
+
+
+IPAD_PLATFORM = "Object.defineProperty(Navigator.prototype, 'platform', {get: () => 'MacIntel'});"
+
+
+def test_phone_mac_platform_uses_option_click(browser, site):
+    """iPadOS asks for desktop sites as a Mac: xterm.js forces a selection there with
+    Alt + macOptionClickForcesSelection, and Shift would mean "extend"."""
+    ctx, pg, cdp, _ = _touch_page(browser, site, init_script=IPAD_PLATFORM)
+    try:
+        assert _term_frame(pg).evaluate("term.opts.macOptionClickForcesSelection") is True
+        # a short Alt click (a long press lifted without a drag) would otherwise make
+        # xterm.js type arrow keys into the app to move its cursor there
+        assert _term_frame(pg).evaluate("term.opts.altClickMovesCursor") is False
+        _long_press_drag(pg, cdp)
+        ev = _fake(pg)
+        assert ev and all(e["alt"] is True and e["shift"] is False for e in ev), ev
+        assert _clip(pg) == TOUCH_SEL
+    finally:
+        ctx.close()
+
+
+def test_phone_mac_platform_sets_the_options_on_xterm5(browser, site):
+    """ttyd 1.7 (the default install) bundles xterm.js 5, which has no setOption: the
+    options are assigned on term.options, else the Alt drag goes to the app."""
+    ctx, pg, cdp, _ = _touch_page(browser, site, stub=TOUCH_STUB_XTERM5,
+                                  init_script=IPAD_PLATFORM)
+    try:
+        fr = _term_frame(pg)
+        assert fr.evaluate("typeof term.setOption") == "undefined"
+        assert fr.evaluate("term.options.macOptionClickForcesSelection") is True
+        assert fr.evaluate("term.options.altClickMovesCursor") is False
+        _long_press_drag(pg, cdp)
+        assert _clip(pg) == TOUCH_SEL
+    finally:
+        ctx.close()
+
+
+def test_phone_long_press_gets_no_native_text_selection(browser, site):
+    ctx, pg, cdp, _ = _touch_page(browser, site)
+    try:
+        us = _term_frame(pg).evaluate(
+            "getComputedStyle(document.querySelector('.xterm-screen')).webkitUserSelect")
+        assert us == "none"
+    finally:
+        ctx.close()
+
+
+def _js_function(src, name):
+    start = src.index("function " + name + "(")
+    depth, i = 0, src.index("{", start)
+    while True:
+        depth += {"{": 1, "}": -1}.get(src[i], 0)
+        if depth == 0:
+            return src[start:i + 1]
+        i += 1
+
+
+def test_phone_path_does_not_read_the_tmux_buffer():
+    src = PAGE.read_text(encoding="utf-8")
+    phone = _js_function(src, "enableIframeTouchScroll") + _js_function(src, "attachTouchSelect")
+    assert "attachTouchSelect(" in _js_function(src, "enableIframeTouchScroll")
+    assert "/api/tmux-buffer" not in phone and "tmux-buffer" not in phone
+    for gone in ("_mobAnchor", "_mobReadBuf", "_mobGen", "_mobBufUrl"):
+        assert gone not in src, gone
+    # the desktop copy path keeps it
+    assert "/api/tmux-buffer/" in _js_function(src, "enableClipboardCopy")

@@ -568,6 +568,9 @@ def pane_command(e, home=None, claude_bin=None):
             # the number the terminal has at launch; after a conversation switch
             # the live one is CLAUDE_CODE_SESSION_ID (see hold(), hold_on_timer)
             f"export AGENTDECK_SESSION={sid}; "
+            # under tmux Claude scrolls 1 line per wheel notch (it detects tmux,
+            # not xterm.js, where it picks 3); settings.json "env" still wins
+            "export CLAUDE_CODE_SCROLL_SPEED=3; "
             # exec: when claude exits the pane closes; a leftover shell prompt
             # would run whatever text the bridge types next as commands
             "exec " + " ".join(shlex.quote(a) for a in pane_argv(e, home, claude_bin)))

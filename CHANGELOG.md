@@ -5,8 +5,12 @@ All notable changes to AgentDeck. Newest first.
 ## Unreleased
 
 ### Phone
+- **Select several lines on a phone: press and hold, then drag.** The lines are copied when you lift your finger. Before, a terminal running Claude's fullscreen view took every touch as a mouse click: a tap selected a word, a double tap a line, and a drag down only scrolled. A tap is now one click, and a swipe still scrolls.
 - **Tab key on the phone's key bar,** next to the cursor arrows.
 - **The key bar's icons are all one size.** ←, → and ↵ used to look smaller than ↑ and ↓ on a phone: the web font has only ↑ and ↓, so the phone drew the others in another font. The icons are now drawn as SVG.
+
+### Terminal
+- **The mouse wheel scrolls Claude 3 lines per notch, not 1.** Inside tmux, Claude's fullscreen view took the terminal for tmux rather than the browser and scrolled one line at a time. AgentDeck now starts Claude with `CLAUDE_CODE_SCROLL_SPEED=3`; your own `/scroll-speed` setting still wins. It takes effect when a terminal next starts.
 
 ## v1.7.3 — Ctrl+V pastes like in any app, dictation apps (Wispr Flow) included
 

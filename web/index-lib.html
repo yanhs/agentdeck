@@ -1698,7 +1698,17 @@
        button click (no fragile paste-event interception inside the ttyd iframe). ── */
     document.getElementById('tPasteImg').addEventListener('click', () => _pasteImageFromClipboard('button'));
 
-    /* ── Mobile: touch→mouse for tmux selection + vertical scroll ── */
+    /* ── Mobile: touch → xterm.js's own selection + vertical scroll ──
+       Claude's fullscreen renderer tracks the mouse, so tmux hands it every mouse event
+       (a fake mousedown on each touchstart made a tap Claude's double click).
+       - a tap sends nothing synthetic: the browser's own click is one press + release;
+       - a long press (LONG_MS within SLOP px), then a drag in any direction, sends mouse
+         events xterm.js takes as "force selection" (Shift while the pane tracks the mouse;
+         Alt + macOptionClickForcesSelection where xterm.js sees a Mac, as on iPadOS), so
+         nothing reaches tmux; touchend copies term.getSelection() right there, inside the
+         gesture, and shows the "Copied" chip; touchcancel never copies;
+       - a move before the long press scrolls: wheel events at the finger, one per three
+         cell heights; two fingers do nothing. ── */
     function enableIframeTouchScroll(iframe) {
       iframe.addEventListener('load', () => {
         let attempts = 0;
@@ -1709,103 +1719,110 @@
             const screen = doc.querySelector('.xterm-screen');
             if (!screen) return;
             clearInterval(poll);
-
-            let startX = 0, startY = 0, lastY = 0;
-            let mode = null; // null | 'scroll' | 'select'
-            let accum = 0;
-            const _mobBufUrl = location.origin + '/api/tmux-buffer/?session=global';
-            const _mobReadBuf = async () => {
-              try { return (await (await fetch(_mobBufUrl)).json()).text || ''; } catch { return ''; }
-            };
-            let _mobAnchor = Promise.resolve('');   // buffer snapshot before a selection
-            let _mobGen = 0;                        // supersede older poll loops
-
-            screen.addEventListener('touchstart', e => {
-              if (e.touches.length !== 1) return;
-              const t = e.touches[0];
-              startX = t.clientX;
-              startY = lastY = t.clientY;
-              mode = null;
-              accum = 0;
-              _mobAnchor = _mobReadBuf();           // anchor for the off-by-one fix
-              screen.dispatchEvent(new MouseEvent('mousedown', {
-                clientX: t.clientX, clientY: t.clientY,
-                button: 0, bubbles: true
-              }));
-            }, {passive: true});
-
-            screen.addEventListener('touchmove', e => {
-              if (e.touches.length !== 1) return;
-              const t = e.touches[0];
-              const dx = Math.abs(t.clientX - startX);
-              const dy = Math.abs(t.clientY - startY);
-
-              if (!mode && (dx > 8 || dy > 8)) {
-                mode = dy > dx ? 'scroll' : 'select';
-              }
-              if (!mode) return;
-
-              if (mode === 'select') {
-                screen.dispatchEvent(new MouseEvent('mousemove', {
-                  clientX: t.clientX, clientY: t.clientY,
-                  button: 0, buttons: 1, bubbles: true
-                }));
-                e.preventDefault();
-              } else {
-                const dv = lastY - t.clientY;
-                lastY = t.clientY;
-                accum += dv;
-                const lines = Math.trunc(accum / 20);
-                if (lines !== 0) {
-                  accum -= lines * 20;
-                  const count = Math.abs(lines);
-                  const rect = screen.getBoundingClientRect();
-                  const WE = iframe.contentWindow.WheelEvent;
-                  for (let i = 0; i < count; i++) {
-                    screen.dispatchEvent(new WE('wheel', {
-                      deltaY: lines > 0 ? 120 : -120,
-                      deltaMode: 0, bubbles: true, cancelable: true,
-                      clientX: rect.left + rect.width / 2,
-                      clientY: rect.top + rect.height / 2
-                    }));
-                  }
-                }
-                e.preventDefault();
-              }
-            }, {passive: false});
-
-            screen.addEventListener('touchend', e => {
-              if (mode === 'select') {
-                const t = e.changedTouches[0];
-                screen.dispatchEvent(new MouseEvent('mouseup', {
-                  clientX: t.clientX, clientY: t.clientY,
-                  button: 0, bubbles: true
-                }));
-                // poll until the buffer reflects the NEW selection (not the previous
-                // one) — same off-by-one fix as the desktop path
-                const myGen = ++_mobGen;
-                (async () => {
-                  const anchor = await _mobAnchor;
-                  let last = '';
-                  for (let i = 0; i < 20; i++) {
-                    if (myGen !== _mobGen) return;           // a newer selection took over
-                    await new Promise(r => setTimeout(r, 80));
-                    const txt = await _mobReadBuf();
-                    if (txt && txt.trim()) {
-                      last = txt;
-                      if (txt !== anchor) { navigator.clipboard.writeText(txt).catch(() => {}); return; }
-                    }
-                  }
-                  // re-selected identical text → copy it anyway rather than no-op
-                  if (last && last.trim()) navigator.clipboard.writeText(last).catch(() => {});
-                })();
-              }
-              mode = null;
-            }, {passive: true});
-
+            attachTouchSelect(iframe.contentWindow, screen);
           } catch(e) { clearInterval(poll); }
         }, 100);
       });
+    }
+
+    function attachTouchSelect(win, screen) {
+      const doc = screen.ownerDocument;
+      const LONG_MS = 450, SLOP = 8;
+      // xterm.js's own Mac test (navigator.platform); iPadOS "desktop site" says MacIntel
+      const mac = /Mac/.test(win.navigator.platform);
+      // xterm.js 5 (ttyd 1.7) sets options on term.options; 4 (ttyd 1.6) only has setOption
+      const setOpt = (k, v) => {
+        try { if (win.term.options) win.term.options[k] = v; else win.term.setOption(k, v); }
+        catch (_) {}
+      };
+      if (mac) {
+        setOpt('macOptionClickForcesSelection', true);
+        // a long press lifted without a drag is a short Alt click: xterm.js would type
+        // arrow keys into the app to move its cursor there
+        setOpt('altClickMovesCursor', false);
+      }
+      // no native text selection or iOS callout on a long press
+      const st = doc.createElement('style');
+      st.textContent = '.xterm-screen{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}';
+      (doc.head || doc.documentElement).appendChild(st);
+      // Shift on a pane that does NOT track the mouse would extend the old selection
+      const tracking = () => !!doc.querySelector('.xterm.enable-mouse-events');
+      // detail: 1 — xterm.js's mousedown ignores an event without a click count
+      const fire = (type, x, y) => screen.dispatchEvent(new win.MouseEvent(type, {
+        clientX: x, clientY: y, button: 0, detail: 1, buttons: type === 'mouseup' ? 0 : 1,
+        shiftKey: !mac && tracking(), altKey: mac, bubbles: true, cancelable: true, view: win }));
+      const cellH = () => {
+        const rows = win.term && win.term.rows;
+        return rows ? screen.getBoundingClientRect().height / rows : 20;
+      };
+      let startX = 0, startY = 0, lastX = 0, lastY = 0, accum = 0, timer = 0;
+      let mode = null; // null | 'scroll' | 'select' | 'multi'
+
+      screen.addEventListener('touchstart', e => {
+        clearTimeout(timer);
+        if (e.touches.length !== 1) {                // a second finger ends a selection
+          if (mode === 'select') fire('mouseup', lastX, lastY);
+          mode = 'multi';
+          return;
+        }
+        const t = e.touches[0];
+        startX = lastX = t.clientX;
+        startY = lastY = t.clientY;
+        mode = null;
+        accum = 0;
+        try { win.term.clearSelection(); } catch (_) {}
+        timer = setTimeout(() => {
+          if (mode !== null) return;
+          mode = 'select';
+          fire('mousedown', startX, startY);
+          try { win.navigator.vibrate && win.navigator.vibrate(15); } catch (_) {}
+        }, LONG_MS);
+      }, {passive: true});
+
+      screen.addEventListener('touchmove', e => {
+        if (mode === 'multi' || e.touches.length !== 1) return;
+        const t = e.touches[0];
+        if (mode === null) {
+          if (Math.abs(t.clientX - startX) <= SLOP && Math.abs(t.clientY - startY) <= SLOP) return;
+          clearTimeout(timer);
+          mode = 'scroll';
+        }
+        e.preventDefault();
+        if (mode === 'select') {
+          lastX = t.clientX; lastY = t.clientY;
+          fire('mousemove', lastX, lastY);
+          return;
+        }
+        accum += lastY - t.clientY;
+        lastY = t.clientY;
+        const step = 3 * cellH();
+        const lines = Math.trunc(accum / step);
+        if (!lines) return;
+        accum -= lines * step;
+        for (let i = 0; i < Math.abs(lines); i++) {
+          screen.dispatchEvent(new win.WheelEvent('wheel', {
+            deltaY: lines > 0 ? 120 : -120, deltaMode: 0, bubbles: true, cancelable: true,
+            clientX: t.clientX, clientY: t.clientY
+          }));
+        }
+      }, {passive: false});
+
+      const end = (e, copy) => {
+        clearTimeout(timer);
+        if (mode === 'multi') { if (!e.touches.length) mode = null; return; }
+        if (mode === 'select') {
+          const t = e.changedTouches[0] || {clientX: lastX, clientY: lastY};
+          fire('mouseup', t.clientX, t.clientY);
+          if (e.cancelable) e.preventDefault();      // no compat click into the app
+          let txt = '';
+          try { txt = win.term.getSelection(); } catch (_) {}
+          // the clipboard of whichever document has focus accepts the write
+          if (copy && txt) _copyText(doc, txt, doc.hasFocus() ? win.navigator : navigator);
+        }
+        mode = null;
+      };
+      screen.addEventListener('touchend', e => end(e, true), {passive: false});
+      screen.addEventListener('touchcancel', e => end(e, false), {passive: false});
     }
 
     /* ── Clipboard: after mouse selection in tmux, copy buffer to system clipboard ── */
@@ -1978,7 +1995,8 @@
       return (kc >= 65 && kc <= 90) ? String.fromCharCode(kc + 32) : k;
     }
     function _isModifierKey(e) { return /^(Control|Shift|Alt|Meta|AltGraph|CapsLock)$/.test(e.key || ''); }
-    function _copyText(doc, t) {
+    // nav: the navigator whose clipboard to write (default: the dashboard's)
+    function _copyText(doc, t, nav) {
       const viaExec = () => {
         try {
           const ta = doc.createElement('textarea'); ta.value = t;
@@ -1990,8 +2008,8 @@
           if (ok) showCopyHint();
         } catch (_) {}
       };
-      if (navigator.clipboard && navigator.clipboard.writeText)
-        navigator.clipboard.writeText(t).then(showCopyHint, viaExec);
+      const clip = (nav || navigator).clipboard;
+      if (clip && clip.writeText) clip.writeText(t).then(showCopyHint, viaExec);
       else viaExec();
     }
     function _copySelectionOnCtrlC(e) {

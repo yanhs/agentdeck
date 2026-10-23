@@ -185,7 +185,9 @@ The **Server** tab shows what is using the machine now and over the last 15 minu
 agent with the processes it started (tests, builds), every site and service, and background
 jobs.
 
-The dashboard works on a phone too:
+The dashboard works on a phone too. Swipe to scroll a terminal; press and hold, then drag,
+to select several lines — they are copied when you lift your finger. The key bar under the
+terminal has Ctrl+C, Tab, the cursor arrows and Enter.
 
 <p align="center">
   <img src="docs/screenshots/mobile.png" width="270" alt="The AgentDeck dashboard on a phone">

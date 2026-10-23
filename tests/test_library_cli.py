@@ -882,3 +882,63 @@ def test_pane_is_claude_accepts_the_npm_binary_name(deck):
     deck.add("A", uuid=U1)
     deck.tmux("new-session", "-d", "-s", "cs-aaaaaaaa", "bash -c 'exec -a claude.exe sleep 600'")
     assert wait_for(lambda: deck.cli("pane-is-claude", "aaaaaaaa").returncode == 0)
+
+
+# ── the wheel speed Claude scrolls with in a topic pane ──────────────────────
+# Under tmux Claude's fullscreen renderer sees tmux, not the browser's xterm.js, and
+# scrolls 1 line per wheel notch; on xterm.js directly it picks 3. The launcher sets
+# CLAUDE_CODE_SCROLL_SPEED=3 for a topic pane. Claude applies the settings files' "env"
+# over its process environment, so the owner's own /scroll-speed (saved to
+# ~/.claude/settings.json "env") still wins.
+SCROLL_CLAUDE = r"""#!/bin/bash
+# stands in for the claude CLI: records the wheel speed it was started with, then idles
+echo "${CLAUDE_CODE_SCROLL_SPEED-unset}" >> "$HOME/scroll-speed.log"
+exec -a claude /bin/bash -c 'sleep 600; :' claude "$@"
+"""
+
+
+def scroll_speeds(deck):
+    p = deck.home / "scroll-speed.log"
+    return p.read_text().splitlines() if p.exists() else []
+
+
+@pytest.fixture
+def scroll_deck(deck):
+    deck.claude.write_text(SCROLL_CLAUDE)
+    return deck
+
+
+def test_pane_command_sets_the_scroll_speed_after_the_scrub(tmp_path):
+    m = _mod()
+    e = {"id": "aaaaaaaa", "uuid": U1, "name": "x", "cwd": str(tmp_path)}
+    cmd = m.pane_command(e, home="/home/u", claude_bin="/opt/claude")
+    assert "export CLAUDE_CODE_SCROLL_SPEED=3;" in cmd
+    # after the scrub (it would unset it) and the id, before claude
+    assert cmd.index('unset "$v"') < cmd.index("AGENTDECK_SESSION") \
+        < cmd.index("CLAUDE_CODE_SCROLL_SPEED=3") < cmd.index("/opt/claude")
+
+
+def test_topic_pane_scrolls_three_lines_per_notch(scroll_deck):
+    e = scroll_deck.add("A", uuid=U1)
+    assert scroll_deck.cli("ensure", e["id"]).returncode == 0
+    assert wait_for(lambda: scroll_speeds(scroll_deck)) == ["3"]
+
+
+def test_scroll_speed_inherited_from_the_server_is_replaced(scroll_deck):
+    # the server's environment is whoever started it first, not the owner's
+    # configuration (that is settings.json, which Claude applies over this)
+    scroll_deck.env["CLAUDE_CODE_SCROLL_SPEED"] = "1"
+    e = scroll_deck.add("A", uuid=U1)
+    assert scroll_deck.cli("ensure", e["id"]).returncode == 0
+    assert wait_for(lambda: scroll_speeds(scroll_deck)) == ["3"]
+
+
+def test_shell_pane_gets_no_scroll_speed(deck):
+    deck.env["CLAUDE_CODE_SCROLL_SPEED"] = "1"                 # inherited: scrubbed too
+    deck.env["AGENTDECK_WORKDIR"] = str(deck.work)
+    # the shell pane is `exec bash -l`: its profile records what the shell got
+    (deck.home / ".bash_profile").write_text(
+        'echo "${CLAUDE_CODE_SCROLL_SPEED-unset}" >> "$HOME/scroll-speed.log"\n')
+    r = deck.cli("shell-ensure")
+    assert r.returncode == 0, r.stderr
+    assert wait_for(lambda: scroll_speeds(deck)) == ["unset"]

@@ -17,9 +17,10 @@
 #          into the pane), ~/.claude/oauth.env is sourced, AGENTDECK_SESSION=<id>
 #          exported (the number the terminal has at launch: after Claude's consent
 #          relaunch, /clear or /resume the terminal takes the live conversation's
-#          number — convo_sync.py — and the live one is CLAUDE_CODE_SESSION_ID), and
-#          claude exec'd with the arguments `library_cli.py ensure` prepared for this
-#          start. exec: when claude exits the pane closes — a shell prompt left behind
+#          number — convo_sync.py — and the live one is CLAUDE_CODE_SESSION_ID),
+#          CLAUDE_CODE_SCROLL_SPEED=3 exported (the wheel, below), and claude exec'd
+#          with the arguments `library_cli.py ensure` prepared for this start.
+#          exec: when claude exits the pane closes — a shell prompt left behind
 #          would run whatever the Telegram bridge types next as commands.
 #   shell  cmd-shell, the dashboard's plain command line: enter the folder prepared for
 #          it (none prepared: stay), CLAUDE* and AGENTDECK_SESSION unset, `exec bash -l`.
@@ -113,6 +114,11 @@ unset AGENTDECK_PANE_RC
 scrub
 [ -r "$HOME/.claude/oauth.env" ] && . "$HOME/.claude/oauth.env"
 export AGENTDECK_SESSION="$id"
+# the wheel: under tmux Claude's fullscreen renderer detects tmux, not the browser's
+# xterm.js, and scrolls 1 line per notch; 3 is what it picks on xterm.js directly.
+# Claude applies the settings files' "env" over this, so the owner's /scroll-speed
+# (saved to ~/.claude/settings.json "env") still wins.
+export CLAUDE_CODE_SCROLL_SPEED=3
 
 prepared_ok || die "topic $id: nothing prepared to start — open it from the dashboard (library_cli.py ensure $id)"
 argv=()

@@ -148,6 +148,7 @@ def test_the_exact_ultracode_command_line(tmp_path):
     oauth = f"{home}/.claude/oauth.env"
     assert cmd == ('for v in $(env | cut -d= -f1 | grep -i CLAUDE); do unset "$v"; done; '
                    f"[ -r {oauth} ] && . {oauth}; export AGENTDECK_SESSION=aaaaaaaa; "
+                   "export CLAUDE_CODE_SCROLL_SPEED=3; "
                    f"exec /opt/claude --resume {U1} --dangerously-skip-permissions "
                    "--settings '{\"ultracode\":true}'")
 
