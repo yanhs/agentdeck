@@ -1,7 +1,7 @@
-# 🛰️ AgentDeck — Claude Code on your VPS, in your browser and Telegram
+# 🛰️ AgentDeck — real Claude Code terminals on your VPS, in your browser and Telegram
 
-> Put a dozen **Claude Code** agents on your own server. Each one is a real terminal that
-> keeps working when you close the tab — you watch and steer them from the **browser** or
+> Put a dozen **real Claude Code terminals** on your own **VPS**. Each one keeps working
+> when you close the tab — you watch and steer them from the **browser** or
 > **Telegram**, even from your phone. Agents log every task on a **shared board** and keep
 > going until it is done. Run it with **full control of the server** — agents install
 > packages, databases, sites and HTTPS themselves — or in a **Docker sandbox** that keeps
