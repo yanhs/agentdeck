@@ -2756,3 +2756,83 @@ def test_ctrl_c_on_a_russian_layout_copies_a_selection(browser, site):
         assert _sent(pg) == ["\x03"]
     finally:
         ctx.close()
+
+
+# ── phone key bar: Tab button, icons of one size (owner, 2026-10-23) ─────────
+# ←, → and ↵ are not in Google's latin subset of JetBrains Mono (only ↑ ↓ are), so
+# a phone drew them in a fallback font at another size. The bar's icons are now
+# inline SVGs of one size; a Tab button sits with the arrows.
+KEYBAR_STUB = """<html><body style='margin:0;background:#000;color:#0f0'>
+<div class='xterm' style='width:100vw;height:100vh'>ttyd stub</div>
+<script>window.sent = []; window.term = { input(t) { sent.push(t); } };</script>
+</body></html>"""
+
+KEYBAR = ["#mobTab", "#mobLeft", "#mobUp", "#mobDown", "#mobRight", "#mobSend"]
+
+
+def _keybar_page(browser, site, width=390):
+    ctx, pg = _open(browser, site, FakeAPI(), width=width, height=844, mobile=True)
+    pg.route(re.compile(r"/sess/"),
+             lambda r: r.fulfill(status=200, content_type="text/html", body=KEYBAR_STUB))
+    pg.tap(row("dddd0004") + " .proj")
+    pg.wait_for_selector("#wrap iframe[src^='/sess/']")
+    pg.frame_locator("#wrap iframe").locator(".xterm").wait_for()
+    return ctx, pg
+
+
+def test_phone_tab_button_sends_tab(browser, site):
+    ctx, pg = _keybar_page(browser, site)
+    try:
+        pg.tap("#mobTab")
+        pg.wait_for_timeout(150)
+        assert _term_frame(pg).evaluate("window.sent") == ["\t"]
+    finally:
+        ctx.close()
+
+
+def test_phone_arrows_and_enter_still_send_their_keys(browser, site):
+    ctx, pg = _keybar_page(browser, site)
+    try:
+        for sel in ["#mobLeft", "#mobUp", "#mobDown", "#mobRight", "#mobSend"]:
+            pg.tap(sel)
+        pg.wait_for_timeout(150)
+        assert _term_frame(pg).evaluate("window.sent") == [
+            "\x1b[D", "\x1b[A", "\x1b[B", "\x1b[C", "\r"]
+    finally:
+        ctx.close()
+
+
+def test_phone_keybar_icons_are_svgs_of_one_size(browser, site):
+    """No font glyphs: each button holds one SVG, all the same size, and is named
+    for screen readers (aria-label)."""
+    ctx, pg = _keybar_page(browser, site)
+    try:
+        boxes = []
+        for sel in KEYBAR:
+            info = pg.eval_on_selector(sel, """b => {
+                const s = b.querySelector('svg'); const r = s && s.getBoundingClientRect();
+                return {text: b.textContent.trim(), svgs: b.querySelectorAll('svg').length,
+                        label: b.getAttribute('aria-label') || '',
+                        w: r ? r.width : 0, h: r ? r.height : 0}; }""")
+            assert info["text"] == "" and info["svgs"] == 1, (sel, info)
+            assert info["label"], sel
+            boxes.append((info["w"], info["h"]))
+        assert len(set(boxes)) == 1 and boxes[0][0] >= 14, boxes
+        shot(pg, "keybar-mobile.png")
+    finally:
+        ctx.close()
+
+
+def test_phone_keybar_fits_a_320px_phone(browser, site):
+    """Every key stays on screen on the narrowest phone, with room left to type."""
+    ctx, pg = _keybar_page(browser, site, width=320)
+    try:
+        for sel in ["#mobEsc"] + KEYBAR:
+            r = pg.eval_on_selector(sel, "e => { const r = e.getBoundingClientRect();"
+                                         " return [r.left, r.right, r.width]; }")
+            assert r[2] >= 22 and r[0] >= 0 and r[1] <= 320.5, (sel, r)
+        assert pg.eval_on_selector("#mobText", "e => e.getBoundingClientRect().width") >= 80
+        assert pg.evaluate("() => document.documentElement.scrollWidth - innerWidth") <= 0
+        shot(pg, "keybar-mobile-320.png")
+    finally:
+        ctx.close()

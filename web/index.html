@@ -675,10 +675,14 @@
       }
       .mob-input button:active { color: var(--accent); }
       /* Brighten ↵ to match the cursor arrows — it's the most-used button. */
-      .mob-input #mobSend { color: var(--dim); font-size: 17px; }
+      .mob-input #mobSend { color: var(--dim); }
       .mob-input #mobSend:active { color: var(--accent); background: rgba(129,140,248,0.10); }
+      /* Key icons are inline SVGs, not font glyphs: Google's latin subset of
+         JetBrains Mono has ↑ ↓ but not ← → ↵, so a phone drew those in a
+         fallback font at another size (owner, 2026-10-23). */
+      .mob-input button svg { display: block; width: 16px; height: 16px; }
 
-      /* Cursor-arrow cluster: 4 compact pills sitting between input and ↵.
+      /* Tab + cursor-arrow cluster: 5 compact pills sitting between input and ↵.
          Kept narrow so right-arrow + ↵ stay on-screen even on the smallest
          iPhone widths (≈ 320 CSS px). */
       .mob-arrows {
@@ -689,10 +693,8 @@
       }
       .mob-arrows .mob-arrow {
         padding: 8px 5px;
-        font-size: 14px;
         line-height: 1;
         color: var(--dim);
-        font-family: 'JetBrains Mono', monospace;
         min-width: 22px;
       }
       .mob-arrows .mob-arrow:active { color: var(--accent); background: rgba(129,140,248,0.10); }
@@ -752,12 +754,13 @@
       <button id="mobEsc" title="Ctrl+C">⎋</button>
       <input type="text" id="mobText" placeholder="Type here..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
       <div class="mob-arrows">
-        <button class="mob-arrow" id="mobLeft" title="Cursor left">←</button>
-        <button class="mob-arrow" id="mobUp" title="Cursor up / history">↑</button>
-        <button class="mob-arrow" id="mobDown" title="Cursor down / history">↓</button>
-        <button class="mob-arrow" id="mobRight" title="Cursor right">→</button>
+        <button class="mob-arrow" id="mobTab" title="Tab" aria-label="Tab"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8h9M8 5l3 3-3 3M14 4v8"/></svg></button>
+        <button class="mob-arrow" id="mobLeft" title="Cursor left" aria-label="Cursor left"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 8H3M7 4L3 8l4 4"/></svg></button>
+        <button class="mob-arrow" id="mobUp" title="Cursor up / history" aria-label="Cursor up"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg></button>
+        <button class="mob-arrow" id="mobDown" title="Cursor down / history" aria-label="Cursor down"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v10M4 9l4 4 4-4"/></svg></button>
+        <button class="mob-arrow" id="mobRight" title="Cursor right" aria-label="Cursor right"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg></button>
       </div>
-      <button id="mobSend" title="Send">↵</button>
+      <button id="mobSend" title="Send" aria-label="Send (Enter)"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 3v5H4M7 5L4 8l3 3"/></svg></button>
     </div>
   </div>
 
@@ -1585,9 +1588,10 @@
       mobText.value = '';
       mobText.focus();
     });
-    /* ── Cursor arrows: send ANSI sequences. preventDefault stops the click
+    /* ── Tab + cursor arrows: send the key's bytes. preventDefault stops the click
        from stealing focus from the iframe, so repeated taps keep working. ── */
     const ARROW_KEYS = {
+      mobTab:   '\t',
       mobLeft:  '\x1b[D',
       mobRight: '\x1b[C',
       mobUp:    '\x1b[A',

@@ -2,6 +2,12 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## Unreleased
+
+### Phone
+- **Tab key on the phone's key bar,** next to the cursor arrows.
+- **The key bar's icons are all one size.** ←, → and ↵ used to look smaller than ↑ and ↓ on a phone: the web font has only ↑ and ↓, so the phone drew the others in another font. The icons are now drawn as SVG.
+
 ## v1.7.3 — Ctrl+V pastes like in any app, dictation apps (Wispr Flow) included
 
 ### Terminal
