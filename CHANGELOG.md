@@ -2,19 +2,22 @@
 
 All notable changes to AgentDeck. Newest first.
 
-## Unreleased
+## v1.8.0 — Trash and ⟳ restart; select several lines on a phone
 
 ### Dashboard
-- **🗑 Move to Trash, Show trash, Empty trash.** Archive is for terminals you need, just not now; the trash is for ones you don't need, kept just in case. 🗑 on every terminal — in the list and in the archive — asks once (in red with "!", saying what it would interrupt, if the terminal is busy), unloads it and takes it out of the list. **Show trash**, next to Show archived, lists what is there and when it was trashed, with **Restore** (back where it was: an archived one goes back to the archive). Nothing in the trash is ever erased by itself: **Empty trash** asks in red how many conversations will be erased for good, and only then deletes them from disk; one still running somewhere is kept. The old Delete button on archived terminals is gone (the trash replaces it), and a trashed terminal no longer shows up in the Telegram bot either. Empty trash erases a conversation where Claude actually ran it, also when the terminal's folder was renamed or removed; it never says "erased" while a copy is still on disk (that one stays in the trash). A trashed terminal can't be archived or unarchived from a stale row in another tab, so Restore still puts it back where it was. While a restart or a move to the trash is still running, the other buttons say to wait for it (and 🗑 pulses like ⟳), not that a question is open. If the trash can't be loaded, the view says so instead of staying blank. On a phone, Show trash scrolls to its rows once they are in.
-- **⟳ restarts a loaded terminal: Claude starts again in the same conversation.** Use it when Claude hangs, or so new launch settings (like the scroll speed below) take effect. It asks once: a plain "Restart?" for an idle terminal, a red question with "!" when it is busy (printing, a timer pending, a background task, working), saying what restarting would interrupt. An open tab reattaches by itself.
+- **🗑 Trash.** Archive is for terminals you need, just not now; the trash is for ones you don't need, kept just in case. 🗑 on every terminal — in the list and in the archive — asks once and moves it to the trash (in red with "!" if the terminal is busy, saying what it would interrupt). **Show trash**, next to Show archived, lists them with **Restore**: a terminal goes back where it was. Nothing in the trash is erased by itself: **Empty trash** asks in red how many conversations will be erased for good, and only then deletes them from disk. The old Delete button on archived terminals is replaced by 🗑, and trashed terminals don't show up in the Telegram bot.
+- **⟳ restarts a loaded terminal: Claude starts again in the same conversation.** Use it when Claude hangs, or so new launch settings (like the scroll speed below) take effect. One question: a plain "Restart?" for an idle terminal, a red one with "!" when it is busy (printing, a timer pending, a background task, working). An open tab reattaches by itself.
 
 ### Phone
 - **Select several lines on a phone: press and hold, then drag.** The lines are copied when you lift your finger. Before, a terminal running Claude's fullscreen view took every touch as a mouse click: a tap selected a word, a double tap a line, and a drag down only scrolled. A tap is now one click, and a swipe still scrolls.
 - **Tab key on the phone's key bar,** next to the cursor arrows.
-- **The key bar's icons are all one size.** ←, → and ↵ used to look smaller than ↑ and ↓ on a phone: the web font has only ↑ and ↓, so the phone drew the others in another font. The icons are now drawn as SVG.
+- **The key bar's icons are all one size.** ←, → and ↵ used to look smaller than ↑ and ↓ on a phone. The icons are now drawn as SVG.
 
 ### Terminal
-- **The mouse wheel scrolls Claude 3 lines per notch, not 1.** Inside tmux, Claude's fullscreen view took the terminal for tmux rather than the browser and scrolled one line at a time. AgentDeck now starts Claude with `CLAUDE_CODE_SCROLL_SPEED=3`; your own `/scroll-speed` setting still wins. It takes effect when a terminal next starts.
+- **The mouse wheel scrolls Claude 3 lines per notch, not 1.** Inside tmux, Claude's fullscreen view scrolled one line at a time. AgentDeck now starts Claude with `CLAUDE_CODE_SCROLL_SPEED=3`; your own `/scroll-speed` setting still wins. It takes effect when a terminal next starts — press ⟳.
+
+### Upgrading
+- Restart the dashboard's status server and the Telegram bridge after updating (with Docker, rebuilding and restarting the container does it). `POST /api/library/delete` is gone; use `/api/library/trash` and `/api/library/empty-trash`.
 
 ## v1.7.3 — Ctrl+V pastes like in any app, dictation apps (Wispr Flow) included
 
