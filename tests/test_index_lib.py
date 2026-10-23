@@ -70,6 +70,10 @@ class FakeAPI:
         self.fail_shell_close = False
         self.fail_archive = False
         self.busy = set()          # ids the fake server reports as working on Archive
+        self.restart_busy = {}     # id -> the busy reason Restart (without force) is refused with
+        self.fail_restart = False
+        self.hold_restart = False  # keep Restart requests unanswered until release()
+        self.held = []
         self.shell = None          # top-level "shell" of GET /api/library (None = absent)
         self._n = 0
 
@@ -78,6 +82,22 @@ class FakeAPI:
 
     def posts(self, path=None):
         return [c for c in self.calls if c[0] == "POST" and (path is None or c[1] == path)]
+
+    def release(self):
+        """Answer the Restart requests held by hold_restart."""
+        held, self.held = self.held, []
+        for route, e, body in held:
+            self._restart(route, e, body)
+
+    def _restart(self, route, e, body):
+        if self.fail_restart:
+            return self._json(route, {"error": "tmux gone"}, 500)
+        if e["archived"] or not e["active"]:
+            return self._json(route, {"error": "it is not loaded", "reason": "not-loaded"}, 409)
+        reason = self.restart_busy.get(e["id"])
+        if reason and body.get("force") is not True:
+            return self._json(route, {"error": "busy; send force=true", "reason": reason}, 409)
+        return self._json(route, dict(e, restarted=True))
 
     def _json(self, route, obj, status=200):
         route.fulfill(status=status, content_type="application/json",
@@ -154,6 +174,11 @@ class FakeAPI:
             for i, x in enumerate(body["ids"]):
                 next(s for s in self.sessions if s["id"] == x)["pos"] = i
             return self._json(route, {"ok": True})
+        if path == "/api/library/restart":
+            if self.hold_restart:
+                self.held.append((route, e, body))
+                return None
+            return self._restart(route, e, body)
         if path == "/api/library/close":
             e["active"] = False
             return self._json(route, e)
@@ -364,6 +389,9 @@ def test_click_opens_the_session_endpoint(page):
 
 def test_buttons_do_not_open_the_row(page):
     page.click(row("aaaa0001") + " .card-btn.edit")
+    assert page.query_selector("#wrap iframe") is None
+    page.on("dialog", lambda d: d.dismiss())
+    page.click(row("dddd0004") + " .card-btn.restart")
     assert page.query_selector("#wrap iframe") is None
 
 
@@ -3119,3 +3147,188 @@ def test_phone_path_does_not_read_the_tmux_buffer():
         assert gone not in src, gone
     # the desktop copy path keeps it
     assert "/api/tmux-buffer/" in _js_function(src, "enableClipboardCopy")
+
+
+# ── ⟳ Restart: Claude starts again in the same conversation (owner 2026-10-23) ──
+# Loaded, non-archived topic rows only. Confirm first; a busy terminal (the server's
+# 409 + reason) asks a second time, naming why, and then sends force:true.
+RESTART = " .card-btn.restart"
+
+
+def _dialogs(pg, answers):
+    """Answer the page's confirm()s in turn (True = OK); returns the messages seen."""
+    seen, answers = [], list(answers)
+
+    def on(d):
+        seen.append(d.message)
+        (d.accept if (answers.pop(0) if answers else False) else d.dismiss)()
+    pg.on("dialog", on)
+    return seen
+
+
+def test_restart_button_only_on_loaded_topic_rows(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    api.sessions.append({"id": "ffff0005", "name": "в архиве", "cwd": "/home/ubuntu/pr",
+                         "created": 5, "last_used": 5, "archived": True,
+                         "active": True, "attached": False, "status": "idle"})
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.click("#showArchived")
+        pg.wait_for_selector(row("ffff0005"))
+        for sid in ("bbbb0002", "dddd0004"):                      # loaded
+            b = row(sid) + RESTART
+            assert pg.is_visible(b), sid
+            assert pg.get_attribute(b, "title") and pg.get_attribute(b, "aria-label")
+        for sid in ("aaaa0001", "cccc0003", "ffff0005"):          # unloaded, archived
+            assert not pg.is_visible(row(sid) + RESTART), sid
+        pg.wait_for_selector("#list .shell-row")
+        assert pg.query_selector("#list .shell-row .card-btn.restart") is None
+        # a row that turns unloaded on a poll loses the button
+        next(s for s in api.sessions if s["id"] == "bbbb0002").update(active=False, status="off")
+        pg.wait_for_selector(row("bbbb0002") + RESTART, state="hidden", timeout=6000)
+    finally:
+        ctx.close()
+
+
+def test_restart_button_never_on_a_new_unloaded_or_archived_row(browser, site):
+    # a row new to the page is filled before it is put in the list: the button must
+    # leave it then too, not only on the next render (review 2026-10-23)
+    api = FakeAPI()
+    api.sessions.append({"id": "ffff0005", "name": "в архиве", "cwd": "/home/ubuntu/pr",
+                         "created": 5, "last_used": 5, "archived": True,
+                         "active": True, "attached": False, "status": "idle"})
+    ctx, pg = _open(browser, site, api)
+    stray = ("() => [...document.querySelectorAll('#list .card.unloaded .card-btn.restart,"
+             " #list .card.archived .card-btn.restart')].map(b => b.closest('.card').dataset.sid)")
+    try:
+        assert pg.evaluate(stray) == []                        # the first render
+        pg.click("#showArchived")
+        pg.wait_for_selector(row("ffff0005"))
+        assert pg.evaluate(stray) == []                        # rows new on a later render
+        assert pg.is_visible(row("dddd0004") + RESTART)
+    finally:
+        ctx.close()
+
+
+def test_restart_confirms_then_posts(page, api):
+    seen = _dialogs(page, [True])
+    page.click(row("dddd0004") + RESTART)
+    _toast_has(page, "Restarted")
+    assert seen == ["Restart TG мост? Claude starts again in the same conversation."]
+    assert api.posts("/api/library/restart") == [
+        ("POST", "/api/library/restart", {"id": "dddd0004"})]
+    assert page.query_selector("#wrap iframe") is None            # did not open the row
+
+
+def test_restart_cancelled_sends_nothing(page, api):
+    seen = _dialogs(page, [False])
+    page.click(row("dddd0004") + RESTART)
+    page.wait_for_timeout(300)
+    assert len(seen) == 1 and api.posts("/api/library/restart") == []
+
+
+@pytest.mark.parametrize("reason,words", [
+    ("printing", "it is printing right now"),
+    ("hold", "a timer is pending"),
+    ("background-task", "a background task is running"),
+    ("working", "it is working"),
+])
+def test_restart_of_a_busy_terminal_asks_again_then_forces(page, api, reason, words):
+    api.restart_busy["dddd0004"] = reason
+    seen = _dialogs(page, [True, True])
+    page.click(row("dddd0004") + RESTART)
+    _toast_has(page, "Restarted")
+    assert len(seen) == 2
+    assert words in seen[1] and "Restarting will interrupt it. Restart anyway?" in seen[1]
+    assert [c[2] for c in api.posts("/api/library/restart")] == [
+        {"id": "dddd0004"}, {"id": "dddd0004", "force": True}]
+
+
+def test_restart_of_a_busy_terminal_can_be_left_alone(page, api):
+    api.restart_busy["dddd0004"] = "hold"
+    seen = _dialogs(page, [True, False])
+    page.click(row("dddd0004") + RESTART)
+    page.wait_for_timeout(500)
+    assert len(seen) == 2
+    assert [c[2] for c in api.posts("/api/library/restart")] == [{"id": "dddd0004"}]
+    assert not page.evaluate(
+        "s => document.querySelector(s).classList.contains('busy')", row("dddd0004") + RESTART)
+
+
+def test_restart_reloads_the_open_terminal(page, api):
+    page.click(row("dddd0004") + " .proj")
+    page.wait_for_selector("#wrap iframe")
+    page.evaluate("() => { document.querySelector('#wrap iframe').__old = 1; }")
+    _dialogs(page, [True])
+    page.click(row("dddd0004") + RESTART)
+    page.wait_for_function("() => { const f = document.querySelector('#wrap iframe');"
+                           " return f && !f.__old; }", timeout=5000)
+    assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=dddd0004"
+    assert "sel" in page.get_attribute(row("dddd0004"), "class")
+
+
+def test_restart_of_another_terminal_keeps_the_viewer(page, api):
+    page.click(row("bbbb0002") + " .proj")
+    page.wait_for_selector("#wrap iframe")
+    page.evaluate("() => { document.querySelector('#wrap iframe').__old = 1; }")
+    _dialogs(page, [True])
+    page.click(row("dddd0004") + RESTART)
+    _toast_has(page, "Restarted")
+    page.wait_for_timeout(300)
+    assert page.evaluate("() => document.querySelector('#wrap iframe').__old") == 1
+    assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=bbbb0002"
+
+
+def test_restart_button_is_busy_and_ignores_double_clicks(page, api):
+    api.hold_restart = True
+    seen = _dialogs(page, [True, True, True])
+    b = row("dddd0004") + RESTART
+    page.click(b)
+    page.wait_for_function("s => document.querySelector(s).classList.contains('busy')", arg=b)
+    assert page.get_attribute(b, "aria-busy") == "true"
+    page.click(b)
+    page.click(b)
+    page.wait_for_timeout(300)
+    assert len(seen) == 1 and len(api.posts("/api/library/restart")) == 1
+    assert page.query_selector("#wrap iframe") is None
+    api.release()
+    _toast_has(page, "Restarted")
+    page.wait_for_function("s => !document.querySelector(s).classList.contains('busy')", arg=b)
+    assert page.get_attribute(b, "aria-busy") != "true"
+
+
+def test_restart_error_shows_a_toast(page, api):
+    api.fail_restart = True
+    _dialogs(page, [True])
+    page.click(row("dddd0004") + RESTART)
+    _toast_has(page, "Not restarted: tmux gone")
+    assert not page.evaluate(
+        "s => document.querySelector(s).classList.contains('busy')", row("dddd0004") + RESTART)
+
+
+@pytest.mark.parametrize("width", [320, 400])
+def test_restart_button_fits_the_phone_row(browser, site, width):
+    api = FakeAPI()
+    ctx, pg = _open(browser, site, api, width=width, height=700, mobile=True)
+    try:
+        over = pg.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+        assert over <= 0, f"page scrolls sideways by {over}px at {width}px"
+        for sid in ("bbbb0002", "dddd0004"):
+            r = pg.eval_on_selector(row(sid) + RESTART, "e => { const r = e.getBoundingClientRect();"
+                                    " return [r.left, r.right, r.width, r.height]; }")
+            assert r[2] == 20 and r[3] == 20, (sid, r)            # the compact .card-btn size
+            assert r[0] >= 0 and r[1] <= width + 0.5, (sid, r)
+        bad = pg.evaluate("""() => [...document.querySelectorAll(
+              '#list .card .card-btn, #list .card .arch-btn, #list .card .dot, #list .card .sid')]
+            .filter(e => e.offsetParent !== null)
+            .filter(e => { const r = e.getBoundingClientRect();
+                           return r.width === 0 || r.right > innerWidth + 0.5; }).length""")
+        assert bad == 0, f"{bad} row controls are off-screen at {width}px"
+        names = pg.eval_on_selector_all("#list .card[data-sid] .proj",
+                                        "els => els.map(e => e.getBoundingClientRect().width)")
+        assert min(names) >= 40, f"names squeezed to {min(names)}px at {width}px"
+        if width == 320:
+            shot(pg, "index-lib-restart-320.png")
+    finally:
+        ctx.close()

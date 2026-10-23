@@ -6,7 +6,9 @@ POST /  — update manual overrides  { "id": "1", "project": "...", "task": "...
 """
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
+import signal
 import subprocess
+import sys
 import time
 import os
 import re
@@ -18,6 +20,7 @@ from urllib.parse import urlparse, parse_qs
 import library   # session registry (library.py next to this file)
 import convo_sync   # a terminal takes the number of the conversation live in it
 import idle_reaper   # background-task detection (tree_has_task_output), pure /proc walk
+import library_cli   # claude_processes: which claudes run a conversation (Restart)
 import server_status   # the Server page's collector (GET /api/server)
 
 SESSIONS = [
@@ -506,9 +509,10 @@ _LIB_SWITCH_KEYS = ("aliases", "prev_id", "switched_at")
 
 
 class LibError(Exception):
-    def __init__(self, code, msg):
+    def __init__(self, code, msg, **extra):
         super().__init__(msg)
         self.code = code
+        self.extra = extra          # more fields of the error reply (e.g. reason)
 
 
 def lib_path():
@@ -730,7 +734,7 @@ def lib_post(route, body):
         return {"ok": True, "killed": killed}
 
     sid = lib_id(body)
-    if route in ("rename", "archive", "close", "delete"):
+    if route in ("rename", "archive", "close", "delete", "restart"):
         sid = lib_canonical(sid)                  # act on the terminal's live number
     if route == "rename":
         name = lib_clean_name(body.get("name"), required=True)
@@ -764,6 +768,11 @@ def lib_post(route, body):
         return row
     if route == "delete":
         return lib_delete(sid)
+    if route == "restart":
+        force = body.get("force", False)
+        if not isinstance(force, bool):
+            raise LibError(400, "force must be true or false")
+        return lib_restart(sid, force)
     raise LibError(404, "not found")
 
 
@@ -883,6 +892,135 @@ def lib_delete(sid):
     return {"ok": True, "trashed": trashed}
 
 
+# ── Restart (⟳ on a loaded row): Claude starts again in the same conversation ──
+# Why (owner 2026-10-23): launch settings (e.g. CLAUDE_CODE_SCROLL_SPEED in bin/pane)
+# take effect only on a fresh start, and a hung Claude needs reviving. The launch
+# itself is not changed: the terminal is unloaded and loaded again by `library_cli
+# ensure`, exactly what opening it does (bare `claude --resume <uuid>`).
+#
+# One claude per conversation: the check, the kill and the wait for the old claude
+# run under library_cli's ensure lock, so nothing renames or starts a terminal
+# meanwhile. An open tab races us — its attach returns when the session dies and
+# ttyd runs open-session.sh (ensure) again; that ensure waits for the lock, and
+# after it the two ensures take turns and the second finds the session running.
+# Either way: one new claude.
+# The check under the lock: lib_canonical's sync came before the busy sample, and
+# a /clear, /resume or consent relaunch landing in between (with or without another
+# syncer renaming the session) would make us restart the conversation it left —
+# refused instead (409 "changed"), as is a kill-session that found no session.
+# The old claude is waited for by pid + start time, not by "still a claude on u":
+# Claude's shutdown removes its pid file first and then flushes for a while, and
+# after /clear that file is all that ties it to u. A hung Claude may ignore the
+# hangup tmux sends: then SIGTERM, then SIGKILL — only to those exact processes.
+RESTART_EXIT_SECONDS = 5       # the old claude's time to exit after the hangup …
+RESTART_TERM_SECONDS = 3       # … and after SIGTERM, and after SIGKILL
+RESTART_ENSURE_TIMEOUT = 60
+LIBRARY_CLI = os.path.join(_HERE, "library_cli.py")
+# lib_busy_reason's reasons in plain words (the page says them in its own words)
+BUSY_WORDS = {"printing": "it is printing right now", "hold": "a timer is pending",
+              "background-task": "a background task is running", "working": "it is working"}
+RESTART_CHANGED = "it switched conversations just now; press ⟳ again"
+
+
+def _claude_pids(u):
+    """pids of every claude running conversation u (library_cli's own test)."""
+    return {p for p, _ in library_cli.claude_processes(u)}
+
+
+def _proc_start(pid):
+    """Start time of a running pid (/proc/<pid>/stat field 22); None when it is gone
+    or a zombie (it has exited, only not reaped yet)."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            st = f.read().rsplit(")", 1)[1].split()
+    except (OSError, IndexError):
+        return None
+    return None if len(st) < 20 or st[0] in ("Z", "X") else st[19]
+
+
+def _still_running(procs):
+    """The ones of {pid: start time} still running (a reused pid is another process)."""
+    return {p: t for p, t in procs.items() if _proc_start(p) == t}
+
+
+def _wait_gone(procs, seconds):
+    """Wait until none of {pid: start time} runs any more; -> the ones that still do."""
+    end = time.time() + seconds
+    while True:
+        left = _still_running(procs)
+        if not left or time.time() >= end:
+            return left
+        time.sleep(0.1)
+
+
+def lib_restart(sid, force):
+    """Unload terminal `sid` and load it again: claude starts anew on the same
+    conversation and the terminal comes back loaded even with no tab open.
+    Refused (409 + reason) when there is nothing to restart (archived,
+    not-loaded), when the conversation also runs in another claude (elsewhere:
+    ensure would then refuse to load it back), when it switched conversations
+    while we checked (changed), and — unless force — when it is busy
+    (lib_busy_reason). An open tab is not a reason: the owner pressed ⟳."""
+    e = library.find(library.load(lib_path()), sid)
+    if e is None:
+        raise LibError(404, "unknown id")
+    if e.get("archived"):
+        raise LibError(409, "it is archived; restore it first", reason="archived")
+    info = lib_live().get(sid)
+    if info is None:
+        raise LibError(409, "it is not loaded: opening it starts Claude", reason="not-loaded")
+    name = library.tmux_name(sid)
+    if not force:
+        working = sample_working({sid: info["pane_pid"]})
+        reason = lib_busy_reason(sid, info, working.get(sid, False))
+        if reason is not None:
+            raise LibError(409, f"{BUSY_WORDS[reason]}; send force=true to restart it anyway",
+                           reason=reason)
+    try:
+        _, u = library_cli.checked_entry(e)
+    except ValueError:
+        raise LibError(500, "the registry entry is corrupt (uuid)")
+    with convo_sync._ensure_lock(lib_path(), True):          # library_cli's ensure lock
+        if (lib_tmux("has-session", "-t", "=" + name).returncode != 0
+                or convo_sync.pane_conversations(lib_tmux).get(name, u) != u):
+            raise LibError(409, RESTART_CHANGED, reason="changed")
+        other = library_cli.claude_elsewhere(u, name)
+        if other:
+            pids = ", ".join(str(p) for p, _ in other)
+            raise LibError(409, f"this conversation also runs in another Claude (pid {pids}); "
+                                "close that one first", reason="elsewhere")
+        old = {p: t for p in _claude_pids(u)              # all in this terminal (checked above)
+               if (t := _proc_start(p)) is not None}
+        if lib_tmux("kill-session", "-t", "=" + name).returncode != 0:
+            raise LibError(409, RESTART_CHANGED, reason="changed")
+        left = _wait_gone(old, RESTART_EXIT_SECONDS)
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            if not left:
+                break
+            for p in _still_running(left):            # the very processes, checked again
+                try:
+                    os.kill(p, sig)
+                except OSError:                       # gone meanwhile / not ours
+                    pass
+            left = _wait_gone(left, RESTART_TERM_SECONDS)
+        if left:
+            raise LibError(500, f"the old Claude (pid {', '.join(map(str, sorted(left)))}) did not "
+                                "exit; it is unloaded, nothing was started")
+    env = dict(os.environ, AGENTDECK_LIBRARY=lib_path())
+    try:
+        r = subprocess.run([sys.executable, LIBRARY_CLI, "ensure", sid], capture_output=True,
+                           text=True, env=env, timeout=RESTART_ENSURE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise LibError(500, "unloaded, but loading it again took too long; open it to retry")
+    if r.returncode != 0:
+        msg = " ".join((r.stderr or "").split())[:200] or f"library_cli exit {r.returncode}"
+        raise LibError(500, f"unloaded, but couldn't load it again: {msg}")
+    e = library.find(library.load(lib_path()), sid) or e
+    row = lib_rows([e])[0]
+    row["restarted"] = True
+    return row
+
+
 # ── Server page: GET /api/server (see server_status.py) ─────────────────────
 # The collector samples /proc every 5 s in a daemon thread (started in __main__);
 # a request only reads the latest snapshot. Same-origin only, never cached.
@@ -945,7 +1083,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise LibError(400, "body must be a JSON object")
             self._lib_json(200, lib_post(route[len(LIB_ROUTE) + 1:], body))
         except LibError as e:
-            self._lib_json(e.code, {"error": str(e)})
+            self._lib_json(e.code, {"error": str(e), **e.extra})
         except Exception as e:
             self._lib_json(500, {"error": str(e)[:200]})
 

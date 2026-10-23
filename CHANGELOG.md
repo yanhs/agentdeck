@@ -4,6 +4,9 @@ All notable changes to AgentDeck. Newest first.
 
 ## Unreleased
 
+### Dashboard
+- **⟳ restarts a loaded terminal: Claude starts again in the same conversation.** Use it when Claude hangs, or so new launch settings (like the scroll speed below) take effect. If the terminal is busy — printing, a timer pending, a background task, or working — it asks once more before interrupting it. An open tab reattaches by itself.
+
 ### Phone
 - **Select several lines on a phone: press and hold, then drag.** The lines are copied when you lift your finger. Before, a terminal running Claude's fullscreen view took every touch as a mouse click: a tap selected a word, a double tap a line, and a drag down only scrolled. A tap is now one click, and a swipe still scrolls.
 - **Tab key on the phone's key bar,** next to the cursor arrows.

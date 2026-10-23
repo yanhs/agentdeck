@@ -905,3 +905,306 @@ def test_a_broken_sync_never_breaks_the_listing(api, monkeypatch):
     monkeypatch.setattr(convo_sync, "sync", boom)
     code, data = get(api)
     assert code == 200 and [s["id"] for s in data["sessions"]] == ["aaaa1111"]
+
+
+# ── POST /api/library/restart: ⟳ — Claude starts again in the same conversation ──
+# (owner 2026-10-23: new launch settings such as CLAUDE_CODE_SCROLL_SPEED take effect
+# only on a fresh start, and a hung Claude needs reviving.) Top rule: never interrupt
+# work — a busy terminal (lib_busy_reason) is refused with 409 + reason unless
+# force=true; an open tab is not a reason. The terminal comes back loaded through the
+# real `library_cli ensure` (what opening it does), with a fake claude in a temp HOME.
+from tests.test_library_cli import _procs_with_home, wait_for  # noqa: E402
+
+import library_cli  # noqa: E402  (claude_processes: the one-claude-per-conversation test)
+
+RESTART_FAKE_CLAUDE = r"""#!/bin/bash
+# stands in for the claude CLI: records each start, then idles looking like claude
+echo "$AGENTDECK_SESSION|$*" >> "$HOME/claude-calls.log"
+echo "start $$" >> "$HOME/lifecycle.log"
+if [ -f "$HOME/dying" ]; then             # after /clear: see DYING_CLAUDE below
+  exec -a claude /bin/bash "$HOME/dying.sh" --resume 00000000-0000-4000-8000-000000000000
+fi
+if [ -f "$HOME/stubborn" ]; then          # a hung Claude: ignores the hangup and SIGTERM
+  exec -a claude /bin/bash -c 'trap "" HUP TERM; while :; do sleep 0.2; done' claude "$@"
+fi
+exec -a claude /bin/bash -c 'sleep 600; :' claude "$@"
+"""
+
+
+@pytest.fixture
+def rs(api, tmp_path, monkeypatch):
+    """api + a fake claude (CLAUDE_BIN, temp HOME) that `library_cli ensure` starts,
+    and the terminal quiet — last output 60 s ago, no CPU — unless a test says otherwise."""
+    home, work, bindir = tmp_path / "home", tmp_path / "work", tmp_path / "bin"
+    for d in (home, work, bindir):
+        d.mkdir()
+    claude = bindir / "claude"
+    claude.write_text(RESTART_FAKE_CLAUDE)
+    claude.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_BIN", str(claude))
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}")
+    monkeypatch.setenv("AGENTDECK_WORKDIR", str(work))
+    monkeypatch.setenv("OPEN_SESSION_PAUSE", "0")
+    monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 60)
+    monkeypatch.setattr(api.ss, "sample_working", lambda pids: {k: False for k in pids})
+    api.home, api.work, api.procs = home, work, []
+    try:
+        yield api
+    finally:
+        for p in api.procs:                      # helpers this test started (saved Popens)
+            p.kill()
+            p.wait(timeout=5)
+        _tmux(api.sock, "kill-server")
+        # fake claudes that outlived their tmux server all carry HOME=<this test's home>
+        for pid in _procs_with_home(home):
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+
+
+def _rs_seed(A, u=U1, name="перезапуск", archived=False):
+    """A topic in A.work with a transcript, so every start is `--resume <uuid>`."""
+    with library.update(A.lib) as L:
+        e = library.create(L, name, cwd=str(A.work), now=int(time.time()), uuid=u)
+        e["archived"] = archived
+    t = Path(library.transcript_file(str(A.home / ".claude" / "projects"), str(A.work), u))
+    t.parent.mkdir(parents=True, exist_ok=True)
+    t.write_text("{}\n")
+    return e["id"]
+
+
+def _claudes(u):
+    return sorted(p for p, _ in library_cli.claude_processes(u))
+
+
+def _ensure(A, sid):
+    """What opening the terminal in a tab does: `library_cli ensure <id>`."""
+    r = subprocess.run([sys.executable, str(TERMINAL_DIR / "library_cli.py"), "ensure", sid],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    pids = wait_for(lambda: _claudes(U1) if len(_claudes(U1)) == 1 else None, timeout=15)
+    assert pids, "the fake claude never started"
+    return pids
+
+
+def _starts(A):
+    p = A.home / "claude-calls.log"
+    return p.read_text().splitlines() if p.exists() else []
+
+
+def test_restart_starts_claude_again_in_the_same_conversation(rs):
+    sid = _rs_seed(rs)
+    old = _ensure(rs, sid)
+    code, e = post(rs, "restart", {"id": sid})
+    assert code == 200, e
+    assert set(e) == ROW_KEYS | {"restarted"}
+    assert e["restarted"] is True and e["id"] == sid
+    assert e["active"] is True and e["archived"] is False
+    # loaded again with no tab open: one claude, a new process, the same conversation
+    assert _alive(rs, "cs-" + sid)
+    new = wait_for(lambda: _claudes(U1) if len(_claudes(U1)) == 1 else None, timeout=15)
+    assert new and new != old
+    starts = _starts(rs)
+    assert len(starts) == 2
+    assert all(f"--resume {U1}" in s for s in starts), starts
+
+
+@pytest.mark.parametrize("reason", ["printing", "hold", "background-task", "working"])
+def test_restart_refuses_a_busy_terminal_without_force(rs, monkeypatch, reason):
+    sid = _rs_seed(rs)
+    _start(rs, "cs-" + sid)
+    pane = _pane_pid(rs, "cs-" + sid)
+    if reason == "printing":
+        monkeypatch.setattr(rs.ss, "lib_last_output", lambda name: time.time() - 5)
+    elif reason == "hold":
+        library.set_hold(sid, time.time() + 600, rs.lib)
+    elif reason == "background-task":
+        monkeypatch.setattr(rs.ss.idle_reaper, "tree_has_task_output", lambda pid: True)
+    else:
+        monkeypatch.setattr(rs.ss, "sample_working", lambda pids: {k: True for k in pids})
+    code, out = post(rs, "restart", {"id": sid})
+    assert code == 409, out
+    assert out["reason"] == reason
+    assert isinstance(out["error"], str) and "force" in out["error"]
+    assert _pane_pid(rs, "cs-" + sid) == pane                 # untouched
+    assert _starts(rs) == []
+
+
+def test_restart_force_restarts_a_busy_terminal(rs, monkeypatch):
+    sid = _rs_seed(rs)
+    old = _ensure(rs, sid)
+    monkeypatch.setattr(rs.ss, "lib_last_output", lambda name: time.time() - 1)
+    assert post(rs, "restart", {"id": sid})[1]["reason"] == "printing"
+    code, e = post(rs, "restart", {"id": sid, "force": True})
+    assert code == 200 and e["restarted"] is True, e
+    new = wait_for(lambda: _claudes(U1) if len(_claudes(U1)) == 1 else None, timeout=15)
+    assert new and new != old and len(_starts(rs)) == 2
+
+
+def test_restart_with_a_tab_open_is_not_refused(rs):
+    sid = _rs_seed(rs)
+    old = _ensure(rs, sid)
+    _start(rs, "viewer", f"env -u TMUX tmux -L {rs.sock} attach -t =cs-{sid}")
+    assert wait_for(lambda: get(rs)[1]["sessions"][0]["attached"], timeout=5)
+    code, e = post(rs, "restart", {"id": sid})
+    assert code == 200 and e["restarted"] is True, e
+    new = wait_for(lambda: _claudes(U1) if len(_claudes(U1)) == 1 else None, timeout=15)
+    assert new and new != old
+
+
+def test_restart_with_a_reconnecting_tab_ends_with_one_claude(rs):
+    # an open ttyd tab: open-session.sh attaches; when the session dies the attach
+    # returns and ttyd runs open-session.sh again — its ensure races ours
+    sid = _rs_seed(rs)
+    old = _ensure(rs, sid)
+    stop = threading.Event()
+
+    def tab():
+        while not stop.is_set():
+            p = subprocess.Popen(["script", "-qfc", f"bash {TERMINAL_DIR / 'open-session.sh'} {sid}",
+                                  "/dev/null"], stdin=subprocess.PIPE,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            rs.procs.append(p)
+            while p.poll() is None and not stop.is_set():
+                time.sleep(0.05)
+    t = threading.Thread(target=tab, daemon=True)
+    t.start()
+    try:
+        attached = lambda: _by_id(get(rs)[1])[sid]["attached"]   # noqa: E731
+        assert wait_for(attached, timeout=10)
+        seen = {tuple(old)}
+        for n in range(3):
+            code, e = post(rs, "restart", {"id": sid})
+            assert code == 200 and e["restarted"] is True, e
+            assert wait_for(attached, timeout=15), "the tab did not reattach"
+            time.sleep(1.0)                      # let a late ensure from the tab land
+            now = _claudes(U1)
+            assert len(now) == 1, f"restart {n + 1}: {len(now)} claudes on one conversation"
+            assert tuple(now) not in seen
+            seen.add(tuple(now))
+            assert len(_starts(rs)) == n + 2, _starts(rs)
+    finally:
+        stop.set()
+        t.join(timeout=10)
+
+
+def test_restart_kills_a_claude_that_ignores_the_hangup(rs, monkeypatch):
+    monkeypatch.setattr(rs.ss, "RESTART_EXIT_SECONDS", 1)
+    monkeypatch.setattr(rs.ss, "RESTART_TERM_SECONDS", 1)
+    sid = _rs_seed(rs)
+    (rs.home / "stubborn").write_text("")
+    old = _ensure(rs, sid)
+    (rs.home / "stubborn").unlink()              # the new start is a normal claude
+    sent = []
+    real_kill = rs.ss.os.kill
+    monkeypatch.setattr(rs.ss.os, "kill", lambda pid, sig: (sent.append((pid, sig)), real_kill(pid, sig)))
+    code, e = post(rs, "restart", {"id": sid})
+    assert code == 200 and e["restarted"] is True, e
+    import signal
+    assert (old[0], signal.SIGTERM) in sent and (old[0], signal.SIGKILL) in sent
+    assert {p for p, _ in sent} == set(old)      # only the old claude was signalled
+    new = wait_for(lambda: _claudes(U1) if len(_claudes(U1)) == 1 else None, timeout=15)
+    assert new and new != old
+
+
+# Claude's shutdown removes its pid file first, then flushes (and runs SessionEnd
+# hooks) for a while: the claude is still alive, but no longer found by that file
+DYING_CLAUDE = r"""trap 'rm -f "$(cat "$HOME/dying-pidfile")"; sleep 3; echo "exit $$" >> "$HOME/lifecycle.log"; exit 0' HUP
+while :; do sleep 0.2; done
+"""
+
+
+def test_restart_waits_for_the_old_claude_by_pid_not_by_its_pid_file(rs):
+    # after /clear or /resume the command line names another conversation: only the
+    # pid file links the claude to this one, and it goes first when the claude exits
+    sid = _rs_seed(rs)
+    name = "cs-" + sid
+    (rs.home / "dying.sh").write_text(DYING_CLAUDE)
+    (rs.home / "dying").write_text("")
+    r = subprocess.run([sys.executable, str(TERMINAL_DIR / "library_cli.py"), "ensure", sid],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+
+    def dying_pid():
+        p = _pane_pid(rs, name)
+        return p if p and "dying.sh" in " ".join(library_cli._cmdline(p)) else None
+    pid = wait_for(dying_pid, timeout=15)
+    assert pid, "the fake claude never started"
+    time.sleep(0.3)                              # its trap is set
+    (rs.home / "dying").unlink()                 # the new start is a normal claude
+    _claude_runs(rs, name, U1)
+    (rs.home / "dying-pidfile").write_text(str(rs.claude_sessions / f"{pid}.json"))
+    assert _claudes(U1) == [pid]
+    code, e = post(rs, "restart", {"id": sid})
+    assert code == 200 and e["restarted"] is True, e
+    log = lambda: (rs.home / "lifecycle.log").read_text().splitlines()   # noqa: E731
+    assert wait_for(lambda: len(log()) >= 3, timeout=15), log()
+    assert log()[:2] == [f"start {pid}", f"exit {pid}"], \
+        f"the new claude started before the old one exited: {log()}"
+    assert len(_starts(rs)) == 2
+
+
+@pytest.mark.parametrize("renamed", [False, True])
+def test_restart_refuses_when_the_conversation_switches_meanwhile(rs, monkeypatch, renamed):
+    # /clear, /resume or a consent relaunch lands while ⟳ is being checked; another
+    # syncer (a tab's ensure, the reaper) may rename the terminal too. Restarting the
+    # number pressed would bring back the conversation it left: refuse instead
+    sid = _rs_seed(rs)
+    name = "cs-" + sid
+    old = _ensure(rs, sid)
+
+    done = []
+
+    def switch(pids):                            # the busy sample: once, in the window
+        if done:
+            return {k: False for k in pids}
+        done.append(1)
+        _claude_runs(rs, name, UNEW)
+        if renamed:
+            assert _tmux(rs.sock, "rename-session", "-t", "=" + name, "cs-0badc0de").returncode == 0
+        return {k: False for k in pids}
+    monkeypatch.setattr(rs.ss, "sample_working", switch)
+    code, out = post(rs, "restart", {"id": sid})
+    assert code == 409 and out["reason"] == "changed", out
+    now = "cs-0badc0de" if renamed else name
+    assert _alive(rs, now) and _pane_pid(rs, now) == old[0]      # untouched
+    assert renamed != _alive(rs, name)
+    assert len(_starts(rs)) == 1
+
+
+def test_restart_refuses_when_the_conversation_runs_in_another_claude(rs):
+    sid = _rs_seed(rs)
+    _start(rs, "cs-" + sid)
+    p = subprocess.Popen(["bash", "-c", f"exec -a claude /bin/bash -c 'sleep 600; :' claude --resume {U1}"])
+    rs.procs.append(p)
+    assert wait_for(lambda: _claudes(U1), timeout=5)
+    code, out = post(rs, "restart", {"id": sid, "force": True})
+    assert code == 409 and out["reason"] == "elsewhere", out
+    assert _alive(rs, "cs-" + sid) and _starts(rs) == []
+
+
+def test_restart_errors(rs):
+    sid = _rs_seed(rs)
+    _rs_seed(rs, u=U2, name="в архиве", archived=True)
+    _start(rs, "cs-bbbb2222")
+    assert post(rs, "restart", {"id": "deadbeef"})[0] == 404
+    assert post(rs, "restart", {"id": "AAAA1111"})[0] == 400
+    assert post(rs, "restart", {"id": sid, "force": "yes"})[0] == 400
+    code, out = post(rs, "restart", {"id": sid})                   # not loaded
+    assert code == 409 and out["reason"] == "not-loaded"
+    code, out = post(rs, "restart", {"id": "bbbb2222", "force": True})
+    assert code == 409 and out["reason"] == "archived"
+    assert _alive(rs, "cs-bbbb2222") and _starts(rs) == []
+
+
+def test_restart_has_the_same_csrf_checks(rs, monkeypatch):
+    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    sid = _rs_seed(rs)
+    _start(rs, "cs-" + sid)
+    body = json.dumps({"id": sid, "force": True}).encode()
+    assert _raw_req(rs, "POST", "/api/library/restart", body, {"Content-Type": "text/plain"})[0] == 415
+    assert _raw_req(rs, "POST", "/api/library/restart", body,
+                    {"Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 403
+    assert _pane_pid(rs, "cs-" + sid) is not None and _starts(rs) == []

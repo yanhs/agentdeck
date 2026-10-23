@@ -320,6 +320,8 @@
       color: var(--green-fg);
     }
     .card-btn.compact:active { transform: scale(0.94); }
+    /* ⟳ Restart (loaded rows only); pulses while the server restarts it */
+    .card-btn.restart.busy { cursor: progress; animation: pulse 1s ease-in-out infinite; }
 
     .proj-edit {
       font-size: 0.72rem;
@@ -624,14 +626,14 @@
       .new-form button { width: 26px; height: 26px; font-size: 0.8rem; }
       .proj-edit { font-size: 16px; }
       /* One row per session: the card's inner rows dissolve into a single
-         flex line — [name……][code][✎][Archive][●] */
+         flex line — [name……][code][⟳][✎][Archive][●] (⟳ on loaded rows) */
       .card { display: flex; align-items: center; padding: 3px 8px; cursor: pointer; gap: 5px; }
       .card.sel { padding-left: 6px; }
       .card-top, .card-btns, .card-row2 { display: contents; }
       .proj { order: 1; flex: 1; min-width: 0; font-size: 0.8rem; }
       .sid { order: 2; flex: none; font-size: 0.6rem; }
       .card .sid { flex: none; margin-right: 0; }
-      .card-btn.edit { order: 3; }
+      .card-btn.edit, .card-btn.restart { order: 3; }
       .arch-btn { order: 4; height: 20px; line-height: 18px; font-size: 0.64rem; padding: 0 5px; }
       .dot { order: 5; }
       .card-btn { visibility: visible; width: 20px; height: 20px; line-height: 18px; font-size: 0.8rem; }
@@ -779,6 +781,7 @@
     let mutSeq = 0;            // bumped on every local change; a poll that started
                                // before it is stale and must not overwrite it
     const rows = new Map();    // code -> row element (kept across polls)
+    const _restarting = new Set();   // codes with a ⟳ restart in flight
     const list = document.getElementById('list');
     const search = document.getElementById('search');
     const libTools = document.getElementById('libTools');
@@ -887,7 +890,12 @@
         headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
       let d = null;
       try { d = await r.json(); } catch {}
-      if (!r.ok) throw new Error((d && d.error) || ('HTTP ' + r.status));
+      if (!r.ok) {
+        const err = new Error((d && d.error) || ('HTTP ' + r.status));
+        err.status = r.status;                 // the caller may act on a 409's reason
+        err.data = d;
+        throw err;
+      }
       return d;
     }
 
@@ -956,6 +964,7 @@
         <div class="card-top">
           <div class="proj"></div>
           <div class="card-btns">
+            <button type="button" class="card-btn restart" title="Restart Claude in this terminal (same conversation)" aria-label="Restart Claude in this terminal">⟳</button>
             <button type="button" class="card-btn edit" title="Rename">✎</button>
             <span class="dot off"></span>
           </div>
@@ -979,6 +988,11 @@
       c.querySelector('.card-btn.edit').addEventListener('click', e => {
         e.stopPropagation();
         startEdit(id);
+      });
+      c._restartBtn = c.querySelector('.card-btn.restart');   // in the row only while loaded (fill)
+      c._restartBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        restart(id);
       });
       c.querySelector('.arch-btn').addEventListener('click', e => {
         e.stopPropagation();
@@ -1038,6 +1052,14 @@
       ab.hidden = !!s.archived;
       c.querySelector('.del-btn').hidden = !s.archived;
       ab.title = 'Archive and unload this terminal (the conversation stays on disk)';
+      // ⟳ only on a loaded terminal of our own (not one still in an old numbered
+      // terminal); taken out of the row otherwise, not just hidden. "In the row" is
+      // rb.parentNode, not isConnected: a new row is filled before it is in the list
+      const rb = c._restartBtn;
+      if (s.active && !s.archived && typeof s.legacy_path !== 'string') {
+        if (!rb.parentNode) c.querySelector('.card-btn.edit').before(rb);
+      } else if (rb.parentNode) rb.remove();
+      setRestartBusy(rb, _restarting.has(s.id));
       const pe = c.querySelector('.proj');
       if (!pe.querySelector('input')) pe.textContent = s.name;
       pe.title = s.name;
@@ -1273,6 +1295,54 @@
         _toast('⚠️ ' + (archived ? 'Not archived: ' : 'Not restored: ')
                + String(err && err.message || err).slice(0, 60), 5000);
         return false;
+      }
+    }
+
+    /* ── ⟳ Restart (loaded rows): Claude starts again in the same conversation,
+       so new launch settings take effect and a hung Claude comes back. Confirm
+       first; the server refuses a busy terminal (409 + reason) and then we ask
+       once more, naming why, before sending force:true. If it is the terminal
+       in the viewer, its frame is opened again so the tab attaches cleanly. ── */
+    const RESTART_BUSY = {printing: 'it is printing right now', hold: 'a timer is pending',
+                          'background-task': 'a background task is running',
+                          working: 'it is working'};
+    function setRestartBusy(b, on) {
+      if (!b) return;
+      b.classList.toggle('busy', on);
+      b.setAttribute('aria-busy', on ? 'true' : 'false');
+    }
+    async function restart(id) {
+      if (_restarting.has(id)) return;         // busy: a double click is one restart
+      const s = byId(id);
+      const nm = s ? s.name : id;
+      if (!confirm('Restart ' + nm + '? Claude starts again in the same conversation.')) return;
+      _restarting.add(id);
+      setRestartBusy(rows.get(id) && rows.get(id)._restartBtn, true);
+      try {
+        let d;
+        try {
+          d = await jpost('/api/library/restart', {id});
+        } catch (err) {
+          const why = err && err.status === 409 && err.data && RESTART_BUSY[err.data.reason];
+          if (!why) throw err;
+          if (!confirm(nm + ' is busy: ' + why + '. Restarting will interrupt it. Restart anyway?')) return;
+          d = await jpost('/api/library/restart', {id, force: true});
+        }
+        const nid = d && ID_RE.test(d.id || '') ? d.id : id;
+        if (s && d && typeof d.active === 'boolean') {
+          s.active = d.active;
+          if (typeof d.status === 'string') s.status = d.status;
+        }
+        mutSeq++;
+        if (sel === id || sel === nid) pick(nid);   // a fresh frame attaches to the new Claude
+        render();
+        _toast('Restarted “' + nm.slice(0, 40) + '”', 3000);
+        poll();
+      } catch (err) {
+        _toast('⚠️ Not restarted: ' + String(err && err.message || err).slice(0, 60), 5000);
+      } finally {
+        _restarting.delete(id);
+        setRestartBusy(rows.get(id) && rows.get(id)._restartBtn, false);
       }
     }
 
