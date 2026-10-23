@@ -115,7 +115,7 @@ on one VPS.
   once it finishes), and **Delete** (archived only; the transcript goes to
   `.sessions/trash/`, never erased). Search finds terminals by name or code, archived ones
   too; clicking an archived terminal restores it and opens it. **⟳** on a loaded terminal
-  restarts Claude in the same conversation (it asks again if the terminal is busy).
+  restarts Claude in the same conversation (one question; it turns red if the terminal is busy).
 - **Persistent sessions.** An agent keeps running after you **close the tab, close the
   browser, or disconnect**. Opening it again (or after a restart) resumes the exact same
   conversation via `claude --resume`. Nothing is lost. A terminal running in ultracode or at

@@ -734,7 +734,7 @@ def lib_post(route, body):
         return {"ok": True, "killed": killed}
 
     sid = lib_id(body)
-    if route in ("rename", "archive", "close", "delete", "restart"):
+    if route in ("rename", "archive", "close", "delete", "restart", "restart-check"):
         sid = lib_canonical(sid)                  # act on the terminal's live number
     if route == "rename":
         name = lib_clean_name(body.get("name"), required=True)
@@ -773,6 +773,10 @@ def lib_post(route, body):
         if not isinstance(force, bool):
             raise LibError(400, "force must be true or false")
         return lib_restart(sid, force)
+    if route == "restart-check":
+        # its own route, not a flag on "restart": a server older than the page
+        # answers 404 here instead of taking the question for a restart
+        return lib_restart(sid, False, check=True)
     raise LibError(404, "not found")
 
 
@@ -953,14 +957,17 @@ def _wait_gone(procs, seconds):
         time.sleep(0.1)
 
 
-def lib_restart(sid, force):
+def lib_restart(sid, force, check=False):
     """Unload terminal `sid` and load it again: claude starts anew on the same
     conversation and the terminal comes back loaded even with no tab open.
     Refused (409 + reason) when there is nothing to restart (archived,
     not-loaded), when the conversation also runs in another claude (elsewhere:
     ensure would then refuse to load it back), when it switched conversations
     while we checked (changed), and — unless force — when it is busy
-    (lib_busy_reason). An open tab is not a reason: the owner pressed ⟳."""
+    (lib_busy_reason). An open tab is not a reason: the owner pressed ⟳.
+    check=True (POST restart-check) touches nothing and answers {"busy": reason
+    | None}, so the page asks ONE question — plain, or red naming the reason
+    (owner 2026-10-23)."""
     e = library.find(library.load(lib_path()), sid)
     if e is None:
         raise LibError(404, "unknown id")
@@ -970,9 +977,19 @@ def lib_restart(sid, force):
     if info is None:
         raise LibError(409, "it is not loaded: opening it starts Claude", reason="not-loaded")
     name = library.tmux_name(sid)
-    if not force:
+    if check:
+        try:
+            _, u = library_cli.checked_entry(e)
+        except ValueError:
+            raise LibError(500, "the registry entry is corrupt (uuid)")
+        if library_cli.claude_elsewhere(u, name):
+            raise LibError(409, "this conversation also runs in another Claude; close that one first",
+                           reason="elsewhere")
+    if check or not force:
         working = sample_working({sid: info["pane_pid"]})
         reason = lib_busy_reason(sid, info, working.get(sid, False))
+        if check:
+            return {"busy": reason}
         if reason is not None:
             raise LibError(409, f"{BUSY_WORDS[reason]}; send force=true to restart it anyway",
                            reason=reason)

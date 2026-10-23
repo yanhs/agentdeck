@@ -322,6 +322,36 @@
     .card-btn.compact:active { transform: scale(0.94); }
     /* ⟳ Restart (loaded rows only); pulses while the server restarts it */
     .card-btn.restart.busy { cursor: progress; animation: pulse 1s ease-in-out infinite; }
+    /* ⟳'s one question: plain for an idle terminal, red with "!" for a busy one */
+    #restartDlg {
+      width: min(360px, calc(100vw - 32px)); max-width: none; padding: 18px 18px 14px;
+      margin: auto;                     /* the page's * { margin: 0 } would pin it top-left */
+      border: 1px solid rgba(var(--fg-rgb),0.14); border-radius: 12px;
+      background: var(--menu-bg); color: var(--text); box-shadow: var(--menu-shadow);
+      font-family: 'Inter', sans-serif;
+    }
+    #restartDlg::backdrop { background: rgba(0,0,0,0.45); }
+    #restartDlg .dlg-head { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--text-hi); }
+    #restartDlg .dlg-icon { display: none; }
+    #restartDlg p { margin: 8px 0 16px; font-size: 13px; line-height: 1.45; color: var(--dim); }
+    #restartDlg .dlg-btns { display: flex; justify-content: flex-end; gap: 8px; }
+    #restartDlg .dlg-btns button {
+      min-height: 38px; padding: 0 14px; border-radius: 8px; cursor: pointer;
+      font: 500 13px 'Inter', sans-serif; color: var(--text-2);
+      background: transparent; border: 1px solid rgba(var(--fg-rgb),0.14);
+    }
+    /* .dlg-btns in the selector: it must outweigh the transparent button rule above;
+       #4f46e5 keeps white text readable (AA) in both themes */
+    #restartDlg .dlg-btns .dlg-ok { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+    #restartDlg .dlg-btns button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    #restartDlg.busy { border: 2px solid var(--red); }
+    #restartDlg.busy .dlg-head { color: var(--red-fg); }
+    #restartDlg.busy .dlg-icon {
+      display: inline-flex; align-items: center; justify-content: center; flex: none;
+      width: 28px; height: 28px; border-radius: 50%; background: #dc2626; color: #fff;
+      font-weight: 700; font-size: 17px;
+    }
+    #restartDlg.busy .dlg-btns .dlg-ok { background: #dc2626; border-color: #dc2626; color: #fff; }
 
     .proj-edit {
       font-size: 0.72rem;
@@ -752,6 +782,11 @@
     <div class="wrap" id="wrap">
       <div class="ph" id="ph">Pick a terminal on the left</div>
     </div>
+    <dialog id="restartDlg" aria-labelledby="restartDlgTitle" aria-describedby="restartDlgText">
+      <div class="dlg-head"><span class="dlg-icon" aria-hidden="true">!</span><b id="restartDlgTitle"></b></div>
+      <p id="restartDlgText"></p>
+      <div class="dlg-btns"><button type="button" class="dlg-cancel">Cancel</button><button type="button" class="dlg-ok">Restart</button></div>
+    </dialog>
     <div class="mob-input" id="mobInput">
       <button id="mobEsc" title="Ctrl+C">⎋</button>
       <input type="text" id="mobText" placeholder="Type here..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
@@ -1299,33 +1334,76 @@
     }
 
     /* ── ⟳ Restart (loaded rows): Claude starts again in the same conversation,
-       so new launch settings take effect and a hung Claude comes back. Confirm
-       first; the server refuses a busy terminal (409 + reason) and then we ask
-       once more, naming why, before sending force:true. If it is the terminal
-       in the viewer, its frame is opened again so the tab attaches cleanly. ── */
+       so new launch settings take effect and a hung Claude comes back. ONE
+       question (owner: two in a row was awkward): ask the server first whether
+       it is busy (check:true), then a plain "Restart?" for an idle terminal or a
+       red one with "!" naming what it is doing, which sends force:true. Only if
+       it turned busy after the plain question does the server's 409 bring the
+       red one up. If it is the terminal in the viewer, its frame is opened again
+       so the tab attaches cleanly. ── */
     const RESTART_BUSY = {printing: 'it is printing right now', hold: 'a timer is pending',
                           'background-task': 'a background task is running',
                           working: 'it is working'};
+    // the red title says what the terminal is doing, not always "working"
+    const RESTART_BUSY_TITLE = {printing: 'is working right now', working: 'is working right now',
+                                hold: 'is waiting on a timer',
+                                'background-task': 'has a background task running'};
+    let _restartAsking = false;      // one ⟳ at a time: a 2nd question must not replace the 1st
     function setRestartBusy(b, on) {
       if (!b) return;
       b.classList.toggle('busy', on);
       b.setAttribute('aria-busy', on ? 'true' : 'false');
     }
+    // the page's own question (not confirm(): it can't look different when it matters)
+    function askRestart(nm, reason) {
+      const d = document.getElementById('restartDlg');
+      const ok = d.querySelector('.dlg-ok'), no = d.querySelector('.dlg-cancel');
+      d.classList.toggle('busy', !!reason);
+      d.setAttribute('role', reason ? 'alertdialog' : 'dialog');
+      d.querySelector('#restartDlgTitle').textContent = reason
+        ? '“' + nm + '” ' + (RESTART_BUSY_TITLE[reason] || 'is busy right now')
+        : 'Restart “' + nm + '”?';
+      d.querySelector('#restartDlgText').textContent = reason
+        ? 'Restarting now will interrupt it (' + (RESTART_BUSY[reason] || 'it is busy')
+          + '). Claude starts again in the same conversation.'
+        : 'Claude starts again in the same conversation.';
+      ok.textContent = reason ? 'Restart anyway' : 'Restart';
+      return new Promise(resolve => {
+        const done = yes => {
+          ok.removeEventListener('click', onOk);
+          no.removeEventListener('click', onNo);
+          d.removeEventListener('cancel', onEsc);
+          if (d.open) d.close();
+          resolve(yes);
+        };
+        const onOk = () => done(true), onNo = () => done(false);
+        const onEsc = e => { e.preventDefault(); done(false); };
+        ok.addEventListener('click', onOk);
+        no.addEventListener('click', onNo);
+        d.addEventListener('cancel', onEsc);
+        d.showModal();
+        (reason ? no : ok).focus();               // Enter never interrupts work
+      });
+    }
     async function restart(id) {
       if (_restarting.has(id)) return;         // busy: a double click is one restart
+      if (_restartAsking) { _toast('One restart at a time', 2500); return; }
       const s = byId(id);
       const nm = s ? s.name : id;
-      if (!confirm('Restart ' + nm + '? Claude starts again in the same conversation.')) return;
       _restarting.add(id);
+      _restartAsking = true;
       setRestartBusy(rows.get(id) && rows.get(id)._restartBtn, true);
       try {
+        const c = await jpost('/api/library/restart-check', {id});
+        const reason = (c && c.busy) || null;
+        if (!await askRestart(nm, reason)) return;
         let d;
         try {
-          d = await jpost('/api/library/restart', {id});
+          d = await jpost('/api/library/restart', reason ? {id, force: true} : {id});
         } catch (err) {
-          const why = err && err.status === 409 && err.data && RESTART_BUSY[err.data.reason];
+          const why = !reason && err && err.status === 409 && err.data && RESTART_BUSY[err.data.reason];
           if (!why) throw err;
-          if (!confirm(nm + ' is busy: ' + why + '. Restarting will interrupt it. Restart anyway?')) return;
+          if (!await askRestart(nm, err.data.reason)) return;   // turned busy since we asked
           d = await jpost('/api/library/restart', {id, force: true});
         }
         const nid = d && ID_RE.test(d.id || '') ? d.id : id;
@@ -1342,6 +1420,7 @@
         _toast('⚠️ Not restarted: ' + String(err && err.message || err).slice(0, 60), 5000);
       } finally {
         _restarting.delete(id);
+        _restartAsking = false;
         setRestartBusy(rows.get(id) && rows.get(id)._restartBtn, false);
       }
     }

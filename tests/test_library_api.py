@@ -1208,3 +1208,62 @@ def test_restart_has_the_same_csrf_checks(rs, monkeypatch):
     assert _raw_req(rs, "POST", "/api/library/restart", body,
                     {"Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 403
     assert _pane_pid(rs, "cs-" + sid) is not None and _starts(rs) == []
+
+
+# ── ⟳ asks once (owner 2026-10-23: "два диалога подряд неудобно"): POST
+# /api/library/restart-check {id} answers whether the terminal is busy — {"busy": reason
+# | null} — and touches nothing, so the page can show ONE question: a plain one, or a
+# red one naming what it is doing. Its own route: a server that predates it answers
+# 404 instead of taking the request for a restart (review 2026-10-23).
+def test_restart_check_reports_an_idle_terminal_and_touches_nothing(rs):
+    sid = _rs_seed(rs)
+    old = _ensure(rs, sid)
+    code, out = post(rs, "restart-check", {"id": sid})
+    assert code == 200 and out == {"busy": None}, out
+    assert _claudes(U1) == old and len(_starts(rs)) == 1
+
+
+@pytest.mark.parametrize("busy,reason", [
+    ({"lib_last_output": lambda name: time.time() - 1}, "printing"),
+    ({"lib_last_output": lambda name: None}, "printing"),
+    ({"held": True}, "hold"),
+    ({"task": True}, "background-task"),
+    ({"sample_working": lambda pids: {k: True for k in pids}}, "working"),
+])
+def test_restart_check_names_why_a_terminal_is_busy(rs, monkeypatch, busy, reason):
+    sid = _rs_seed(rs)
+    old = _ensure(rs, sid)
+    for k in ("lib_last_output", "sample_working"):
+        if k in busy:
+            monkeypatch.setattr(rs.ss, k, busy[k])
+    if busy.get("held"):
+        monkeypatch.setattr(rs.ss.library, "held", lambda *a, **k: True)
+    if busy.get("task"):
+        monkeypatch.setattr(rs.ss.idle_reaper, "tree_has_task_output", lambda pid: True)
+    code, out = post(rs, "restart-check", {"id": sid})
+    assert code == 200 and out == {"busy": reason}, out
+    assert _claudes(U1) == old and len(_starts(rs)) == 1
+
+
+def test_restart_check_refuses_what_restart_refuses(rs):
+    sid = _rs_seed(rs)
+    code, out = post(rs, "restart-check", {"id": sid})                # not loaded
+    assert code == 409 and out["reason"] == "not-loaded"
+    assert post(rs, "restart-check", {"id": "deadbeef"})[0] == 404
+    assert post(rs, "restart-check", {"id": "AAAA1111"})[0] == 400
+    _ensure(rs, sid)
+    p = subprocess.Popen(["bash", "-c", f"exec -a claude /bin/bash -c 'sleep 600; :' claude --resume {U1}"])
+    rs.procs.append(p)
+    assert wait_for(lambda: len(_claudes(U1)) == 2, timeout=5)
+    code, out = post(rs, "restart-check", {"id": sid})
+    assert code == 409 and out["reason"] == "elsewhere", out
+    assert len(_starts(rs)) == 1
+
+
+def test_restart_check_has_the_same_csrf_checks(rs):
+    sid = _rs_seed(rs)
+    body = json.dumps({"id": sid}).encode()
+    assert _raw_req(rs, "POST", "/api/library/restart-check", body,
+                    {"Content-Type": "text/plain"})[0] == 415
+    assert _raw_req(rs, "POST", "/api/library/restart-check", body,
+                    {"Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 403

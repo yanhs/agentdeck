@@ -95,6 +95,8 @@ class FakeAPI:
         if e["archived"] or not e["active"]:
             return self._json(route, {"error": "it is not loaded", "reason": "not-loaded"}, 409)
         reason = self.restart_busy.get(e["id"])
+        if route.request.url.split("?")[0].endswith("/restart-check"):   # ⟳ asks first
+            return self._json(route, {"busy": reason})
         if reason and body.get("force") is not True:
             return self._json(route, {"error": "busy; send force=true", "reason": reason}, 409)
         return self._json(route, dict(e, restarted=True))
@@ -174,7 +176,7 @@ class FakeAPI:
             for i, x in enumerate(body["ids"]):
                 next(s for s in self.sessions if s["id"] == x)["pos"] = i
             return self._json(route, {"ok": True})
-        if path == "/api/library/restart":
+        if path in ("/api/library/restart", "/api/library/restart-check"):
             if self.hold_restart:
                 self.held.append((route, e, body))
                 return None
@@ -390,8 +392,8 @@ def test_click_opens_the_session_endpoint(page):
 def test_buttons_do_not_open_the_row(page):
     page.click(row("aaaa0001") + " .card-btn.edit")
     assert page.query_selector("#wrap iframe") is None
-    page.on("dialog", lambda d: d.dismiss())
     page.click(row("dddd0004") + " .card-btn.restart")
+    page.wait_for_selector("#restartDlg", state="visible")
     assert page.query_selector("#wrap iframe") is None
 
 
@@ -3150,20 +3152,8 @@ def test_phone_path_does_not_read_the_tmux_buffer():
 
 
 # ── ⟳ Restart: Claude starts again in the same conversation (owner 2026-10-23) ──
-# Loaded, non-archived topic rows only. Confirm first; a busy terminal (the server's
-# 409 + reason) asks a second time, naming why, and then sends force:true.
+# Loaded, non-archived topic rows only.
 RESTART = " .card-btn.restart"
-
-
-def _dialogs(pg, answers):
-    """Answer the page's confirm()s in turn (True = OK); returns the messages seen."""
-    seen, answers = [], list(answers)
-
-    def on(d):
-        seen.append(d.message)
-        (d.accept if (answers.pop(0) if answers else False) else d.dismiss)()
-    pg.on("dialog", on)
-    return seen
 
 
 def test_restart_button_only_on_loaded_topic_rows(browser, site):
@@ -3211,21 +3201,76 @@ def test_restart_button_never_on_a_new_unloaded_or_archived_row(browser, site):
         ctx.close()
 
 
-def test_restart_confirms_then_posts(page, api):
-    seen = _dialogs(page, [True])
+# One question, not two (owner 2026-10-23: "два диалога подряд неудобно"): ⟳ first asks
+# the server whether the terminal is busy (check:true), then shows ONE dialog — a plain
+# "Restart?" for an idle terminal, a red one with "!" naming what it is doing for a busy
+# one, which then sends force:true. No native confirm() any more.
+DLG = "#restartDlg"
+
+
+def _no_native(pg):
+    seen = []
+    pg.on("dialog", lambda d: (seen.append(d.message), d.dismiss()))
+    return seen
+
+
+def _dlg(pg):
+    pg.wait_for_selector(DLG, state="visible")
+    return pg.evaluate("""() => { const d = document.querySelector('#restartDlg');
+        return {busy: d.classList.contains('busy'), text: d.innerText,
+                focus: document.activeElement && document.activeElement.className}; }""")
+
+
+def _answer(pg, ok):
+    pg.click(DLG + (" .dlg-ok" if ok else " .dlg-cancel"))
+    pg.wait_for_selector(DLG, state="hidden")
+
+
+def _restart_posts(api):
+    return [c[2] for c in api.posts("/api/library/restart")]
+
+
+def _checks(api):
+    return [c[2] for c in api.posts("/api/library/restart-check")]
+
+
+def test_restart_of_an_idle_terminal_asks_once_then_posts(page, api):
+    native = _no_native(page)
     page.click(row("dddd0004") + RESTART)
+    d = _dlg(page)
+    assert not d["busy"]
+    assert "Restart “TG мост”?" in d["text"] and "same conversation" in d["text"]
+    assert "!" not in d["text"]
+    assert "dlg-ok" in d["focus"]                              # Enter restarts an idle one
+    _answer(page, True)
     _toast_has(page, "Restarted")
-    assert seen == ["Restart TG мост? Claude starts again in the same conversation."]
-    assert api.posts("/api/library/restart") == [
-        ("POST", "/api/library/restart", {"id": "dddd0004"})]
+    assert _checks(api) == [{"id": "dddd0004"}]
+    assert _restart_posts(api) == [{"id": "dddd0004"}]
+    assert native == []
     assert page.query_selector("#wrap iframe") is None            # did not open the row
 
 
-def test_restart_cancelled_sends_nothing(page, api):
-    seen = _dialogs(page, [False])
+def test_restart_cancelled_sends_nothing_more(page, api):
     page.click(row("dddd0004") + RESTART)
+    _dlg(page)
+    _answer(page, False)
     page.wait_for_timeout(300)
-    assert len(seen) == 1 and api.posts("/api/library/restart") == []
+    assert _checks(api) == [{"id": "dddd0004"}] and _restart_posts(api) == []
+    assert not page.evaluate(
+        "s => document.querySelector(s).classList.contains('busy')", row("dddd0004") + RESTART)
+
+
+def test_restart_escape_cancels(page, api):
+    page.click(row("dddd0004") + RESTART)
+    _dlg(page)
+    page.keyboard.press("Escape")
+    page.wait_for_selector(DLG, state="hidden")
+    page.wait_for_timeout(300)
+    assert _checks(api) == [{"id": "dddd0004"}] and _restart_posts(api) == []
+
+
+BUSY_TITLE = {"printing": "is working right now", "working": "is working right now",
+              "hold": "is waiting on a timer", "background-task": "has a background task running"}
 
 
 @pytest.mark.parametrize("reason,words", [
@@ -3234,34 +3279,77 @@ def test_restart_cancelled_sends_nothing(page, api):
     ("background-task", "a background task is running"),
     ("working", "it is working"),
 ])
-def test_restart_of_a_busy_terminal_asks_again_then_forces(page, api, reason, words):
+def test_restart_of_a_busy_terminal_asks_once_in_red_then_forces(page, api, reason, words):
     api.restart_busy["dddd0004"] = reason
-    seen = _dialogs(page, [True, True])
+    native = _no_native(page)
     page.click(row("dddd0004") + RESTART)
+    d = _dlg(page)
+    assert d["busy"]
+    assert "TG мост" in d["text"] and BUSY_TITLE[reason] in d["text"]
+    assert words in d["text"] and "interrupt" in d["text"]
+    assert page.is_visible(DLG + " .dlg-icon")                # the "!" mark
+    assert "dlg-cancel" in d["focus"]                          # Enter does NOT interrupt work
+    _answer(page, True)
     _toast_has(page, "Restarted")
-    assert len(seen) == 2
-    assert words in seen[1] and "Restarting will interrupt it. Restart anyway?" in seen[1]
-    assert [c[2] for c in api.posts("/api/library/restart")] == [
-        {"id": "dddd0004"}, {"id": "dddd0004", "force": True}]
+    assert _checks(api) == [{"id": "dddd0004"}]
+    assert _restart_posts(api) == [{"id": "dddd0004", "force": True}]
+    assert native == []
+
+
+def test_busy_and_idle_dialogs_look_different(page, api):
+    def look():
+        return page.evaluate("""() => { const d = document.querySelector('#restartDlg');
+            const ok = d.querySelector('.dlg-ok'); const i = d.querySelector('.dlg-icon');
+            return [getComputedStyle(d).borderTopColor, getComputedStyle(ok).backgroundColor,
+                    !!(i && i.offsetParent)]; }""")
+    page.click(row("dddd0004") + RESTART)
+    _dlg(page)
+    idle = look()
+    _answer(page, False)
+    api.restart_busy["dddd0004"] = "working"
+    page.click(row("dddd0004") + RESTART)
+    _dlg(page)
+    busy = look()
+    shot(page, "index-lib-restart-busy-dialog.png")
+    _answer(page, False)
+    assert idle[2] is False and busy[2] is True
+    assert idle[0] != busy[0] and idle[1] != busy[1]
+    r, g, b = [int(float(x)) for x in re.findall(r"[\d.]+", busy[1])[:3]]
+    assert r > 150 and r > g + 60 and r > b + 60, busy[1]     # the busy button is red
 
 
 def test_restart_of_a_busy_terminal_can_be_left_alone(page, api):
     api.restart_busy["dddd0004"] = "hold"
-    seen = _dialogs(page, [True, False])
     page.click(row("dddd0004") + RESTART)
-    page.wait_for_timeout(500)
-    assert len(seen) == 2
-    assert [c[2] for c in api.posts("/api/library/restart")] == [{"id": "dddd0004"}]
+    _dlg(page)
+    _answer(page, False)
+    page.wait_for_timeout(300)
+    assert _checks(api) == [{"id": "dddd0004"}] and _restart_posts(api) == []
     assert not page.evaluate(
         "s => document.querySelector(s).classList.contains('busy')", row("dddd0004") + RESTART)
+
+
+def test_restart_turning_busy_after_the_question_asks_in_red(page, api):
+    """Idle when asked, busy by the time OK is pressed: the server's 409 brings the red
+    question up — never a restart of a working terminal without it."""
+    page.click(row("dddd0004") + RESTART)
+    assert not _dlg(page)["busy"]
+    api.restart_busy["dddd0004"] = "printing"
+    page.click(DLG + " .dlg-ok")
+    page.wait_for_function("() => { const d = document.querySelector('#restartDlg');"
+                           " return d.open && d.classList.contains('busy'); }")
+    _answer(page, True)
+    _toast_has(page, "Restarted")
+    assert _restart_posts(api) == [{"id": "dddd0004"}, {"id": "dddd0004", "force": True}]
 
 
 def test_restart_reloads_the_open_terminal(page, api):
     page.click(row("dddd0004") + " .proj")
     page.wait_for_selector("#wrap iframe")
     page.evaluate("() => { document.querySelector('#wrap iframe').__old = 1; }")
-    _dialogs(page, [True])
     page.click(row("dddd0004") + RESTART)
+    _dlg(page)
+    _answer(page, True)
     page.wait_for_function("() => { const f = document.querySelector('#wrap iframe');"
                            " return f && !f.__old; }", timeout=5000)
     assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=dddd0004"
@@ -3272,8 +3360,9 @@ def test_restart_of_another_terminal_keeps_the_viewer(page, api):
     page.click(row("bbbb0002") + " .proj")
     page.wait_for_selector("#wrap iframe")
     page.evaluate("() => { document.querySelector('#wrap iframe').__old = 1; }")
-    _dialogs(page, [True])
     page.click(row("dddd0004") + RESTART)
+    _dlg(page)
+    _answer(page, True)
     _toast_has(page, "Restarted")
     page.wait_for_timeout(300)
     assert page.evaluate("() => document.querySelector('#wrap iframe').__old") == 1
@@ -3282,7 +3371,6 @@ def test_restart_of_another_terminal_keeps_the_viewer(page, api):
 
 def test_restart_button_is_busy_and_ignores_double_clicks(page, api):
     api.hold_restart = True
-    seen = _dialogs(page, [True, True, True])
     b = row("dddd0004") + RESTART
     page.click(b)
     page.wait_for_function("s => document.querySelector(s).classList.contains('busy')", arg=b)
@@ -3290,7 +3378,15 @@ def test_restart_button_is_busy_and_ignores_double_clicks(page, api):
     page.click(b)
     page.click(b)
     page.wait_for_timeout(300)
-    assert len(seen) == 1 and len(api.posts("/api/library/restart")) == 1
+    assert len(_checks(api)) == 1 and _restart_posts(api) == []  # the one check
+    api.release()
+    _dlg(page)
+    page.click(DLG + " .dlg-ok")
+    page.wait_for_selector(DLG, state="hidden")
+    page.wait_for_function("s => document.querySelector(s).classList.contains('busy')", arg=b)
+    page.click(b)
+    page.wait_for_timeout(300)
+    assert len(_checks(api)) == 1 and len(_restart_posts(api)) == 1
     assert page.query_selector("#wrap iframe") is None
     api.release()
     _toast_has(page, "Restarted")
@@ -3298,13 +3394,75 @@ def test_restart_button_is_busy_and_ignores_double_clicks(page, api):
     assert page.get_attribute(b, "aria-busy") != "true"
 
 
-def test_restart_error_shows_a_toast(page, api):
+def test_restart_error_shows_a_toast_and_no_question(page, api):
     api.fail_restart = True
-    _dialogs(page, [True])
     page.click(row("dddd0004") + RESTART)
     _toast_has(page, "Not restarted: tmux gone")
+    assert not page.is_visible(DLG)
     assert not page.evaluate(
         "s => document.querySelector(s).classList.contains('busy')", row("dddd0004") + RESTART)
+
+
+def test_restart_one_question_at_a_time_across_rows(page, api):
+    """⟳ on a busy row, then quickly ⟳ on an idle one: the red question for the busy
+    one must not be overwritten by the plain one (review 2026-10-23) — the second ⟳
+    waits its turn, and one OK never restarts two terminals."""
+    api.restart_busy["dddd0004"] = "working"
+    api.hold_restart = True
+    page.click(row("dddd0004") + RESTART)
+    page.wait_for_function("() => document.querySelectorAll('.card-btn.restart.busy').length === 1")
+    page.click(row("bbbb0002") + RESTART)
+    page.wait_for_timeout(300)
+    assert _checks(api) == [{"id": "dddd0004"}]                  # the second ⟳ was not taken
+    api.hold_restart = False
+    api.release()
+    d = _dlg(page)
+    assert d["busy"] and "TG мост" in d["text"]
+    _answer(page, False)
+    page.wait_for_timeout(300)
+    assert _restart_posts(api) == []
+    page.click(row("bbbb0002") + RESTART)                        # free again: asks for B
+    d = _dlg(page)
+    assert not d["busy"] and "Светлота" in d["text"]
+    _answer(page, False)
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_restart_plain_button_is_readable(page, api, theme):
+    page.evaluate(f"localStorage.setItem('{THEME_KEY}', '{theme}')")
+    page.reload()
+    page.wait_for_selector(".card[data-sid]")
+    assert page.evaluate("document.documentElement.dataset.theme") == theme
+    page.click(row("dddd0004") + RESTART)
+    _dlg(page)
+    bg = page.eval_on_selector(DLG + " .dlg-ok", "e => getComputedStyle(e).backgroundColor")
+    _answer(page, False)
+    nums = [float(x) for x in re.findall(r"[\d.]+", bg)]
+    assert len(nums) == 3 or nums[3] == 1, f"the button is see-through: {bg}"
+    r, g, b = [c / 255 for c in nums[:3]]
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in (r, g, b)]
+    lum = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    assert 1.05 / (lum + 0.05) >= 4.5, bg                        # white text, WCAG AA
+
+
+@pytest.mark.parametrize("width", [320, 390])
+def test_restart_dialog_fits_a_phone(browser, site, width):
+    api = FakeAPI()
+    api.restart_busy["dddd0004"] = "background-task"
+    ctx, pg = _open(browser, site, api, width=width, height=700, mobile=True)
+    try:
+        pg.tap(row("dddd0004") + RESTART)
+        _dlg(pg)
+        r = pg.eval_on_selector(DLG, "e => { const r = e.getBoundingClientRect();"
+                                     " return [r.left, r.right]; }")
+        assert r[0] >= 15.5 and r[1] <= width - 15.5, r
+        for sel in (" .dlg-ok", " .dlg-cancel"):
+            h = pg.eval_on_selector(DLG + sel, "e => e.getBoundingClientRect().height")
+            assert h >= 36, (sel, h)                             # a thumb can hit it
+        if width == 320:
+            shot(pg, "index-lib-restart-dialog-320.png")
+    finally:
+        ctx.close()
 
 
 @pytest.mark.parametrize("width", [320, 400])
