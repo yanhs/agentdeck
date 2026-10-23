@@ -111,10 +111,14 @@ on one VPS.
   old number that never held a conversation (a restart right after opening) still opens the
   terminal; after `/clear` the earlier conversation stays in the list as its own terminal,
   "… (earlier)". **＋ New terminal**, rename (✎), drag to reorder,
-  **Archive** (also unloads the terminal right away — unless it is working, then it unloads
-  once it finishes), and **Delete** (archived only; the transcript goes to
-  `.sessions/trash/`, never erased). Search finds terminals by name or code, archived ones
-  too; clicking an archived terminal restores it and opens it. **⟳** on a loaded terminal
+  **Archive** (needed, just not now: also unloads the terminal right away — unless it is
+  working, then it unloads once it finishes), and **🗑 Move to Trash** on every terminal,
+  archived ones too (not needed, kept just in case: it unloads the terminal and leaves the
+  list; one question, red if the terminal is busy). **Show trash** lists the trashed ones
+  with **Restore** (back where it was); nothing there is erased until you press **Empty
+  trash** and confirm — then those conversations are deleted for good. Search finds
+  terminals by name or code, archived ones too; clicking an archived terminal restores it
+  and opens it. **⟳** on a loaded terminal
   restarts Claude in the same conversation (one question; it turns red if the terminal is busy).
 - **Persistent sessions.** An agent keeps running after you **close the tab, close the
   browser, or disconnect**. Opening it again (or after a restart) resumes the exact same
@@ -180,7 +184,7 @@ on one VPS.
 
 | Telegram bridge | Light theme | Archived terminals |
 |---|---|---|
-| ![Telegram](docs/screenshots/telegram.png) | ![The dashboard in the light theme; the terminal stays dark](docs/screenshots/light-theme.png) | ![Show archived: click an archived terminal to restore and open it; Delete removes it](docs/screenshots/archive.png) |
+| ![Telegram](docs/screenshots/telegram.png) | ![The dashboard in the light theme; the terminal stays dark](docs/screenshots/light-theme.png) | ![Show archived: click an archived terminal to restore and open it](docs/screenshots/archive.png) |
 
 The **Server** tab shows what is using the machine now and over the last 15 minutes: each
 agent with the processes it started (tests, builds), every site and service, and background
@@ -367,7 +371,7 @@ re-create, no systemd) are listed under
 > directory above the repo), and every terminal's conversation is kept under `.sessions/`.
 > Only `nginx` needs your own domain + TLS.
 >
-> **No agent list to edit by hand** — terminals are created, renamed, archived and deleted
+> **No agent list to edit by hand** — terminals are created, renamed, archived and trashed
 > in the dashboard itself (**＋ New terminal**), which writes `.sessions/library.json`.
 
 Run the pieces yourself:

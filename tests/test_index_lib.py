@@ -2,9 +2,11 @@
 
 The left column is no longer twelve numbered slots but a library of named
 topics (sessions): search, «＋ New topic», loaded ones first with a status dot,
-unloaded ones greyed, each row = name + 8-hex code + ✎ + «Archive» (one click).
-«Show archived» at the bottom lists archived topics greyed, each with «Delete»;
-one click on an archived row restores it and opens it (no Restore button).
+unloaded ones greyed, each row = name + 8-hex code + ✎ + «Archive» (one click) + 🗑
+«Move to Trash» (one question). «Show archived» at the bottom lists archived topics
+greyed; one click on an archived row restores it and opens it (no Restore button).
+«Show trash» next to it lists the trashed ones with «Restore» each and «Empty trash»
+(a red question with the count, then the conversations are erased for good).
 Archive unloads the terminal (the server says unloaded true|false + reason).
 A click opens the one terminal endpoint `/sess/?arg=<id>` in the iframe.
 All UI text is English (owner, 2026-09-25) — topic names are user data.
@@ -71,6 +73,14 @@ class FakeAPI:
         self.fail_archive = False
         self.busy = set()          # ids the fake server reports as working on Archive
         self.restart_busy = {}     # id -> the busy reason Restart (without force) is refused with
+        self.trash_busy = {}       # id -> the busy reason Move to Trash (without force) is refused with
+        self.trash_elsewhere = set()   # ids whose conversation runs in another claude
+        self.fail_trash = False
+        self.running = set()       # trashed ids Empty trash must skip (still running)
+        self.left_on_disk = set()  # trashed ids Empty trash keeps (a copy still on disk)
+        self.fail_trash_list = None    # HTTP status GET ?trash=1 answers with (None = fine)
+        self.hold_trash = False    # keep Move to Trash (not its check) unanswered until release()
+        self._t = 1761230000       # "now" for trashed timestamps
         self.fail_restart = False
         self.hold_restart = False  # keep Restart requests unanswered until release()
         self.held = []
@@ -87,7 +97,10 @@ class FakeAPI:
         """Answer the Restart requests held by hold_restart."""
         held, self.held = self.held, []
         for route, e, body in held:
-            self._restart(route, e, body)
+            if route.request.url.split("?")[0].endswith("/trash"):
+                self._trash(route, e, body)
+            else:
+                self._restart(route, e, body)
 
     def _restart(self, route, e, body):
         if self.fail_restart:
@@ -100,6 +113,23 @@ class FakeAPI:
         if reason and body.get("force") is not True:
             return self._json(route, {"error": "busy; send force=true", "reason": reason}, 409)
         return self._json(route, dict(e, restarted=True))
+
+    def _trash(self, route, e, body):
+        sid = e["id"]
+        if self.fail_trash:
+            return self._json(route, {"error": "disk full"}, 500)
+        if sid in self.trash_elsewhere:
+            return self._json(route, {"error": "this conversation also runs in another Claude",
+                                      "reason": "elsewhere"}, 409)
+        reason = self.trash_busy.get(sid) if e["active"] else None
+        if route.request.url.split("?")[0].endswith("/trash-check"):
+            return self._json(route, {"busy": reason})
+        if reason and body.get("force") is not True:
+            return self._json(route, {"error": "busy; send force=true", "reason": reason}, 409)
+        loaded = e["active"]
+        self._t += 60
+        e.update(trashed=self._t, active=False, attached=False, status="off")
+        return self._json(route, dict(e, unloaded=loaded))
 
     def _json(self, route, obj, status=200):
         route.fulfill(status=status, content_type="application/json",
@@ -120,8 +150,15 @@ class FakeAPI:
         if req.method == "GET" and path == "/api/library":
             q = urlparse(req.url).query
             with_arch = "archived=1" in q
-            out = {"max_active": 12,
-                   "sessions": [s for s in self.sessions if with_arch or not s["archived"]]}
+            if "trash=1" in q and self.fail_trash_list:
+                return self._json(route, {"error": "nope"}, self.fail_trash_list)
+            if "trash=1" in q:                     # the trash: only the trashed ones
+                rows = sorted((s for s in self.sessions if s.get("trashed")),
+                              key=lambda s: -s["trashed"])
+            else:
+                rows = [s for s in self.sessions
+                        if not s.get("trashed") and (with_arch or not s["archived"])]
+            out = {"max_active": 12, "sessions": rows}
             if self.with_system:
                 out["_system"] = {"cpu_pct": 42, "ram_pct": 50,
                                   "ram_used_mb": 7000, "ram_total_mb": 16000}
@@ -147,6 +184,20 @@ class FakeAPI:
             was = bool(self.shell and self.shell.get("active"))
             self.shell = {"active": False, "attached": False, "status": "off"}
             return self._json(route, {"ok": True, "killed": was})
+        if path == "/api/library/empty-trash":
+            erased, skipped = [], []
+            for x in body.get("ids") or []:
+                e = next((s for s in self.sessions if s["id"] == x), None)
+                if e is None or not e.get("trashed"):
+                    skipped.append({"id": x, "reason": "unknown" if e is None else "not-trashed"})
+                elif x in self.running:
+                    skipped.append({"id": x, "reason": "running"})
+                elif x in self.left_on_disk:
+                    skipped.append({"id": x, "reason": "left-on-disk"})
+                else:
+                    self.sessions.remove(e)
+                    erased.append(x)
+            return self._json(route, {"erased": erased, "skipped": skipped})
         if path == "/api/library/reorder":
             sid = (body.get("ids") or [None])[0]
         else:
@@ -184,11 +235,14 @@ class FakeAPI:
         if path == "/api/library/close":
             e["active"] = False
             return self._json(route, e)
-        if path == "/api/library/delete":
-            if not e["archived"] or e["active"]:
-                return self._json(route, {"error": "topic is not archived"}, 409)
-            self.sessions.remove(e)
-            return self._json(route, {"ok": True, "trashed": f"/x/trash/{sid}.jsonl"})
+        if path in ("/api/library/trash", "/api/library/trash-check"):
+            if self.hold_trash and path.endswith("/trash"):
+                self.held.append((route, e, body))
+                return None
+            return self._trash(route, e, body)
+        if path == "/api/library/untrash":
+            e.pop("trashed", None)
+            return self._json(route, e)
         return self._json(route, {"error": "no such route"}, 404)
 
 
@@ -393,7 +447,7 @@ def test_buttons_do_not_open_the_row(page):
     page.click(row("aaaa0001") + " .card-btn.edit")
     assert page.query_selector("#wrap iframe") is None
     page.click(row("dddd0004") + " .card-btn.restart")
-    page.wait_for_selector("#restartDlg", state="visible")
+    page.wait_for_selector("#confirmDlg", state="visible")
     assert page.query_selector("#wrap iframe") is None
 
 
@@ -519,10 +573,10 @@ def test_show_archived_toggle_lists_archived_rows(page, api):
     assert any(u.endswith("/api/library?archived=1") for u in api.urls[n:])
     cls = page.get_attribute(row("ffff0005"), "class")
     assert "archived" in cls
-    # archived rows are greyed, after the live ones, with Delete and no Restore/Archive
+    # archived rows are greyed, after the live ones, with 🗑 and no Restore/Archive
     assert row_ids(page)[-1] == "ffff0005"
     assert not page.is_visible(row("ffff0005") + " .arch-btn")
-    assert page.is_visible(row("ffff0005") + " .del-btn")
+    assert page.is_visible(row("ffff0005") + " .trash-btn")
     assert "Restore" not in page.inner_text(row("ffff0005"))
     page.mouse.move(900, 450)                          # not hovering the row
     page.wait_for_timeout(200)
@@ -553,7 +607,7 @@ def test_click_on_an_archived_row_restores_and_opens_it(page, api):
         ("POST", "/api/library/archive", {"id": "ffff0005", "archived": False})]
     assert page.inner_text("#tNum") == "ffff0005"
     assert page.inner_text(row("ffff0005") + " .arch-btn").strip() == "Archive"
-    assert not page.is_visible(row("ffff0005") + " .del-btn")
+    assert page.is_visible(row("ffff0005") + " .trash-btn")
     # and it stays when the archived view is switched off
     page.click("#showArchived")
     page.wait_for_timeout(300)
@@ -597,7 +651,7 @@ def test_archive_survives_the_toggle_being_on(page, api):
         "() => document.querySelector('#list .card[data-sid=\"cccc0003\"]')"
         "?.classList.contains('archived')", timeout=3000)
     assert not page.is_visible(row("cccc0003") + " .arch-btn")
-    assert page.is_visible(row("cccc0003") + " .del-btn")
+    assert page.is_visible(row("cccc0003") + " .trash-btn")
 
 
 # ── Archive unloads; a click on an archived row restores + opens (owner 2026-09-25) ──
@@ -659,50 +713,16 @@ def test_failed_restore_does_not_open_and_says_so(page, api):
     assert "archived" in page.get_attribute(row("ffff0005"), "class")
 
 
-# ── delete (archived rows only) ────────────────────────────────────────────
-def test_live_rows_have_no_delete_button(page):
-    assert page.query_selector(row("cccc0003") + " .del-btn") is None or \
-        not page.is_visible(row("cccc0003") + " .del-btn")
-
-
-def test_delete_is_one_click_on_an_archived_row(page, api):
+# ── 🗑 Move to Trash replaces the archived-only Delete ───────────────────────
+def test_there_is_no_delete_button_any_more(page, api):
     api.sessions.append(archived_session())
     page.click("#showArchived")
     page.wait_for_selector(row("ffff0005"))
-    btn = row("ffff0005") + " .del-btn"
-    assert page.is_visible(btn) and page.inner_text(btn).strip() == "Delete"
-    color = page.eval_on_selector(btn, "e => getComputedStyle(e).color")
-    r, g, b = [int(x) for x in re.findall(r"\d+", color)[:3]]
-    assert r > g + 40 and r > b + 40, color                # red
-    dialogs = []
-    page.on("dialog", lambda d: (dialogs.append(d.message), d.dismiss()))
-    page.click(btn)
-    page.wait_for_selector(row("ffff0005"), state="detached")
-    assert dialogs == []                                   # no confirm
-    assert api.posts("/api/library/delete") == [
-        ("POST", "/api/library/delete", {"id": "ffff0005"})]
-    page.wait_for_function("() => ((document.getElementById('_imgToast')||{}).textContent||'')"
-                           ".includes('Deleted — transcript moved to trash')")
-    assert page.query_selector("#wrap iframe") is None
-    page.wait_for_timeout(400)
-    assert page.query_selector(row("ffff0005")) is None      # a poll does not bring it back
-    assert len(api.posts("/api/library/delete")) == 1
-    shot(page, "index-lib-deleted.png")
+    assert page.query_selector_all("#list .del-btn") == []
+    assert "Delete" not in page.inner_text("#list")
 
 
-def test_delete_error_keeps_the_row(page, api):
-    s = archived_session()
-    s["active"] = True                                     # fake API answers 409
-    api.sessions.append(s)
-    page.click("#showArchived")
-    page.wait_for_selector(row("ffff0005"))
-    page.click(row("ffff0005") + " .del-btn")
-    page.wait_for_function("() => ((document.getElementById('_imgToast')||{}).textContent||'')"
-                           ".includes('Not deleted')")
-    assert page.query_selector(row("ffff0005")) is not None
-
-
-def test_delete_button_takes_the_place_of_archive(page, api):
+def test_trash_button_takes_the_place_of_archive_on_an_archived_row(page, api):
     api.sessions.append(archived_session())
     page.click("#showArchived")
     page.wait_for_selector(row("ffff0005"))
@@ -710,7 +730,7 @@ def test_delete_button_takes_the_place_of_archive(page, api):
     boxes = [page.eval_on_selector(row("ffff0005") + " " + sel,
                                    "e => { const r = e.getBoundingClientRect();"
                                    " return [r.top, r.bottom, r.left, r.right]; }")
-             for sel in (".sid", ".del-btn")]
+             for sel in (".sid", ".trash-btn")]
     (st, sb, sl, sr), (dt, db, dl, dr) = boxes
     assert abs((st + sb) / 2 - (dt + db) / 2) < 4          # same line as the code
     assert dl >= sr                                        # to its right, no overlap
@@ -725,7 +745,7 @@ def test_search_shows_archived_matches_with_toggle_off(page, api):
     assert row_ids(page) == ["ffff0005"]
     assert "archived" in page.get_attribute(row("ffff0005"), "class")
     assert not page.is_visible(row("ffff0005") + " .arch-btn")
-    assert page.is_visible(row("ffff0005") + " .del-btn")
+    assert page.is_visible(row("ffff0005") + " .trash-btn")
     page.wait_for_timeout(4500)                        # survives a poll while searching
     assert row_ids(page) == ["ffff0005"]
     # the toggle itself was not switched on
@@ -846,6 +866,9 @@ def english_api():
     for s, nm in zip(api.sessions, names):
         s["name"] = nm
     api.sessions.append(archived_session())
+    api.sessions.append({"id": "abcd0006", "name": "Binned work", "cwd": "/home/ubuntu/pr",
+                         "created": 6, "last_used": 6, "archived": False, "active": False,
+                         "attached": False, "status": "off", "trashed": 1761230000})
     return api
 
 
@@ -872,6 +895,17 @@ def _exercise(pg):
     pg.keyboard.press("Escape")
     pg.click("#newBtn")
     pg.wait_for_selector("#newName:visible")
+    bad += _cyrillic(pg)
+    pg.keyboard.press("Escape")
+    pg.click("#showTrash")                                     # the trash view
+    pg.wait_for_selector("#trashView .trash-row")
+    bad += _cyrillic(pg)
+    pg.click(row("aaaa0001") + " .trash-btn")                 # its question
+    pg.wait_for_selector("#confirmDlg", state="visible")
+    bad += _cyrillic(pg)
+    pg.keyboard.press("Escape")
+    pg.click("#emptyTrash")
+    pg.wait_for_selector("#confirmDlg", state="visible")
     bad += _cyrillic(pg)
     pg.keyboard.press("Escape")
     pg.fill("#search", "zzz nothing")
@@ -1093,7 +1127,7 @@ def test_shell_row_pinned_on_top_with_status_dot(browser, site):
         assert pg.inner_text("#list .shell-row .proj") == "Command line"
         assert "working" in pg.get_attribute("#list .shell-row .dot", "class")
         assert pg.get_attribute("#list .shell-row", "draggable") != "true"
-        for sub in (".card-btn", ".arch-btn", ".del-btn", ".mv-btn"):
+        for sub in (".card-btn", ".arch-btn", ".trash-btn", ".mv-btn"):
             assert pg.query_selector_all("#list .shell-row " + sub) == [], sub
         # topic rows are unchanged and still ordered after it
         assert row_ids(pg) == ["dddd0004", "bbbb0002", "aaaa0001", "cccc0003"]
@@ -1400,7 +1434,7 @@ def test_T_opens_the_board_in_the_viewer_not_a_new_window(browser, site):
         assert pg.inner_text("#list .tasks-row .proj") == "Tasks"
         assert "sel" in pg.get_attribute("#list .tasks-row", "class")
         assert pg.get_attribute("#list .tasks-row", "draggable") != "true"
-        for sub in (".card-btn", ".arch-btn", ".del-btn", ".mv-btn", ".edit"):
+        for sub in (".card-btn", ".arch-btn", ".trash-btn", ".mv-btn", ".edit"):
             assert pg.query_selector_all("#list .tasks-row " + sub) == [], sub
         assert pg.get_attribute("#list .tasks-row .tasks-close", "title") == "Close task board"
         shot(pg, "index-lib-tasks-tab.png")
@@ -3205,7 +3239,7 @@ def test_restart_button_never_on_a_new_unloaded_or_archived_row(browser, site):
 # the server whether the terminal is busy (check:true), then shows ONE dialog — a plain
 # "Restart?" for an idle terminal, a red one with "!" naming what it is doing for a busy
 # one, which then sends force:true. No native confirm() any more.
-DLG = "#restartDlg"
+DLG = "#confirmDlg"
 
 
 def _no_native(pg):
@@ -3216,8 +3250,8 @@ def _no_native(pg):
 
 def _dlg(pg):
     pg.wait_for_selector(DLG, state="visible")
-    return pg.evaluate("""() => { const d = document.querySelector('#restartDlg');
-        return {busy: d.classList.contains('busy'), text: d.innerText,
+    return pg.evaluate("""() => { const d = document.querySelector('#confirmDlg');
+        return {busy: d.classList.contains('danger'), text: d.innerText,
                 focus: document.activeElement && document.activeElement.className}; }""")
 
 
@@ -3298,7 +3332,7 @@ def test_restart_of_a_busy_terminal_asks_once_in_red_then_forces(page, api, reas
 
 def test_busy_and_idle_dialogs_look_different(page, api):
     def look():
-        return page.evaluate("""() => { const d = document.querySelector('#restartDlg');
+        return page.evaluate("""() => { const d = document.querySelector('#confirmDlg');
             const ok = d.querySelector('.dlg-ok'); const i = d.querySelector('.dlg-icon');
             return [getComputedStyle(d).borderTopColor, getComputedStyle(ok).backgroundColor,
                     !!(i && i.offsetParent)]; }""")
@@ -3336,8 +3370,8 @@ def test_restart_turning_busy_after_the_question_asks_in_red(page, api):
     assert not _dlg(page)["busy"]
     api.restart_busy["dddd0004"] = "printing"
     page.click(DLG + " .dlg-ok")
-    page.wait_for_function("() => { const d = document.querySelector('#restartDlg');"
-                           " return d.open && d.classList.contains('busy'); }")
+    page.wait_for_function("() => { const d = document.querySelector('#confirmDlg');"
+                           " return d.open && d.classList.contains('danger'); }")
     _answer(page, True)
     _toast_has(page, "Restarted")
     assert _restart_posts(api) == [{"id": "dddd0004"}, {"id": "dddd0004", "force": True}]
@@ -3490,3 +3524,470 @@ def test_restart_button_fits_the_phone_row(browser, site, width):
             shot(pg, "index-lib-restart-320.png")
     finally:
         ctx.close()
+
+
+# ── 🗑 the trash (owner 2026-10-23) ─────────────────────────────────────────
+# Archive = needed, just not now. Trash = not needed, kept just in case: 🗑 "Move to
+# Trash" on every topic row (the list and the archive), ONE question — plain, or red
+# with "!" naming what a busy terminal is doing, then forced. "Show trash" next to
+# "Show archived" lists the trashed ones (name, code, when) with Restore each; "Empty
+# trash" asks in red with the count, and only then are they erased for good.
+TRASH = " .trash-btn"
+
+
+def _trashed(sid, name, t, archived=False):
+    return {"id": sid, "name": name, "cwd": "/home/ubuntu/pr", "created": 1, "last_used": 1,
+            "archived": archived, "active": False, "attached": False, "status": "off",
+            "trashed": t}
+
+
+def _trash_posts(api, route="trash"):
+    return [c[2] for c in api.posts("/api/library/" + route)]
+
+
+def _open_trash(pg):
+    pg.click("#showTrash")
+    pg.wait_for_selector("#trashView", state="visible")
+
+
+def _trash_ids(pg):
+    return pg.eval_on_selector_all("#trashView .trash-row", "els => els.map(e => e.dataset.tid)")
+
+
+def test_every_topic_row_has_move_to_trash_and_the_pinned_rows_do_not(browser, site):
+    api = FakeAPI()
+    api.shell = dict(SHELL_ON)
+    api.sessions.append(archived_session())
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.click("#showArchived")
+        pg.wait_for_selector(row("ffff0005"))
+        for sid in ("aaaa0001", "bbbb0002", "cccc0003", "dddd0004", "ffff0005"):
+            b = row(sid) + TRASH
+            assert pg.is_visible(b), sid
+            assert pg.get_attribute(b, "title") == "Move to Trash"
+            assert pg.get_attribute(b, "aria-label") == "Move to Trash"
+        pg.wait_for_selector("#list .shell-row")
+        assert pg.query_selector_all("#list .shell-row .trash-btn") == []
+    finally:
+        ctx.close()
+
+
+def test_move_to_trash_asks_once_plainly_then_posts(page, api):
+    native = _no_native(page)
+    page.click(row("cccc0003") + TRASH)
+    d = _dlg(page)
+    assert not d["busy"] and "!" not in d["text"]
+    assert "Move “Старая тема” to Trash?" in d["text"]
+    assert page.inner_text(DLG + " .dlg-ok").strip() == "Move to Trash"
+    assert "dlg-ok" in d["focus"]
+    assert page.query_selector("#wrap iframe") is None            # the click did not open it
+    _answer(page, True)
+    page.wait_for_selector(row("cccc0003"), state="detached")
+    _toast_has(page, "Moved “Старая тема” to Trash")
+    assert _trash_posts(api, "trash-check") == [{"id": "cccc0003"}]
+    assert _trash_posts(api) == [{"id": "cccc0003"}]
+    assert native == []
+    page.wait_for_timeout(4500)                                   # a poll does not bring it back
+    assert page.query_selector(row("cccc0003")) is None
+
+
+def test_move_to_trash_cancelled_or_escaped_sends_nothing_more(page, api):
+    page.click(row("cccc0003") + TRASH)
+    _dlg(page)
+    _answer(page, False)
+    page.click(row("cccc0003") + TRASH)
+    _dlg(page)
+    page.keyboard.press("Escape")
+    page.wait_for_selector(DLG, state="hidden")
+    page.wait_for_timeout(300)
+    assert len(_trash_posts(api, "trash-check")) == 2 and _trash_posts(api) == []
+    assert page.is_visible(row("cccc0003"))
+
+
+@pytest.mark.parametrize("reason,words", [
+    ("printing", "it is printing right now"),
+    ("hold", "a timer is pending"),
+    ("background-task", "a background task is running"),
+    ("working", "it is working"),
+])
+def test_move_to_trash_of_a_busy_terminal_asks_in_red_then_forces(page, api, reason, words):
+    api.trash_busy["dddd0004"] = reason
+    page.click(row("dddd0004") + TRASH)
+    d = _dlg(page)
+    assert d["busy"] and "TG мост" in d["text"] and BUSY_TITLE[reason] in d["text"]
+    assert words in d["text"] and "interrupt" in d["text"]
+    assert page.is_visible(DLG + " .dlg-icon")                    # the "!" mark
+    assert "dlg-cancel" in d["focus"]                              # Enter does NOT interrupt work
+    assert "anyway" in page.inner_text(DLG + " .dlg-ok")
+    _answer(page, True)
+    page.wait_for_selector(row("dddd0004"), state="detached")
+    assert _trash_posts(api) == [{"id": "dddd0004", "force": True}]
+
+
+def test_move_to_trash_of_a_busy_terminal_can_be_left_alone(page, api):
+    api.trash_busy["dddd0004"] = "working"
+    page.click(row("dddd0004") + TRASH)
+    assert _dlg(page)["busy"]
+    _answer(page, False)
+    page.wait_for_timeout(300)
+    assert _trash_posts(api) == [] and page.is_visible(row("dddd0004"))
+
+
+def test_move_to_trash_turning_busy_after_the_question_asks_in_red(page, api):
+    page.click(row("dddd0004") + TRASH)
+    assert not _dlg(page)["busy"]
+    api.trash_busy["dddd0004"] = "printing"
+    page.click(DLG + " .dlg-ok")
+    page.wait_for_function("() => { const d = document.querySelector('#confirmDlg');"
+                           " return d.open && d.classList.contains('danger'); }")
+    _answer(page, True)
+    page.wait_for_selector(row("dddd0004"), state="detached")
+    assert _trash_posts(api) == [{"id": "dddd0004"}, {"id": "dddd0004", "force": True}]
+
+
+def test_move_to_trash_of_the_open_terminal_goes_back_to_the_placeholder(page, api):
+    page.click(row("dddd0004") + " .proj")
+    page.wait_for_selector("#wrap iframe")
+    page.click(row("dddd0004") + TRASH)
+    _dlg(page)
+    _answer(page, True)
+    page.wait_for_selector("#wrap iframe", state="detached", timeout=3000)
+    assert page.is_visible("#ph")
+
+
+def test_move_to_trash_refused_keeps_the_row_and_says_why(page, api):
+    api.trash_elsewhere.add("dddd0004")
+    page.click(row("dddd0004") + TRASH)
+    _toast_has(page, "Not moved to Trash: this conversation also runs in another Claude")
+    assert not page.is_visible(DLG)
+    api.trash_elsewhere.clear()
+    api.fail_trash = True
+    page.click(row("cccc0003") + TRASH)
+    _toast_has(page, "Not moved to Trash: disk full")
+    assert page.is_visible(row("cccc0003")) and page.is_visible(row("dddd0004"))
+    assert _trash_posts(api) == []
+
+
+def test_move_to_trash_works_from_the_archive_too(page, api):
+    api.sessions.append(archived_session())
+    page.click("#showArchived")
+    page.wait_for_selector(row("ffff0005"))
+    page.click(row("ffff0005") + TRASH)
+    _dlg(page)
+    _answer(page, True)
+    page.wait_for_selector(row("ffff0005"), state="detached")
+    assert _trash_posts(api) == [{"id": "ffff0005"}]
+    assert api.posts("/api/library/archive") == []                # not restored by the click
+
+
+def test_one_question_at_a_time_across_restart_and_trash(page, api):
+    page.click(row("cccc0003") + TRASH)
+    _dlg(page)
+    page.evaluate("() => document.querySelector('#list .card[data-sid=\"dddd0004\"] "
+                  ".card-btn.restart').click()")              # under the open dialog
+    page.wait_for_timeout(300)
+    assert api.posts("/api/library/restart-check") == []
+    assert "Старая тема" in _dlg(page)["text"]                   # the first question stays
+    _answer(page, False)
+
+
+def test_show_trash_sits_next_to_show_archived(page, api):
+    assert page.inner_text("#showTrash").strip() == "Show trash"
+    a = page.eval_on_selector("#showArchived", "e => e.getBoundingClientRect().toJSON()")
+    t = page.eval_on_selector("#showTrash", "e => e.getBoundingClientRect().toJSON()")
+    assert abs(a["top"] - t["top"]) < 2 and t["left"] >= a["right"] - 0.5     # one line, after it
+    assert not page.is_visible("#trashView")
+
+
+def test_show_trash_lists_the_trashed_with_name_code_and_when(page, api):
+    api.sessions += [_trashed("ab12cd34", "Binned work", 1761230500),
+                     _trashed("ef56ab78", "Binned archived", 1761230400, archived=True)]
+    page.wait_for_timeout(4500)                                   # a poll: never in the list
+    assert "ab12cd34" not in row_ids(page) and "ef56ab78" not in row_ids(page)
+    page.click("#showArchived")
+    page.wait_for_timeout(300)
+    assert "ef56ab78" not in row_ids(page)
+    n = len(api.urls)
+    _open_trash(page)
+    page.wait_for_selector("#trashView .trash-row")
+    assert any("trash=1" in u for u in api.urls[n:])
+    assert page.inner_text("#showTrash").strip() == "Hide trash"
+    assert _trash_ids(page) == ["ab12cd34", "ef56ab78"]           # newest first
+    first = page.inner_text('#trashView .trash-row[data-tid="ab12cd34"]')
+    assert "Binned work" in first and "ab12cd34" in first
+    assert re.search(r"trashed \d{1,2} [A-Z][a-z]{2} \d{2}:\d{2}", first), first
+    assert "archive" in page.inner_text('#trashView .trash-row[data-tid="ef56ab78"]')
+    # in the narrow desktop sidebar the code and the time are read in full, not cut off
+    cut = page.eval_on_selector_all("#trashView .trash-row .when",
+                                    "els => els.filter(e => e.scrollWidth > e.clientWidth + 1).length")
+    assert cut == 0, f"{cut} trash lines are cut off"
+    for tid in ("ab12cd34", "ef56ab78"):
+        b = f'#trashView .trash-row[data-tid="{tid}"] .restore-btn'
+        assert page.inner_text(b).strip() == "Restore"
+    assert page.query_selector_all("#trashView .card") == []      # not terminal rows
+    shot(page, "index-lib-trash.png")
+    page.click("#showTrash")
+    page.wait_for_selector("#trashView", state="hidden")
+
+
+def test_empty_trash_view_says_so(page, api):
+    _open_trash(page)
+    page.wait_for_selector("#trashEmpty", state="visible")
+    assert "empty" in page.inner_text("#trashEmpty").lower()
+    assert not page.is_visible("#emptyTrash")
+
+
+def test_restore_puts_it_back_where_it_was(page, api):
+    api.sessions += [_trashed("ab12cd34", "Binned work", 1761230500),
+                     _trashed("ef56ab78", "Binned archived", 1761230400, archived=True)]
+    _open_trash(page)
+    page.wait_for_selector("#trashView .trash-row")
+    page.click('#trashView .trash-row[data-tid="ab12cd34"] .restore-btn')
+    page.wait_for_selector(row("ab12cd34"))
+    assert "archived" not in page.get_attribute(row("ab12cd34"), "class")
+    _toast_has(page, "Restored “Binned work”")
+    page.click('#trashView .trash-row[data-tid="ef56ab78"] .restore-btn')
+    page.wait_for_function("() => !document.querySelector('#trashView .trash-row')")
+    _toast_has(page, "to the archive")
+    assert page.query_selector(row("ef56ab78")) is None             # archived stays archived
+    page.click("#showArchived")
+    page.wait_for_selector(row("ef56ab78"))
+    assert "archived" in page.get_attribute(row("ef56ab78"), "class")
+    assert _trash_posts(api, "untrash") == [{"id": "ab12cd34"}, {"id": "ef56ab78"}]
+    assert api.posts("/api/library/archive") == []
+
+
+def test_move_to_trash_shows_up_in_an_open_trash_view(page, api):
+    _open_trash(page)
+    page.click(row("cccc0003") + TRASH)
+    _dlg(page)
+    _answer(page, True)
+    page.wait_for_selector('#trashView .trash-row[data-tid="cccc0003"]')
+
+
+def test_empty_trash_asks_in_red_with_the_count_then_erases(page, api):
+    api.sessions += [_trashed("ab12cd34", "Binned work", 1761230500),
+                     _trashed("ef56ab78", "Binned archived", 1761230400, archived=True)]
+    native = _no_native(page)
+    _open_trash(page)
+    page.wait_for_selector("#trashView .trash-row")
+    assert page.inner_text("#emptyTrash").strip() == "Empty trash"
+    page.click("#emptyTrash")
+    d = _dlg(page)
+    assert d["busy"]                                               # red, with "!"
+    assert "2 conversations will be erased for good. This cannot be undone." in d["text"]
+    assert "dlg-cancel" in d["focus"]
+    shot(page, "index-lib-empty-trash-dialog.png")
+    _answer(page, False)
+    page.wait_for_timeout(300)
+    assert api.posts("/api/library/empty-trash") == [] and len(_trash_ids(page)) == 2
+    page.click("#emptyTrash")
+    _dlg(page)
+    _answer(page, True)
+    page.wait_for_selector("#trashEmpty", state="visible")
+    assert _trash_posts(api, "empty-trash") == [{"ids": ["ab12cd34", "ef56ab78"]}]
+    _toast_has(page, "Erased 2")
+    assert native == []
+
+
+def test_empty_trash_of_one_says_one_conversation(page, api):
+    api.sessions.append(_trashed("ab12cd34", "Binned work", 1761230500))
+    _open_trash(page)
+    page.wait_for_selector("#trashView .trash-row")
+    page.click("#emptyTrash")
+    assert "1 conversation will be erased for good." in _dlg(page)["text"]
+    _answer(page, False)
+
+
+def test_empty_trash_sends_only_what_it_showed_and_names_what_it_kept(page, api):
+    api.sessions += [_trashed("ab12cd34", "Binned work", 1761230500),
+                     _trashed("ef56ab78", "Still running", 1761230400)]
+    api.running.add("ef56ab78")
+    _open_trash(page)
+    page.wait_for_selector("#trashView .trash-row")
+    api.sessions.append(_trashed("99887766", "Trashed after the view loaded", 1761239999))
+    page.click("#emptyTrash")
+    assert "2 conversations" in _dlg(page)["text"]
+    _answer(page, True)
+    _toast_has(page, "Erased 1")
+    _toast_has(page, "1 kept")
+    assert _trash_posts(api, "empty-trash") == [{"ids": ["ab12cd34", "ef56ab78"]}]
+    page.wait_for_function("() => document.querySelectorAll('#trashView .trash-row').length === 2")
+    assert sorted(_trash_ids(page)) == ["99887766", "ef56ab78"]   # reloaded from the server
+
+
+@pytest.mark.parametrize("width", [320, 390])
+def test_trash_fits_a_phone(browser, site, width):
+    api = FakeAPI()
+    api.sessions.append(_trashed("ab12cd34", "A long name for a binned terminal, quite long", 1761230500))
+    ctx, pg = _open(browser, site, api, width=width, height=700, mobile=True)
+    try:
+        over = pg.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+        assert over <= 0, f"page scrolls sideways by {over}px at {width}px"
+        bad = pg.evaluate("""() => [...document.querySelectorAll(
+              '#list .card .card-btn, #list .card .arch-btn, #list .card .trash-btn, #list .card .dot')]
+            .filter(e => e.offsetParent !== null)
+            .filter(e => { const r = e.getBoundingClientRect();
+                           return r.width === 0 || r.right > innerWidth + 0.5; }).length""")
+        assert bad == 0, f"{bad} row controls are off-screen at {width}px"
+        names = pg.eval_on_selector_all("#list .card[data-sid] .proj",
+                                        "els => els.map(e => e.getBoundingClientRect().width)")
+        assert min(names) >= 40, f"names squeezed to {min(names)}px at {width}px"
+        _open_trash(pg)
+        pg.wait_for_selector("#trashView .trash-row")
+        for sel in ("#showArchived", "#showTrash", "#emptyTrash", "#trashView .restore-btn"):
+            pg.eval_on_selector(sel, "e => e.scrollIntoView({block: 'nearest'})")
+            r = pg.eval_on_selector(sel, "e => e.getBoundingClientRect().toJSON()")
+            assert r["width"] > 0 and r["left"] >= 0 and r["right"] <= width + 0.5, (sel, r)
+        over = pg.evaluate("() => document.documentElement.scrollWidth - innerWidth")
+        assert over <= 0, f"the trash view scrolls sideways by {over}px at {width}px"
+        pg.tap("#emptyTrash")
+        _dlg(pg)
+        r = pg.eval_on_selector(DLG, "e => e.getBoundingClientRect().toJSON()")
+        assert r["left"] >= 15.5 and r["right"] <= width - 15.5, r
+        if width == 320:
+            shot(pg, "index-lib-trash-320.png")
+        _answer(pg, False)
+        pg.tap(row("cccc0003") + TRASH)
+        _dlg(pg)
+        _answer(pg, False)
+    finally:
+        ctx.close()
+
+
+# review 2026-10-23: what the page shows while ⟳/🗑/Empty trash are still running,
+# when the trash can't be loaded, and where Show trash lands on a phone
+def test_while_a_restart_runs_trash_says_to_wait_not_that_a_question_is_open(page, api):
+    api.hold_restart = True
+    page.click(row("dddd0004") + RESTART)
+    page.wait_for_function("() => document.querySelectorAll('.card-btn.restart.busy').length === 1")
+    api.release()                                                 # the check
+    _dlg(page)
+    _answer(page, True)                                           # the restart itself is held
+    page.click(row("cccc0003") + TRASH)
+    _toast_has(page, "Wait for the restart to finish")
+    assert "question" not in page.inner_text("#_imgToast")
+    assert not page.is_visible(DLG) and _trash_posts(api, "trash-check") == []
+    api.hold_restart = False
+    api.release()
+    _toast_has(page, "Restarted")
+    page.click(row("cccc0003") + TRASH)                           # free again: it asks
+    _dlg(page)
+    _answer(page, False)
+
+
+def test_move_to_trash_shows_the_row_busy_while_it_unloads(page, api):
+    api.hold_trash = True
+    b = row("dddd0004") + TRASH
+    page.click(b)
+    _dlg(page)
+    _answer(page, True)
+    page.wait_for_function("s => document.querySelector(s).classList.contains('busy')", arg=b)
+    assert page.get_attribute(b, "aria-busy") == "true"
+    page.click(row("bbbb0002") + RESTART)
+    _toast_has(page, "Wait for Move to Trash to finish")
+    assert api.posts("/api/library/restart-check") == []
+    api.hold_trash = False
+    api.release()
+    page.wait_for_selector(row("dddd0004"), state="detached")
+
+
+def test_a_second_question_under_an_open_one_still_says_one_question(page, api):
+    api.sessions.append(_trashed("ab12cd34", "Binned work", 1761230500))
+    _open_trash(page)
+    page.wait_for_selector("#trashView .trash-row")
+    page.click("#emptyTrash")
+    _dlg(page)
+    page.evaluate("() => document.querySelector('#list .card[data-sid=\"cccc0003\"] "
+                  ".trash-btn').click()")                       # under the open dialog
+    _toast_has(page, "One question at a time")                    # a question IS on screen
+    assert _trash_posts(api, "trash-check") == []
+    _answer(page, False)
+
+
+@pytest.mark.parametrize("status", [401, 500])
+def test_trash_that_cannot_be_loaded_says_so(page, api, status):
+    api.sessions.append(_trashed("ab12cd34", "Binned work", 1761230500))
+    api.fail_trash_list = status
+    _open_trash(page)
+    page.wait_for_selector("#trashEmpty", state="visible")
+    assert "Could not load the trash" in page.inner_text("#trashEmpty")
+    assert "empty" not in page.inner_text("#trashEmpty").lower()
+    _toast_has(page, "Could not load the trash")
+    assert not page.is_visible("#emptyTrash")
+    api.fail_trash_list = None                                    # the next poll gets it
+    page.wait_for_selector("#trashView .trash-row", timeout=6000)
+    assert not page.is_visible("#trashEmpty")
+
+
+def test_empty_trash_names_a_conversation_left_on_disk(page, api):
+    api.sessions.append(_trashed("ab12cd34", "Binned work", 1761230500))
+    api.left_on_disk.add("ab12cd34")
+    _open_trash(page)
+    page.wait_for_selector("#trashView .trash-row")
+    page.click("#emptyTrash")
+    _dlg(page)
+    _answer(page, True)
+    _toast_has(page, "1 kept: still on disk")
+    assert _trash_ids(page) == ["ab12cd34"]
+
+
+_VISIBLE = """e => { const r = e.getBoundingClientRect();
+    let top = Math.max(r.top, 0), bottom = Math.min(r.bottom, innerHeight);
+    for (let p = e.parentElement; p; p = p.parentElement) {
+      if (getComputedStyle(p).overflowY === 'visible') continue;
+      const c = p.getBoundingClientRect();
+      top = Math.max(top, c.top); bottom = Math.min(bottom, c.bottom);
+    }
+    return {top: r.top, bottom: r.bottom, vis: Math.max(0, bottom - top), h: r.height}; }"""
+
+
+@pytest.mark.parametrize("width", [320, 390])
+def test_show_trash_on_a_phone_brings_its_rows_into_view(browser, site, width):
+    api = FakeAPI()
+    for i in range(12):
+        api.sessions.append({"id": f"0000{i:04x}", "name": f"Extra {i}", "cwd": "/home/ubuntu/pr",
+                             "created": 9, "last_used": 9, "archived": False,
+                             "active": False, "attached": False, "status": "off"})
+    api.sessions += [_trashed("ab12cd34", "Binned one", 1761230500),
+                     _trashed("ab12cd35", "Binned two", 1761230400),
+                     _trashed("ab12cd36", "Binned three", 1761230300)]
+    ctx, pg = _open(browser, site, api, width=width, height=700, mobile=True)
+    try:
+        pg.evaluate("() => { const l = document.getElementById('list'); l.scrollTop = l.scrollHeight; }")
+        pg.tap("#showTrash")
+        pg.wait_for_selector("#trashView .trash-row")
+        pg.wait_for_timeout(400)
+        for sel in ("#trashView .trash-head", "#trashView .restore-btn"):
+            v = pg.eval_on_selector(sel, _VISIBLE)
+            assert v["vis"] >= v["h"] - 0.5, (width, sel, v)        # fully in view
+    finally:
+        ctx.close()
+
+
+@pytest.mark.parametrize("theme", ["dark", "light"])
+def test_trash_is_readable_in_both_themes(page, api, theme):
+    api.sessions.append(_trashed("ab12cd34", "Binned work", 1761230500))
+    page.evaluate(f"localStorage.setItem('{THEME_KEY}', '{theme}')")
+    page.reload()
+    page.wait_for_selector(".card[data-sid]")
+    _open_trash(page)
+    page.wait_for_selector("#trashView .trash-row")
+    bg = _css(page, ".sidebar", "backgroundColor")
+    for sel, need in (("#trashView .trash-row .trash-name", 4.5), ("#trashView .trash-row .when", 4.5),
+                      ("#trashView .restore-btn", 4.5)):
+        fg = _css(page, sel, "color")
+        assert _contrast(fg, bg) >= need, (theme, sel, fg, bg)
+    red = _css(page, "#emptyTrash", "color")
+    (r, g, b), _ = _rgb(red)
+    assert r > g + 40 and r > b + 40, red                          # Empty trash reads as danger
+    assert _contrast(red, bg) >= 4.5, (theme, red, bg)
+    page.click("#emptyTrash")
+    _dlg(page)
+    ok = _css(page, DLG + " .dlg-ok", "backgroundColor")
+    (r, g, b), _ = _rgb(ok)
+    assert r > 150 and r > g + 60 and r > b + 60, ok
+    assert _contrast(ok, "rgb(255, 255, 255)") >= 4.5, ok          # white text on it
+    shot(page, f"index-lib-trash-{theme}.png")
+    _answer(page, False)

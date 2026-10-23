@@ -40,7 +40,7 @@ Rules for the old number A:
     elsewhere): nothing is merged, renamed or killed — logged once.
 
 Who calls sync(): status_server (every listing poll, lock="try"; before close /
-archive / delete / rename), library_cli (ensure, active — lock=False inside the
+archive / restart / trash / rename), library_cli (ensure, active — lock=False inside the
 ensure lock), idle_reaper (before a sweep). Lock order is the ensure lock, then the
 registry lock (library.update) — the same as library_cli.ensure — and the ensure
 lock is held from the check through the rename, so ensure(B) cannot start a second

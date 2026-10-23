@@ -4,8 +4,8 @@ page (open-session.sh) and the Telegram bridge.
 
     library_cli.py ensure <id>     print cs-<id> once it runs (already did, or
                                    started now, detached); for an old number of a
-                                   terminal, the terminal's cs-<number now>. Exit 0; 2 = unknown or
-                                   archived id; 3 = all MAX_ACTIVE loaded ones are
+                                   terminal, the terminal's cs-<number now>. Exit 0; 2 = unknown,
+                                   archived or trashed id; 3 = all MAX_ACTIVE loaded ones are
                                    busy, nothing could be unloaded; 4 = this
                                    conversation's uuid already runs in another
                                    claude (outside cs-<id>) — a second one on the
@@ -29,7 +29,7 @@ page (open-session.sh) and the Telegram bridge.
                                    to make room. Exit 0; 1 = tmux failed.
 
 The id arrives from a URL (/sess/?arg=<id>), so it is checked before anything
-else: 8 hex chars, present in the registry, not archived, and its uuid must be a
+else: 8 hex chars, present in the registry, not archived, not in the trash, and its uuid must be a
 real uuid that starts with the id. Only those checked pieces reach the pane
 command; the topic name (free text) never does.
 
@@ -627,7 +627,7 @@ def _lookup(sid):
     if not library.valid_id(sid):
         return None
     e = library.find_or_alias(library.load(library.LIB_FILE), sid)
-    if e is None or e.get("archived"):
+    if e is None or e.get("archived") or library.is_trashed(e):
         return None
     return e
 
@@ -642,7 +642,7 @@ def _ensure_lock():
 
 def _unknown(sid):
     shown = f" {sid}" if library.valid_id(sid) else ""
-    _say(f"unknown session{shown}: no such topic in the library (or it is archived). "
+    _say(f"unknown session{shown}: no such topic in the library (or it is archived or in the trash). "
          "Open a topic from the list on the dashboard.")
     return EXIT_UNKNOWN
 
@@ -707,7 +707,7 @@ def ensure(sid, now=None):
     limit = library.MAX_ACTIVE
     with _ensure_lock():
         sync(lock=False)                           # terminals carry their live numbers
-        e = _lookup(sid)                           # may have been archived meanwhile
+        e = _lookup(sid)                           # may have been archived or trashed meanwhile
         if e is None:
             return _unknown(sid)
         try:

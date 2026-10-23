@@ -611,3 +611,235 @@ def test_move_hold_carries_the_hold_to_the_new_number(tmp_path):
     assert lib.hold_until("b2b2b2b2", lib_file=reg) == 9000
     lib.move_hold("deadbeef", "b2b2b2b2", lib_file=reg)        # none: nothing happens
     assert lib.hold_until("b2b2b2b2", lib_file=reg) == 9000
+
+
+# ── trash (owner 2026-10-23): "not needed, kept just in case" — out of every list,
+#    never erased by itself; Restore puts it back where it was (archived stays
+#    archived); only "Empty trash" erases, and only what it was given ──
+def test_trash_and_untrash_keep_the_archive_flag():
+    L = lib.empty()
+    lib.create(L, "a", cwd="/", now=1, uuid=U1)
+    lib.create(L, "b", cwd="/", now=2, uuid=U2)
+    lib.archive(L, "bbbbbbbb")
+    assert lib.trash(L, "aaaaaaaa", now=500) is lib.find(L, "aaaaaaaa")
+    lib.trash(L, "bbbbbbbb", now=600)
+    a, b = lib.find(L, "aaaaaaaa"), lib.find(L, "bbbbbbbb")
+    assert a["trashed"] == 500 and b["trashed"] == 600
+    assert lib.is_trashed(a) and lib.is_trashed(b)
+    assert a["archived"] is False and b["archived"] is True
+    lib.trash(L, "aaaaaaaa", now=900)                      # again: the first time is kept
+    assert a["trashed"] == 500
+    lib.untrash(L, "aaaaaaaa")
+    lib.untrash(L, "bbbbbbbb")
+    assert "trashed" not in a and "trashed" not in b
+    assert not lib.is_trashed(a) and a["archived"] is False
+    assert b["archived"] is True                           # back in the archive
+    lib.untrash(L, "aaaaaaaa")                             # not trashed: nothing to do
+    for f in (lambda: lib.trash(L, "deadbeef", now=1), lambda: lib.untrash(L, "deadbeef")):
+        with pytest.raises(KeyError):
+            f()
+
+
+def test_is_trashed_only_for_a_time():
+    for v, want in ((None, False), (0, False), (False, False), (True, False), ("x", False),
+                    (1, True), (1700000000, True), (1.5, True)):
+        assert lib.is_trashed({"trashed": v}) is want, v
+    assert lib.is_trashed({}) is False
+
+
+def test_trashed_entries_leave_every_listing_search_and_resolve():
+    L = _lib3()                                            # cccccccc archived
+    lib.trash(L, "bbbbbbbb", now=9)                        # a live one
+    lib.trash(L, "cccccccc", now=8)                        # an archived one
+    ids = lambda es: [e["id"] for e in es]                 # noqa: E731
+    assert ids(lib.display_order(L, set())) == ["aaaaaaaa"]
+    assert ids(lib.display_order(L, {"bbbbbbbb"}, include_archived=True)) == ["aaaaaaaa"]
+    assert lib.search(L, "налоги") == [] and lib.search(L, "старая", include_archived=True) == []
+    assert ids(lib.search(L, "", include_archived=True)) == ["aaaaaaaa"]
+    assert lib.resolve(L, "налоги") == [] and lib.resolve(L, "bbbbbbbb") == []
+    assert lib.resolve(L, "старая", archived=True) == []
+    # the trash itself: only the trashed ones, the most recently trashed first
+    assert ids(lib.display_order(L, set(), trashed=True)) == ["bbbbbbbb", "cccccccc"]
+    lib.untrash(L, "cccccccc")
+    assert ids(lib.display_order(L, set(), include_archived=True)) == ["aaaaaaaa", "cccccccc"]
+    assert ids(lib.resolve(L, "старая", archived=True)) == ["cccccccc"]
+
+
+def test_switch_to_a_trashed_conversation_takes_it_out_of_the_trash():
+    # /resume of a trashed conversation in a live terminal: it is in use again, so it
+    # must not stay hidden (nor be erased by "Empty trash" later)
+    L = lib.empty()
+    _terminal(L, name="Scratch", now=100)
+    b = _terminal(L, name="Taxes", now=50, u=UB, archived=True)
+    lib.trash(L, "b2b2b2b2", now=60)
+    got = lib.switch(L, "a1a1a1a1", UB, True, now=700)
+    assert got is b and not lib.is_trashed(b) and "trashed" not in b
+    assert b["archived"] is False
+
+
+# ── erase: "Empty trash" removes the conversation for good ──────────────────
+def _project(tmp_path):
+    projects = tmp_path / "projects"
+    d = projects / "-home-ubuntu-pr"
+    d.mkdir(parents=True)
+    return projects, d
+
+
+def test_erase_conversation_removes_its_transcript_and_own_folder_only(tmp_path):
+    projects, d = _project(tmp_path)
+    (d / f"{U1}.jsonl").write_text("talk")
+    (d / U1 / "subagents").mkdir(parents=True)
+    (d / U1 / "subagents" / "x.jsonl").write_text("sub")
+    # neighbours that only look alike, and the same conversation in another project
+    (d / f"{U2}.jsonl").write_text("other")
+    (d / f"{U1}.jsonl.bak").write_text("keep")
+    (d / f"{U1}x").mkdir()
+    (d / U1[:8]).mkdir()
+    other = projects / "-somewhere-else"
+    other.mkdir()
+    (other / f"{U1}.jsonl").write_text("not this folder")
+    out = lib.erase_conversation(_entry(), projects_root=str(projects))
+    assert sorted(out) == sorted([str(d / f"{U1}.jsonl"), str(d / U1)])
+    assert not (d / f"{U1}.jsonl").exists() and not (d / U1).exists()
+    for keep in (d / f"{U2}.jsonl", d / f"{U1}.jsonl.bak", d / f"{U1}x", d / U1[:8],
+                 other / f"{U1}.jsonl"):
+        assert keep.exists(), keep
+
+
+def test_erase_conversation_defaults_to_the_claude_projects_dir(tmp_path, monkeypatch):
+    projects, d = _project(tmp_path)
+    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(projects))
+    (d / f"{U1}.jsonl").write_text("talk")
+    assert lib.erase_conversation(_entry()) == [str(d / f"{U1}.jsonl")]
+    assert not (d / f"{U1}.jsonl").exists()
+
+
+def test_erase_conversation_with_nothing_on_disk_is_nothing(tmp_path):
+    projects, _ = _project(tmp_path)
+    assert lib.erase_conversation(_entry(), projects_root=str(projects)) == []
+    assert lib.erase_conversation(_entry(cwd=""), projects_root=str(projects)) == []
+    assert lib.erase_conversation({"id": "aaaaaaaa", "uuid": U1}, projects_root=str(projects)) == []
+
+
+def test_erase_conversation_finds_a_long_cwds_folder(tmp_path):
+    projects = tmp_path / "projects"
+    cwd = "/home/ubuntu/" + "deep/" * 45 + "end"
+    d = projects / (("-home-ubuntu-" + "deep-" * 45 + "end")[:200] + "-cqcn6p")
+    d.mkdir(parents=True)
+    (d / f"{U1}.jsonl").write_text("talk")
+    assert lib.erase_conversation(_entry(cwd=cwd), projects_root=str(projects)) == [
+        str(d / f"{U1}.jsonl")]
+
+
+def test_erase_conversation_refuses_a_malformed_uuid(tmp_path):
+    projects, d = _project(tmp_path)
+    (d / "x.jsonl").write_text("keep")
+    for bad in ("../../etc/passwd", "", None, "aaaaaaaa", "*", f"{U1}/.."):
+        with pytest.raises(ValueError):
+            lib.erase_conversation({"id": "aaaaaaaa", "uuid": bad, "cwd": "/home/ubuntu/pr"},
+                                   projects_root=str(projects))
+    assert (d / "x.jsonl").exists()
+
+
+def test_erase_conversation_never_follows_a_link_out_of_the_projects_dir(tmp_path):
+    projects, d = _project(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "precious").write_text("keep")
+    (outside / f"{U1}.jsonl").write_text("keep")
+    # the conversation's folder is a link to somewhere else: the link goes, not what it points at
+    os.symlink(outside, d / U1)
+    os.symlink(outside / f"{U1}.jsonl", d / f"{U1}.jsonl")
+    out = lib.erase_conversation(_entry(), projects_root=str(projects))
+    assert sorted(out) == sorted([str(d / f"{U1}.jsonl"), str(d / U1)])
+    assert not os.path.lexists(d / U1) and not os.path.lexists(d / f"{U1}.jsonl")
+    assert (outside / "precious").read_text() == "keep"
+    assert (outside / f"{U1}.jsonl").read_text() == "keep"
+
+
+def test_erase_conversation_refuses_a_project_dir_that_leads_elsewhere(tmp_path):
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / f"{U1}.jsonl").write_text("keep")
+    os.symlink(outside, projects / "-home-ubuntu-pr")      # the project dir itself is a link
+    with pytest.raises(ValueError):
+        lib.erase_conversation(_entry(), projects_root=str(projects))
+    assert (outside / f"{U1}.jsonl").read_text() == "keep"
+
+
+def test_erase_conversation_leaves_a_directory_named_like_the_transcript(tmp_path):
+    projects, d = _project(tmp_path)
+    (d / f"{U1}.jsonl").mkdir()                             # not a transcript: refuse
+    (d / f"{U1}.jsonl" / "x").write_text("keep")
+    with pytest.raises(ValueError):
+        lib.erase_conversation(_entry(), projects_root=str(projects))
+    assert (d / f"{U1}.jsonl" / "x").exists()
+
+
+def test_erase_conversation_looks_in_every_folder_it_ran_in(tmp_path):
+    # review 2026-10-23: the terminal's folder was renamed or removed, so claude ran
+    # in WORKDIR (library_cli.effective_cwd) and wrote the transcript there; the
+    # caller names each folder it ran in, and each is erased with the same rules
+    projects, d = _project(tmp_path)                       # slug of /home/ubuntu/pr
+    gone = projects / "-no-such-dir"
+    gone.mkdir()
+    for p in (d, gone):
+        (p / f"{U1}.jsonl").write_text("talk")
+        (p / f"{U2}.jsonl").write_text("other")
+    (d / U1).mkdir()
+    e = _entry(cwd="/no/such/dir")
+    out = lib.erase_conversation(e, projects_root=str(projects),
+                                 cwds=["/no/such/dir", "/home/ubuntu/pr", "/home/ubuntu/pr", ""])
+    assert sorted(out) == sorted([str(gone / f"{U1}.jsonl"), str(d / f"{U1}.jsonl"), str(d / U1)])
+    assert (d / f"{U2}.jsonl").exists() and (gone / f"{U2}.jsonl").exists()
+    # without cwds: only the entry's own folder, as before
+    (d / f"{U1}.jsonl").write_text("talk")
+    assert lib.erase_conversation(e, projects_root=str(projects)) == []
+    assert (d / f"{U1}.jsonl").exists()
+
+
+def test_erase_conversation_checks_every_folder_before_removing_any(tmp_path):
+    projects, d = _project(tmp_path)
+    (d / f"{U1}.jsonl").write_text("talk")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.symlink(outside, projects / "-elsewhere")           # the second folder leads out
+    with pytest.raises(ValueError):
+        lib.erase_conversation(_entry(), projects_root=str(projects),
+                               cwds=["/home/ubuntu/pr", "/elsewhere"])
+    assert (d / f"{U1}.jsonl").read_text() == "talk"       # nothing removed
+
+
+def test_transcripts_anywhere_finds_only_that_conversations_file(tmp_path):
+    projects, d = _project(tmp_path)
+    other = projects / "-somewhere-else"
+    other.mkdir()
+    (other / f"{U1}.jsonl").write_text("talk")
+    (d / f"{U1}.jsonl.bak").write_text("x")
+    (d / f"{U2}.jsonl").write_text("x")
+    (d / U1).mkdir()
+    assert lib.transcripts_anywhere(U1, projects_root=str(projects)) == [str(other / f"{U1}.jsonl")]
+    assert lib.transcripts_anywhere(U2, projects_root=str(projects)) == [str(d / f"{U2}.jsonl")]
+    assert lib.transcripts_anywhere(U1, projects_root=str(tmp_path / "none")) == []
+    for bad in ("*", "../x", None):
+        with pytest.raises(ValueError):
+            lib.transcripts_anywhere(bad, projects_root=str(projects))
+
+
+def test_archive_refuses_a_trashed_entry():
+    # review 2026-10-23: a stale row's Archive/restore must not move a trashed one,
+    # or Restore no longer puts it back where it was
+    L = lib.empty()
+    lib.create(L, "a", cwd="/", now=1, uuid=U1)
+    lib.archive(L, "aaaaaaaa")
+    lib.trash(L, "aaaaaaaa", now=5)
+    for flag in (False, True):
+        with pytest.raises(lib.Trashed):
+            lib.archive(L, "aaaaaaaa", flag)
+    assert lib.find(L, "aaaaaaaa")["archived"] is True
+    lib.untrash(L, "aaaaaaaa")
+    assert lib.find(L, "aaaaaaaa")["archived"] is True     # back in the archive
+    lib.archive(L, "aaaaaaaa", False)                      # restored: it works again
+    assert lib.find(L, "aaaaaaaa")["archived"] is False

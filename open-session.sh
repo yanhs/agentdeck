@@ -3,11 +3,11 @@
 #   ttyd -W -a -O -i lo -p 3031 --base-path /sess bash /home/ubuntu/pr/terminal/open-session.sh
 # The page /sess/?arg=<id> runs `open-session.sh <id>` (ttyd -a passes the URL's
 # ?arg= values as arguments). So "$@" is untrusted: exactly one 8-hex id (or
-# the literal `shell`, see below) is accepted here, then library_cli.py checks it is in the registry and not
-# archived, loads the topic into tmux (unloading an idle one at the limit of 12)
+# the literal `shell`, see below) is accepted here, then library_cli.py checks it is in the registry, not
+# archived and not in the trash, loads the topic into tmux (unloading an idle one at the limit of 12)
 # and prints its tmux name; this script then attaches the tab to it.
 #
-#   library_cli exit 0 -> attach · 2 -> unknown/archived id · 3 -> all 12 busy
+#   library_cli exit 0 -> attach · 2 -> unknown/archived/trashed id · 3 -> all 12 busy
 #   · 4 -> this conversation already runs in another claude (pid/session printed)
 # library_cli prints the human-readable reason; we keep it on screen for
 # OPEN_SESSION_PAUSE seconds (default 5) before the tab's shell ends.

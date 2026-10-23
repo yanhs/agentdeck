@@ -656,6 +656,8 @@ def lib_rows(entries, live=None, legacy_paths=None, working=None):
     for e in entries:
         row = {k: e.get(k) for k in _LIB_ROW_KEYS}
         row.update({k: e[k] for k in _LIB_SWITCH_KEYS if e.get(k) is not None})
+        if library.is_trashed(e):
+            row["trashed"] = e["trashed"]           # only in the trash listing (?trash=1)
         row["archived"] = bool(e.get("archived"))
         info = live.get(e["id"])
         legacy = legacy_paths.get(e.get("uuid")) if info is None else None
@@ -667,13 +669,15 @@ def lib_rows(entries, live=None, legacy_paths=None, working=None):
     return rows
 
 
-def lib_listing(include_archived=False):
+def lib_listing(include_archived=False, trash=False):
+    """The list (never a trashed terminal); trash=True: the trash itself instead."""
     lib_sync()                                      # the page polls this every 4 s
     lib = library.load(lib_path())
     live = lib_live()
     legacy = lib_legacy()
     active = set(live) | {e["id"] for e in lib["sessions"] if e.get("uuid") in legacy}
-    entries = library.display_order(lib, active, include_archived=include_archived)
+    entries = library.display_order(lib, active, include_archived=include_archived,
+                                    trashed=trash)
     shell = lib_shell_live()
     pids = {e["id"]: live[e["id"]]["pane_pid"] for e in entries if e["id"] in live}
     if shell is not None:
@@ -733,8 +737,12 @@ def lib_post(route, body):
         killed = lib_tmux("kill-session", "-t", "=" + library.SHELL_TMUX).returncode == 0
         return {"ok": True, "killed": killed}
 
+    if route == "empty-trash":
+        return lib_empty_trash(body.get("ids"))
+
     sid = lib_id(body)
-    if route in ("rename", "archive", "close", "delete", "restart", "restart-check"):
+    if route in ("rename", "archive", "close", "restart", "restart-check",
+                 "trash", "trash-check", "untrash"):
         sid = lib_canonical(sid)                  # act on the terminal's live number
     if route == "rename":
         name = lib_clean_name(body.get("name"), required=True)
@@ -766,8 +774,6 @@ def lib_post(route, body):
         row = lib_rows([e])[0]
         row["killed"] = killed
         return row
-    if route == "delete":
-        return lib_delete(sid)
     if route == "restart":
         force = body.get("force", False)
         if not isinstance(force, bool):
@@ -777,11 +783,18 @@ def lib_post(route, body):
         # its own route, not a flag on "restart": a server older than the page
         # answers 404 here instead of taking the question for a restart
         return lib_restart(sid, False, check=True)
+    if route in ("trash", "trash-check"):
+        force = body.get("force", False)
+        if not isinstance(force, bool):
+            raise LibError(400, "force must be true or false")
+        return lib_trash(sid, force, check=route == "trash-check")
+    if route == "untrash":
+        return lib_edit(sid, lambda lib: library.untrash(lib, sid))
     raise LibError(404, "not found")
 
 
 LIB_REORDER_MAX = 10000
-DELETE_QUIET_SECONDS = 120     # no output for 2 min = idle enough to unload for delete
+DELETE_QUIET_SECONDS = 120     # 2 min of quiet: an archived terminal's (idle_reaper's window)
 ARCHIVE_BUSY_SECONDS = 15      # output this recent = working: Archive leaves it loaded
 
 
@@ -799,15 +812,6 @@ def lib_reorder(ids):
     except KeyError as e:
         raise LibError(400, f"unknown id {e.args[0]}")
     return {"ok": True}
-
-
-def lib_idle_loaded(sid, info):
-    """A loaded terminal nobody uses: no tab open and no screen output for
-    DELETE_QUIET_SECONDS (unknown output time counts as working)."""
-    if info["attached"]:
-        return False
-    last = lib_last_output(library.tmux_name(sid))
-    return last is not None and time.time() - last >= DELETE_QUIET_SECONDS
 
 
 def lib_busy_reason(sid, info, working):
@@ -837,12 +841,15 @@ def lib_archive(sid, archived):
     (lib_busy_reason): then it stays loaded, unload_pending, and idle_reaper
     unloads it once quiet (ARCHIVED_IDLE_SECONDS). The reply says which:
     unloaded true|false + reason (idle | printing | hold | background-task |
-    working | not-loaded)."""
+    working | not-loaded). A trashed one is refused (409 'trashed', checked under
+    the registry lock): a stale row must not change where Restore puts it back."""
     try:
         with library.update(lib_path()) as lib:
             e = dict(library.archive(lib, sid, archived))
     except KeyError:
         raise LibError(404, "unknown id")
+    except library.Trashed:
+        raise LibError(409, "it is in the trash; restore it first", reason="trashed")
     if not archived:
         return lib_rows([e])[0]
     live = lib_live()
@@ -863,37 +870,6 @@ def lib_archive(sid, archived):
     row["reason"] = reason
     row["unload_pending"] = info is not None and not unloaded
     return row
-
-
-def lib_delete(sid):
-    """Delete an archived, unloaded topic: drop it from the registry and move its
-    transcript into <registry dir>/trash/ (recoverable; nothing is unlinked)."""
-    def check(e):
-        if e is None:
-            raise LibError(404, "unknown id")
-        if not e.get("archived"):
-            raise LibError(409, "only archived topics can be deleted; archive it first")
-
-    check(library.find(library.load(lib_path()), sid))
-    info = lib_live().get(sid)
-    if info is not None:
-        # an archived terminal still loaded in tmux: unload it first when it is
-        # idle (no tab open, no output lately); refuse only if it is in use
-        if info["attached"]:
-            raise LibError(409, "it is open in a tab right now; close the tab first")
-        if not lib_idle_loaded(sid, info):
-            raise LibError(409, "it is working right now; try again when it is idle")
-        lib_tmux("kill-session", "-t", "=" + library.tmux_name(sid))
-    e = library.find(library.load(lib_path()), sid)
-    legacy = lib_legacy().get(e.get("uuid"))
-    if legacy:
-        raise LibError(409, f"the topic's conversation is running in {legacy}; stop it first")
-    with library.update(lib_path()) as lib:
-        e = library.find(lib, sid)
-        check(e)                                  # re-checked under the lock
-        trashed = library.trash_transcript(e, lib_file=lib_path())
-        library.delete(lib, sid)
-    return {"ok": True, "trashed": trashed}
 
 
 # ── Restart (⟳ on a loaded row): Claude starts again in the same conversation ──
@@ -957,6 +933,45 @@ def _wait_gone(procs, seconds):
         time.sleep(0.1)
 
 
+def _elsewhere_error(other):
+    pids = ", ".join(str(p) for p, _ in other)
+    return LibError(409, f"this conversation also runs in another Claude (pid {pids}); "
+                         "close that one first", reason="elsewhere")
+
+
+def _unload_locked(name, u, changed, stuck):
+    """Unload terminal tmux `name` running conversation u; the caller holds the
+    ensure lock. Refused (409) when the terminal is gone or runs another
+    conversation now (`changed`: the words for that) or when u also runs in
+    another claude. Kills the exact session, then waits for its claude by pid +
+    start time; one that ignores the hangup gets SIGTERM, then SIGKILL — only those
+    exact processes. One that still runs: 500, "<…> did not exit; it is unloaded,
+    <stuck>"."""
+    if (lib_tmux("has-session", "-t", "=" + name).returncode != 0
+            or convo_sync.pane_conversations(lib_tmux).get(name, u) != u):
+        raise LibError(409, changed, reason="changed")
+    other = library_cli.claude_elsewhere(u, name)
+    if other:
+        raise _elsewhere_error(other)
+    old = {p: t for p in _claude_pids(u)              # all in this terminal (checked above)
+           if (t := _proc_start(p)) is not None}
+    if lib_tmux("kill-session", "-t", "=" + name).returncode != 0:
+        raise LibError(409, changed, reason="changed")
+    left = _wait_gone(old, RESTART_EXIT_SECONDS)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if not left:
+            break
+        for p in _still_running(left):            # the very processes, checked again
+            try:
+                os.kill(p, sig)
+            except OSError:                       # gone meanwhile / not ours
+                pass
+        left = _wait_gone(left, RESTART_TERM_SECONDS)
+    if left:
+        raise LibError(500, f"the old Claude (pid {', '.join(map(str, sorted(left)))}) did not "
+                            f"exit; it is unloaded, {stuck}")
+
+
 def lib_restart(sid, force, check=False):
     """Unload terminal `sid` and load it again: claude starts anew on the same
     conversation and the terminal comes back loaded even with no tab open.
@@ -971,6 +986,8 @@ def lib_restart(sid, force, check=False):
     e = library.find(library.load(lib_path()), sid)
     if e is None:
         raise LibError(404, "unknown id")
+    if library.is_trashed(e):
+        raise LibError(409, "it is in the trash; restore it first", reason="trashed")
     if e.get("archived"):
         raise LibError(409, "it is archived; restore it first", reason="archived")
     info = lib_live().get(sid)
@@ -986,8 +1003,7 @@ def lib_restart(sid, force, check=False):
             raise LibError(409, "this conversation also runs in another Claude; close that one first",
                            reason="elsewhere")
     if check or not force:
-        working = sample_working({sid: info["pane_pid"]})
-        reason = lib_busy_reason(sid, info, working.get(sid, False))
+        reason = _busy_now(sid, info)
         if check:
             return {"busy": reason}
         if reason is not None:
@@ -998,31 +1014,7 @@ def lib_restart(sid, force, check=False):
     except ValueError:
         raise LibError(500, "the registry entry is corrupt (uuid)")
     with convo_sync._ensure_lock(lib_path(), True):          # library_cli's ensure lock
-        if (lib_tmux("has-session", "-t", "=" + name).returncode != 0
-                or convo_sync.pane_conversations(lib_tmux).get(name, u) != u):
-            raise LibError(409, RESTART_CHANGED, reason="changed")
-        other = library_cli.claude_elsewhere(u, name)
-        if other:
-            pids = ", ".join(str(p) for p, _ in other)
-            raise LibError(409, f"this conversation also runs in another Claude (pid {pids}); "
-                                "close that one first", reason="elsewhere")
-        old = {p: t for p in _claude_pids(u)              # all in this terminal (checked above)
-               if (t := _proc_start(p)) is not None}
-        if lib_tmux("kill-session", "-t", "=" + name).returncode != 0:
-            raise LibError(409, RESTART_CHANGED, reason="changed")
-        left = _wait_gone(old, RESTART_EXIT_SECONDS)
-        for sig in (signal.SIGTERM, signal.SIGKILL):
-            if not left:
-                break
-            for p in _still_running(left):            # the very processes, checked again
-                try:
-                    os.kill(p, sig)
-                except OSError:                       # gone meanwhile / not ours
-                    pass
-            left = _wait_gone(left, RESTART_TERM_SECONDS)
-        if left:
-            raise LibError(500, f"the old Claude (pid {', '.join(map(str, sorted(left)))}) did not "
-                                "exit; it is unloaded, nothing was started")
+        _unload_locked(name, u, RESTART_CHANGED, "nothing was started")
     env = dict(os.environ, AGENTDECK_LIBRARY=lib_path())
     try:
         r = subprocess.run([sys.executable, LIBRARY_CLI, "ensure", sid], capture_output=True,
@@ -1036,6 +1028,142 @@ def lib_restart(sid, force, check=False):
     row = lib_rows([e])[0]
     row["restarted"] = True
     return row
+
+
+def _busy_now(sid, info):
+    """lib_busy_reason of a loaded terminal, with one CPU sample of its own."""
+    working = sample_working({sid: info["pane_pid"]})
+    return lib_busy_reason(sid, info, working.get(sid, False))
+
+
+# ── Trash (🗑 on every topic row; owner 2026-10-23) ──────────────────────────
+# Archive = needed, just not now. Trash = not needed, kept just in case: a trashed
+# terminal is in no list (library.display_order), never loaded (library_cli ensure
+# refuses it), and nothing erases it by itself. Move to Trash unloads a loaded one
+# the way ⟳ does (_unload_locked, under the ensure lock); a busy one only with
+# force=true, after the page's red question. Empty trash erases for good, only on
+# the owner's word: the entries the page showed that are trashed AND run nowhere.
+TRASH_CHANGED = "it switched conversations just now; press 🗑 again"
+
+
+def lib_trash(sid, force, check=False):
+    """Move terminal `sid` to the trash: unload it if loaded, then set `trashed`.
+    Refused (409 + reason) while its conversation runs in another claude or in an
+    old numbered terminal (elsewhere), when it switched conversations while we
+    checked (changed), and — unless force — when it is busy (lib_busy_reason; an
+    open tab is not a reason: the owner pressed 🗑). check=True (POST trash-check)
+    touches nothing and answers {"busy": reason | None}. Again on a trashed one:
+    nothing changes. -> the row, + unloaded: whether it was loaded and now is not."""
+    e = library.find(library.load(lib_path()), sid)
+    if e is None:
+        raise LibError(404, "unknown id")
+    if library.is_trashed(e):
+        return {"busy": None} if check else dict(lib_rows([e])[0], unloaded=False)
+    try:
+        _, u = library_cli.checked_entry(e)
+    except ValueError:
+        raise LibError(500, "the registry entry is corrupt (uuid)")
+    name = library.tmux_name(sid)
+    legacy = lib_legacy().get(u)
+    if legacy:
+        raise LibError(409, f"its conversation is running in the old terminal {legacy}; "
+                            "stop it there first", reason="elsewhere")
+    info = lib_live().get(sid)
+    if check:
+        other = library_cli.claude_elsewhere(u, name)
+        if other:
+            raise _elsewhere_error(other)
+    if info is not None and (check or not force):
+        reason = _busy_now(sid, info)
+        if check:
+            return {"busy": reason}
+        if reason is not None:
+            raise LibError(409, f"{BUSY_WORDS[reason]}; send force=true to move it to the "
+                                "trash anyway", reason=reason)
+    if check:
+        return {"busy": None}
+    with convo_sync._ensure_lock(lib_path(), True):          # nothing loads it meanwhile
+        unloaded = lib_tmux("has-session", "-t", "=" + name).returncode == 0
+        if unloaded:
+            if info is None:                      # loaded since we looked: not what was asked
+                raise LibError(409, TRASH_CHANGED, reason="changed")
+            _unload_locked(name, u, TRASH_CHANGED, "it was not moved to the trash")
+        else:
+            other = library_cli.claude_elsewhere(u, name)
+            if other:
+                raise _elsewhere_error(other)
+        try:
+            with library.update(lib_path()) as lib:
+                e = dict(library.trash(lib, sid, now=int(time.time())))
+        except KeyError:
+            raise LibError(404, "unknown id")
+    row = lib_rows([e])[0]
+    row["unloaded"] = unloaded
+    return row
+
+
+EMPTY_TRASH_REASONS = ("unknown", "not-trashed", "running", "corrupt", "erase-failed",
+                       "left-on-disk")
+
+
+def lib_empty_trash(ids):
+    """Erase for good the trashed entries among `ids` (the ones the page showed):
+    each one's transcript and its own folder (library.erase_conversation), then its
+    registry entry. Skipped, with a reason (EMPTY_TRASH_REASONS): an id not in the
+    registry or not in the trash, and one whose conversation runs anywhere — loaded,
+    in another claude, in an old numbered terminal. Erased where claude ran it: the
+    entry's folder and the one the pane falls back to when that folder is gone
+    (library_cli.effective_cwd). Never reported erased while a copy of the
+    transcript is still on disk in some other project dir: that one is kept in the
+    trash, nothing removed ('left-on-disk'). Under the ensure lock, then the
+    registry lock (the order library_cli.ensure and convo_sync take them).
+    -> {"erased": [ids], "skipped": [{id, reason}]}"""
+    if not isinstance(ids, list) or len(ids) > LIB_REORDER_MAX:
+        raise LibError(400, "ids must be a list")
+    if not all(library.valid_id(i) for i in ids):
+        raise LibError(400, "invalid id")
+    erased, skipped = [], []
+    if not ids:
+        return {"erased": erased, "skipped": skipped}
+    legacy = lib_legacy()
+    with convo_sync._ensure_lock(lib_path(), True):
+        live = lib_live()
+        with library.update(lib_path()) as lib:
+            for sid in dict.fromkeys(ids):        # each once, in the page's order
+                e = library.find(lib, sid)
+                if e is None or not library.is_trashed(e):
+                    skipped.append({"id": sid, "reason": "unknown" if e is None else "not-trashed"})
+                    continue
+                try:
+                    _, u = library_cli.checked_entry(e)
+                except ValueError:
+                    skipped.append({"id": sid, "reason": "corrupt"})
+                    continue
+                if sid in live or u in legacy or library_cli.claude_processes(u):
+                    skipped.append({"id": sid, "reason": "running"})
+                    continue
+                cwds = [e.get("cwd"), library_cli.effective_cwd(e)]
+                try:
+                    root = os.path.abspath(library.claude_projects_root())
+                    own = {os.path.dirname(library.transcript_file(root, c, u))
+                           for c in cwds if isinstance(c, str) and c}
+                    if any(os.path.dirname(p) not in own for p in library.transcripts_anywhere(u)):
+                        convo_sync.log(f"empty trash: {sid} kept: its transcript is in another project dir")
+                        skipped.append({"id": sid, "reason": "left-on-disk"})
+                        continue
+                    library.erase_conversation(e, cwds=cwds)
+                    left = library.transcripts_anywhere(u)
+                except (OSError, ValueError) as ex:
+                    convo_sync.log(f"empty trash: {sid} not erased: {str(ex)[:200]}")
+                    skipped.append({"id": sid, "reason": "erase-failed"})
+                    continue
+                if left:                                  # never "erased" with a copy on disk
+                    convo_sync.log(f"empty trash: {sid} kept: {len(left)} transcript(s) left")
+                    skipped.append({"id": sid, "reason": "left-on-disk"})
+                    continue
+                library.delete(lib, sid)
+                erased.append(sid)
+    return {"erased": erased, "skipped": skipped}
 
 
 # ── Server page: GET /api/server (see server_status.py) ─────────────────────
@@ -1071,9 +1199,9 @@ class Handler(BaseHTTPRequestHandler):
         if self._route() != LIB_ROUTE:
             return self._lib_json(404, {"error": "not found"})
         qs = parse_qs(urlparse(self.path).query)
-        include = qs.get("archived", [""])[0].lower() in ("1", "true", "yes")
+        yes = lambda k: qs.get(k, [""])[0].lower() in ("1", "true", "yes")   # noqa: E731
         try:
-            self._lib_json(200, lib_listing(include_archived=include))
+            self._lib_json(200, lib_listing(include_archived=yes("archived"), trash=yes("trash")))
         except Exception as e:
             self._lib_json(500, {"error": str(e)[:200]})
 

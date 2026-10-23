@@ -12,6 +12,12 @@ recently used idle one (never a working one, never one with a tab open).
 Unloading loses nothing: the conversation is on disk and `claude --resume`
 continues it.
 
+Archive = needed, just not now. Trash (`trashed`: when) = not needed, kept just in
+case: a trashed entry is in no list, search or resolve (display_order(trashed=True)
+lists the trash itself), it is never loaded, and nothing erases it by itself — only
+"Empty trash" (status_server) does, with erase_conversation(). untrash() puts it back
+where it was: an archived one stays archived.
+
 Only status_server writes the registry at runtime (through update(), which
 locks and replaces the file atomically); scripts read it.
 """
@@ -165,15 +171,45 @@ def touch(lib, sid, now):
     return e
 
 
+class Trashed(ValueError):
+    """The entry is in the trash: restore it (untrash) before archiving or
+    unarchiving it, so that Restore still puts it back where it was."""
+
+
 def archive(lib, sid, archived=True):
+    """Set the archive flag (KeyError if unknown, Trashed if in the trash: checked
+    here, under the caller's registry lock, so a stale button can't move it)."""
     e = _get(lib, sid)
+    if is_trashed(e):
+        raise Trashed(f"session {sid} is in the trash")
     e["archived"] = bool(archived)
+    return e
+
+
+def is_trashed(e):
+    """In the trash: `trashed` holds when it was put there (a unix time)."""
+    t = e.get("trashed")
+    return isinstance(t, (int, float)) and not isinstance(t, bool) and t > 0
+
+
+def trash(lib, sid, now):
+    """Put the entry in the trash (KeyError if unknown); again = the first time kept.
+    The archive flag is left as it is, so untrash() puts it back where it was."""
+    e = _get(lib, sid)
+    if not is_trashed(e):
+        e["trashed"] = int(now)
+    return e
+
+
+def untrash(lib, sid):
+    e = _get(lib, sid)
+    e.pop("trashed", None)
     return e
 
 
 def delete(lib, sid):
     """Remove the entry from the registry (KeyError if unknown). Callers only
-    delete archived, unloaded topics; the transcript goes to trash_transcript()."""
+    delete trashed topics that run nowhere, after erase_conversation()."""
     e = _get(lib, sid)
     lib["sessions"].remove(e)
     return e
@@ -208,8 +244,9 @@ def switch(lib, old, new_uuid, old_has_messages, now):
       terminal on (A's name, folder, created, last_used, archived, place); A stays
       as its own row, "… (earlier)", out of the manual order.
     - B already in the library (/resume of a listed conversation): B is brought
-      back (out of the archive) with its own name; A goes (its number becomes an
-      alias of B) when it never held a conversation, else stays as it is.
+      back (out of the archive and the trash: it is in use again) with its own
+      name; A goes (its number becomes an alias of B) when it never held a
+      conversation, else stays as it is.
     B's number taken by another conversation (an 8-hex collision) -> ValueError,
     nothing changed. Every entry keeps id == uuid[:8]."""
     if not (isinstance(new_uuid, str) and _UUID.fullmatch(new_uuid)):
@@ -235,6 +272,7 @@ def switch(lib, old, new_uuid, old_has_messages, now):
         lib["sessions"].insert(lib["sessions"].index(a), b)
         return b
     b.update(archived=False, last_used=now, **moved)
+    b.pop("trashed", None)
     if not old_has_messages:
         lib["sessions"].remove(a)
         _with_aliases(b, [old] + list(a.get("aliases") or []))
@@ -375,12 +413,68 @@ def trash_transcript(e, lib_file=None, projects_root=None):
     return out
 
 
+# ── Empty trash: erased for good ────────────────────────────────────────────
+def erase_conversation(e, projects_root=None, cwds=None):
+    """Erase the conversation of entry `e` for good — "Empty trash" only: its
+    transcript <projects>/<project dir>/<uuid>.jsonl (library.transcript_file) and
+    that conversation's own folder <uuid>/ next to it (subagents, tool results) if
+    there is one, in the project dir of each folder in `cwds` — the folders claude
+    ran it in (default: the entry's own cwd; the caller adds the one the pane falls
+    back to when that folder is gone). Nothing else: no glob, nothing outside those
+    project dirs. A link is removed itself, never followed; a project dir that is a
+    link leading elsewhere and a transcript that is a folder are refused (ValueError)
+    — every folder is checked first, so then nothing at all is removed.
+    Returns the paths removed ([] when there was nothing on disk)."""
+    u = e.get("uuid")
+    if not (isinstance(u, str) and _UUID.fullmatch(u)):
+        raise ValueError(f"bad uuid {u!r}")
+    root = os.path.abspath(projects_root or claude_projects_root())
+    targets = []
+    for cwd in dict.fromkeys(cwds if cwds is not None else [e.get("cwd")]):
+        if not isinstance(cwd, str) or not cwd:
+            continue
+        path = transcript_file(root, cwd, u)
+        d = os.path.dirname(path)
+        if os.path.dirname(d) != root:
+            raise ValueError(f"{path} is not in a project dir of {root}")
+        if not os.path.lexists(d) or path in targets:
+            continue
+        if os.path.realpath(d) != os.path.join(os.path.realpath(root), os.path.basename(d)):
+            raise ValueError(f"{d} leads out of {root}; nothing erased")
+        if os.path.isdir(path) and not os.path.islink(path):
+            raise ValueError(f"{path} is a folder, not a transcript; nothing erased")
+        targets.append(path)
+    out = []
+    for path in targets:
+        folder = os.path.join(os.path.dirname(path), u)
+        if os.path.lexists(path):
+            os.unlink(path)                        # a link: the link itself
+            out.append(path)
+        if os.path.islink(folder):
+            os.unlink(folder)
+            out.append(folder)
+        elif os.path.isdir(folder):
+            shutil.rmtree(folder)                  # removes links inside, never follows them
+            out.append(folder)
+    return out
+
+
+def transcripts_anywhere(u, projects_root=None):
+    """Every <projects>/<any project dir>/<u>.jsonl still on disk — read only, to
+    tell "erased" from "a copy is left" (claude resumed it in another folder)."""
+    if not (isinstance(u, str) and _UUID.fullmatch(u)):
+        raise ValueError(f"bad uuid {u!r}")
+    root = os.path.abspath(projects_root or claude_projects_root())
+    return sorted(p for p in glob.glob(os.path.join(glob.escape(root), "*", f"{u}.jsonl"))
+                  if os.path.lexists(p))
+
+
 # ── search / resolve / order ────────────────────────────────────────────────
 def search(lib, text, include_archived=False):
     q = (text or "").strip().casefold()
     out = []
     for e in lib["sessions"]:
-        if e.get("archived") and not include_archived:
+        if is_trashed(e) or (e.get("archived") and not include_archived):
             continue
         if not q or q in e["name"].casefold() or e["id"].startswith(q):
             out.append(e)
@@ -389,11 +483,13 @@ def search(lib, text, include_archived=False):
 
 def resolve(lib, text, archived=False):
     """For `/use <text>`: exact id, else id prefix, else name substring — among
-    the topics outside the archive, or (archived=True) only among the archived."""
+    the topics outside the archive, or (archived=True) only among the archived.
+    Never a trashed one."""
     q = (text or "").strip().casefold()
     if not q:
         return []
-    live = [e for e in lib["sessions"] if bool(e.get("archived")) == bool(archived)]
+    live = [e for e in lib["sessions"]
+            if bool(e.get("archived")) == bool(archived) and not is_trashed(e)]
     for rule in (lambda e: e["id"] == q or q in (e.get("aliases") or ()),
                  lambda e: e["id"].startswith(q),
                  lambda e: q in e["name"].casefold()):
@@ -416,8 +512,14 @@ def order_key(e, active_ids):
     return (e["id"] not in active_ids, 1, -(e.get("last_used") or 0))
 
 
-def display_order(lib, active_ids, include_archived=False):
-    rows = [e for e in lib["sessions"] if include_archived or not e.get("archived")]
+def display_order(lib, active_ids, include_archived=False, trashed=False):
+    """The list in order_key order, never a trashed entry; trashed=True: the trash
+    itself (only the trashed ones, archived or not), most recently trashed first."""
+    if trashed:
+        rows = [e for e in lib["sessions"] if is_trashed(e)]
+        return sorted(rows, key=lambda e: -e["trashed"])
+    rows = [e for e in lib["sessions"]
+            if not is_trashed(e) and (include_archived or not e.get("archived"))]
     return sorted(rows, key=lambda e: order_key(e, active_ids))
 
 

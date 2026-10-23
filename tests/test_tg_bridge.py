@@ -2709,3 +2709,77 @@ def test_selection_follows_a_resume_back_without_looping(world):
         library.switch(L, "c0ffee00", U1, True, now=200)
     assert library.find(library.load(world.lib), "aaaa1111")["prev_id"] == "c0ffee00"
     assert tb.resolve_current(CHAT) == "aaaa1111"
+
+
+# --- the trash (owner 2026-10-23): a trashed terminal is out of every list and is
+#     never loaded or typed into until it is restored on the dashboard ---------------
+
+def _trash(world, sid):
+    with library.update(world.lib) as L:
+        library.trash(L, sid, now=500)
+
+
+def test_trashed_terminals_are_in_no_menu_list_or_search(world):
+    world.add("live one", uuid=U1)
+    world.add("binned live", uuid=U2)
+    world.add("binned archived", uuid=U3, archived=True)
+    _trash(world, "bbbb2222")
+    _trash(world, "c0ffee00")
+    text, markup = run_cmd(tb.cmd_use, [])[-1]
+    assert _callbacks(markup) == ["use:aaaa1111"]
+    assert "/archive" not in text                              # the archive is empty now
+    assert run_cmd(tb.cmd_archive, [])[-1][1] is None           # the archive menu too
+    listing = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
+    assert "binned" not in listing and "archive" not in listing.lower()
+    for q in ("binned", "bbbb", "c0ffee00"):
+        text, markup = run_cmd(tb.cmd_use, [q])[-1]
+        assert markup is None and "No terminal" in text, q
+        assert run_cmd(tb.cmd_archive, [q])[-1][1] is None, q
+    assert tb.get_current(CHAT) is None and world.ensured() == []
+
+
+def test_a_tap_on_a_stale_button_of_a_trashed_terminal_does_nothing(world, monkeypatch):
+    world.add("binned", uuid=U1)
+    world.add("binned archived", uuid=U2, archived=True)
+    _trash(world, "aaaa1111")
+    _trash(world, "bbbb2222")
+    rec = _reread_env(world, monkeypatch)
+    assert "No such terminal" in run_cb(tb.on_use_cb, "use:aaaa1111")[-1][0]
+    assert "No such terminal" in run_cb_bg(tb.on_archive_cb, "arch:bbbb2222")[-1][0]
+    e = library.find(library.load(world.lib), "bbbb2222")
+    assert library.is_trashed(e) and e["archived"] is True     # not restored by a tap
+    assert tb.get_current(CHAT) is None and world.ensured() == [] and _nothing_typed(rec)
+
+
+def test_restore_topic_rechecks_the_trash_under_the_lock(world, monkeypatch):
+    # review 2026-10-23: trashed on the dashboard between the bridge's read and its
+    # write — the archive flag must stay, so the dashboard's Restore puts it back
+    world.add("binned archived", uuid=U2, archived=True)
+    stale = dict(library.find(library.load(world.lib), "bbbb2222"))   # read before the trash
+    _trash(world, "bbbb2222")
+    monkeypatch.setattr(tb, "topic_entry", lambda sid, include_archived=False: dict(stale))
+    assert tb.restore_topic("bbbb2222") == (None, False)
+    e = library.find(library.load(world.lib), "bbbb2222")
+    assert library.is_trashed(e) and e["archived"] is True
+
+
+def test_text_to_a_trashed_current_terminal_says_so_and_is_not_sent(world, monkeypatch):
+    world.add("binned", uuid=U1)
+    tb.set_current(CHAT, "aaaa1111")
+    _trash(world, "aaaa1111")                                  # trashed on the dashboard
+    sink, streamed = _deliver(world, monkeypatch, "hello")
+    assert not [e for e in world.log if e[0] == "send"] and not streamed
+    assert world.ensured() == []
+    assert "trash" in sink[-1][0] and "binned" in sink[-1][0]
+    head = "\n".join(t for t, _ in run_cmd(tb.cmd_list, [])).splitlines()[0]
+    assert head.startswith("Current: «binned»") and "trash" in head
+
+
+def test_use_number_of_a_trashed_migrated_topic_never_starts_the_old_slot(world, monkeypatch):
+    world.add("app - PIPE", uuid=U1, legacy_slot=6)
+    _trash(world, "aaaa1111")
+    started = _no_legacy_start(monkeypatch)
+    replies = run_cmd(tb.cmd_use, ["6"])
+    assert started == [] and world.ensured() == []
+    assert tb.get_current(CHAT) != "6"
+    assert "trash" in replies[-1][0]

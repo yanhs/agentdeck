@@ -366,6 +366,25 @@ def test_ensure_archived_id_exits_2(deck):
     assert not deck.server_up()
 
 
+@pytest.mark.parametrize("archived", [False, True])
+def test_ensure_trashed_id_exits_2_and_starts_nothing(deck, archived):
+    # the trash (owner 2026-10-23): a trashed terminal is never loaded again until
+    # it is restored — not from a tab, a link or the Telegram bridge
+    e = deck.add("в корзине", uuid=U1, archived=archived)
+    deck.transcript(e)
+    with library.update(deck.lib) as L:
+        library.trash(L, e["id"], now=int(time.time()))
+    r = deck.cli("ensure", e["id"])
+    assert r.returncode == 2 and "unknown session" in r.stderr and "trash" in r.stderr
+    assert not deck.server_up() and deck.calls() == []
+    assert deck.cli("pane-cmd", e["id"]).returncode == 2
+    with library.update(deck.lib) as L:                    # restored: it opens again
+        library.untrash(L, e["id"])
+        library.archive(L, e["id"], False)
+    r = deck.cli("ensure", e["id"])
+    assert r.returncode == 0, r.stderr
+
+
 def test_ensure_refuses_registry_entry_with_corrupt_uuid(deck):
     deck.add("ok", uuid=U1)
     with library.update(deck.lib) as L:

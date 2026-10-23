@@ -322,36 +322,38 @@
     .card-btn.compact:active { transform: scale(0.94); }
     /* ⟳ Restart (loaded rows only); pulses while the server restarts it */
     .card-btn.restart.busy { cursor: progress; animation: pulse 1s ease-in-out infinite; }
-    /* ⟳'s one question: plain for an idle terminal, red with "!" for a busy one */
-    #restartDlg {
+    .trash-btn.busy { cursor: progress; color: var(--red-fg); animation: pulse 1s ease-in-out infinite; }
+    /* The page's one question (⟳ Restart, 🗑 Move to Trash, Empty trash): plain,
+       or red with "!" (.danger) when the answer interrupts work or erases for good */
+    #confirmDlg {
       width: min(360px, calc(100vw - 32px)); max-width: none; padding: 18px 18px 14px;
       margin: auto;                     /* the page's * { margin: 0 } would pin it top-left */
       border: 1px solid rgba(var(--fg-rgb),0.14); border-radius: 12px;
       background: var(--menu-bg); color: var(--text); box-shadow: var(--menu-shadow);
       font-family: 'Inter', sans-serif;
     }
-    #restartDlg::backdrop { background: rgba(0,0,0,0.45); }
-    #restartDlg .dlg-head { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--text-hi); }
-    #restartDlg .dlg-icon { display: none; }
-    #restartDlg p { margin: 8px 0 16px; font-size: 13px; line-height: 1.45; color: var(--dim); }
-    #restartDlg .dlg-btns { display: flex; justify-content: flex-end; gap: 8px; }
-    #restartDlg .dlg-btns button {
+    #confirmDlg::backdrop { background: rgba(0,0,0,0.45); }
+    #confirmDlg .dlg-head { display: flex; align-items: center; gap: 10px; font-size: 15px; color: var(--text-hi); }
+    #confirmDlg .dlg-icon { display: none; }
+    #confirmDlg p { margin: 8px 0 16px; font-size: 13px; line-height: 1.45; color: var(--dim); }
+    #confirmDlg .dlg-btns { display: flex; justify-content: flex-end; gap: 8px; }
+    #confirmDlg .dlg-btns button {
       min-height: 38px; padding: 0 14px; border-radius: 8px; cursor: pointer;
       font: 500 13px 'Inter', sans-serif; color: var(--text-2);
       background: transparent; border: 1px solid rgba(var(--fg-rgb),0.14);
     }
     /* .dlg-btns in the selector: it must outweigh the transparent button rule above;
        #4f46e5 keeps white text readable (AA) in both themes */
-    #restartDlg .dlg-btns .dlg-ok { background: #4f46e5; border-color: #4f46e5; color: #fff; }
-    #restartDlg .dlg-btns button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    #restartDlg.busy { border: 2px solid var(--red); }
-    #restartDlg.busy .dlg-head { color: var(--red-fg); }
-    #restartDlg.busy .dlg-icon {
+    #confirmDlg .dlg-btns .dlg-ok { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+    #confirmDlg .dlg-btns button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    #confirmDlg.danger { border: 2px solid var(--red); }
+    #confirmDlg.danger .dlg-head { color: var(--red-fg); }
+    #confirmDlg.danger .dlg-icon {
       display: inline-flex; align-items: center; justify-content: center; flex: none;
       width: 28px; height: 28px; border-radius: 50%; background: #dc2626; color: #fff;
       font-weight: 700; font-size: 17px;
     }
-    #restartDlg.busy .dlg-btns .dlg-ok { background: #dc2626; border-color: #dc2626; color: #fff; }
+    #confirmDlg.danger .dlg-btns .dlg-ok { background: #dc2626; border-color: #dc2626; color: #fff; }
 
     .proj-edit {
       font-size: 0.72rem;
@@ -423,22 +425,24 @@
     html.touch .mv-btn { display: inline-block; }
     @media (hover: none) and (pointer: coarse) { .mv-btn { display: inline-block; } }
 
-    /* Delete: archived rows only, in the place of Archive; red. */
-    .del-btn {
+    /* 🗑 Move to Trash: every terminal row, after Archive (on an archived row, in its place). */
+    .trash-btn {
       flex: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 17px;
       height: 15px;
-      padding: 0 4px;
-      font: 400 0.56rem 'Inter', system-ui, sans-serif;
-      line-height: 13px;
-      color: var(--red);
+      padding: 0;
+      color: var(--ghost);
       background: transparent;
-      border: 1px solid rgba(239,68,68,0.35);
+      border: 1px solid rgba(var(--fg-rgb),0.06);
       border-radius: 3px;
       cursor: pointer;
-      white-space: nowrap;
       transition: all 0.12s;
     }
-    .del-btn:hover { color: var(--red-fg-hi); border-color: rgba(239,68,68,0.6); background: rgba(239,68,68,0.12); }
+    .trash-btn svg { width: 9px; height: 9px; display: block; }
+    .trash-btn:hover { color: var(--red-fg); border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.06); }
 
     /* Archived rows (only with "Show archived" on): below the rest, greyed. */
     .card.archived { opacity: 0.5; }
@@ -460,6 +464,38 @@
     }
     .arch-toggle:hover { color: var(--dim); }
     .arch-toggle.on { color: var(--accent-on); }
+    /* "Show archived" and "Show trash" share the list's last line */
+    .list-foot { display: flex; align-items: center; }
+    .list-foot .arch-toggle { width: auto; flex: none; }
+
+    /* The trash ("Show trash"): below the list, its own rows — not terminal rows */
+    .trash-view { border-top: 1px dashed rgba(var(--fg-rgb),0.12); padding-bottom: 4px; }
+    .trash-head { display: flex; align-items: center; gap: 6px; padding: 5px 7px 3px; }
+    .trash-title { flex: 1; min-width: 0; font: 500 0.62rem 'Inter', system-ui, sans-serif; color: var(--dim); }
+    .trash-row {
+      display: flex; align-items: center; gap: 6px; padding: 4px 7px;
+      border-bottom: 1px solid rgba(var(--fg-rgb),0.04);
+    }
+    .trash-info { flex: 1; min-width: 0; }
+    .trash-name {
+      font-size: 0.72rem; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    /* code · when trashed: wraps in the narrow sidebar rather than losing the time */
+    .trash-row .when {
+      font: 400 0.56rem 'JetBrains Mono', monospace; color: var(--dim);
+      overflow-wrap: anywhere;
+    }
+    .restore-btn, .empty-trash {
+      flex: none; height: 18px; padding: 0 6px; border-radius: 3px; cursor: pointer;
+      font: 500 0.58rem 'Inter', system-ui, sans-serif; white-space: nowrap; transition: all 0.12s;
+    }
+    .restore-btn { color: var(--accent-fg); background: rgba(99,102,241,0.08); border: 1px solid rgba(129,140,248,0.35); }
+    .restore-btn:hover { background: rgba(99,102,241,0.18); }
+    .empty-trash { color: var(--red-fg); background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.35); }
+    .empty-trash:hover { background: rgba(239,68,68,0.14); }
+    .trash-empty { padding: 4px 7px 6px; font-size: 0.62rem; color: var(--faint); }
+    .trash-empty.failed { color: var(--red-fg); }
 
     /* ── Add buttons (inside the sidebar header, next to "Agents") ── */
     .header-add {
@@ -656,7 +692,7 @@
       .new-form button { width: 26px; height: 26px; font-size: 0.8rem; }
       .proj-edit { font-size: 16px; }
       /* One row per session: the card's inner rows dissolve into a single
-         flex line — [name……][code][⟳][✎][Archive][●] (⟳ on loaded rows) */
+         flex line — [name……][code][⟳][✎][Archive][🗑][●] (⟳ on loaded rows) */
       .card { display: flex; align-items: center; padding: 3px 8px; cursor: pointer; gap: 5px; }
       .card.sel { padding-left: 6px; }
       .card-top, .card-btns, .card-row2 { display: contents; }
@@ -665,6 +701,12 @@
       .card .sid { flex: none; margin-right: 0; }
       .card-btn.edit, .card-btn.restart { order: 3; }
       .arch-btn { order: 4; height: 20px; line-height: 18px; font-size: 0.64rem; padding: 0 5px; }
+      .trash-btn { order: 4; width: 20px; height: 20px; }
+      .trash-btn svg { width: 11px; height: 11px; }
+      /* thumb-sized in the trash view */
+      .restore-btn, .empty-trash { height: 28px; padding: 0 10px; font-size: 0.7rem; }
+      .trash-name { font-size: 0.8rem; }
+      .trash-row .when { font-size: 0.62rem; }
       .dot { order: 5; }
       .card-btn { visibility: visible; width: 20px; height: 20px; line-height: 18px; font-size: 0.8rem; }
       .shell-close, .tasks-close, .server-close { order: 3; width: 20px; height: 20px; line-height: 18px; font-size: 0.7rem; }
@@ -760,7 +802,7 @@
       </div>
     </div>
     <div class="lib-empty" id="libEmpty" hidden></div>
-    <div class="agent-list" id="list"><button type="button" class="arch-toggle" id="showArchived" title="Show archived terminals (greyed) so you can restore them">Show archived</button></div>
+    <div class="agent-list" id="list"><div class="list-foot" id="listFoot"><button type="button" class="arch-toggle" id="showArchived" title="Show archived terminals (greyed) so you can restore them">Show archived</button><button type="button" class="arch-toggle" id="showTrash" title="Show the trash: terminals you moved there, to restore them or erase them for good">Show trash</button></div><div class="trash-view" id="trashView" hidden><div class="trash-head"><span class="trash-title" id="trashTitle">Trash</span><button type="button" class="empty-trash" id="emptyTrash" hidden title="Erase every conversation shown here for good">Empty trash</button></div><div id="trashList"></div><div class="trash-empty" id="trashEmpty" hidden>The trash is empty</div></div></div>
   </div>
   <div class="main">
     <div class="topbar no-term" id="topbar">
@@ -782,9 +824,9 @@
     <div class="wrap" id="wrap">
       <div class="ph" id="ph">Pick a terminal on the left</div>
     </div>
-    <dialog id="restartDlg" aria-labelledby="restartDlgTitle" aria-describedby="restartDlgText">
-      <div class="dlg-head"><span class="dlg-icon" aria-hidden="true">!</span><b id="restartDlgTitle"></b></div>
-      <p id="restartDlgText"></p>
+    <dialog id="confirmDlg" aria-labelledby="confirmDlgTitle" aria-describedby="confirmDlgText">
+      <div class="dlg-head"><span class="dlg-icon" aria-hidden="true">!</span><b id="confirmDlgTitle"></b></div>
+      <p id="confirmDlgText"></p>
       <div class="dlg-btns"><button type="button" class="dlg-cancel">Cancel</button><button type="button" class="dlg-ok">Restart</button></div>
     </dialog>
     <div class="mob-input" id="mobInput">
@@ -817,6 +859,7 @@
                                // before it is stale and must not overwrite it
     const rows = new Map();    // code -> row element (kept across polls)
     const _restarting = new Set();   // codes with a ⟳ restart in flight
+    const _trashing = new Set();     // codes with a 🗑 Move to Trash in flight
     const list = document.getElementById('list');
     const search = document.getElementById('search');
     const libTools = document.getElementById('libTools');
@@ -826,6 +869,9 @@
     const newOk = document.getElementById('newOk');
     const libEmpty = document.getElementById('libEmpty');
     const archToggle = document.getElementById('showArchived');
+    const listFoot = document.getElementById('listFoot');
+    const trashToggle = document.getElementById('showTrash');
+    const trashView = document.getElementById('trashView');
     /* ── Tasks: the task board as a tab in the viewer (the T button). While it
        is open a "Tasks" row is pinned at the very top; ✕ closes it. Open/closed
        is remembered per browser. `sel === TASKS` = the board is shown. */
@@ -1009,11 +1055,11 @@
           <button type="button" class="mv-btn up" title="Move up" aria-label="Move up">▲</button>
           <button type="button" class="mv-btn down" title="Move down" aria-label="Move down">▼</button>
           <button type="button" class="arch-btn">Archive</button>
-          <button type="button" class="del-btn" hidden title="Delete this archived terminal (the transcript is moved to trash)">Delete</button>
+          <button type="button" class="trash-btn" title="Move to Trash" aria-label="Move to Trash"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h11M6 4.5V2.8h4v1.7M4 4.5l.8 9h6.4l.8-9M6.8 7v4M9.2 7v4"/></svg></button>
         </div>`;
       c.querySelector('.sid').textContent = id;
       c.addEventListener('click', e => {
-        if (e.target.closest('.card-btn, .arch-btn, .del-btn, .mv-btn, input')) return;
+        if (e.target.closest('.card-btn, .arch-btn, .trash-btn, .mv-btn, input')) return;
         if (Date.now() - _dragEndedAt < 300) return;     // the end of a drag is not a click
         if (e.target.closest('.sid')) { openTasks(id); return; }   // code → its tasks (archived too)
         const s = byId(id);
@@ -1067,9 +1113,9 @@
         _dragEndedAt = Date.now();
         for (const el of rows.values()) el.classList.remove('drop-before', 'drop-after');
       });
-      c.querySelector('.del-btn').addEventListener('click', e => {
+      c.querySelector('.trash-btn').addEventListener('click', e => {
         e.stopPropagation();
-        del(id);                              // one click: trash keeps the transcript
+        moveToTrash(id);                      // one question, then the server unloads it
       });
       rows.set(id, c);
       return c;
@@ -1083,9 +1129,8 @@
       c.classList.toggle('first-off', firstOff);
       c.classList.toggle('first-arch', firstArch);
       const ab = c.querySelector('.arch-btn');
-      // archived rows: Delete instead of Archive; a click on the row restores it
+      // archived rows: no Archive (🗑 takes its place); a click on the row restores it
       ab.hidden = !!s.archived;
-      c.querySelector('.del-btn').hidden = !s.archived;
       ab.title = 'Archive and unload this terminal (the conversation stays on disk)';
       // ⟳ only on a loaded terminal of our own (not one still in an old numbered
       // terminal); taken out of the row otherwise, not just hidden. "In the row" is
@@ -1094,7 +1139,8 @@
       if (s.active && !s.archived && typeof s.legacy_path !== 'string') {
         if (!rb.parentNode) c.querySelector('.card-btn.edit').before(rb);
       } else if (rb.parentNode) rb.remove();
-      setRestartBusy(rb, _restarting.has(s.id));
+      setBtnBusy(rb, _restarting.has(s.id));
+      setBtnBusy(c.querySelector('.trash-btn'), _trashing.has(s.id));
       const pe = c.querySelector('.proj');
       if (!pe.querySelector('input')) pe.textContent = s.name;
       pe.title = s.name;
@@ -1169,7 +1215,11 @@
                                                 : 'No terminals yet — click “＋ New terminal”';
       archToggle.textContent = showArch ? 'Hide archived' : 'Show archived';
       archToggle.classList.toggle('on', showArch);
-      if (list.lastChild !== archToggle) list.appendChild(archToggle);   // always at the bottom
+      // always at the bottom: the toggles, then the trash view
+      if (list.lastChild !== trashView || trashView.previousSibling !== listFoot) {
+        list.appendChild(listFoot);
+        list.appendChild(trashView);
+      }
     }
 
     archToggle.addEventListener('click', () => {
@@ -1341,33 +1391,43 @@
        it turned busy after the plain question does the server's 409 bring the
        red one up. If it is the terminal in the viewer, its frame is opened again
        so the tab attaches cleanly. ── */
-    const RESTART_BUSY = {printing: 'it is printing right now', hold: 'a timer is pending',
-                          'background-task': 'a background task is running',
-                          working: 'it is working'};
-    // the red title says what the terminal is doing, not always "working"
-    const RESTART_BUSY_TITLE = {printing: 'is working right now', working: 'is working right now',
-                                hold: 'is waiting on a timer',
-                                'background-task': 'has a background task running'};
-    let _restartAsking = false;      // one ⟳ at a time: a 2nd question must not replace the 1st
-    function setRestartBusy(b, on) {
+    // lib_busy_reason's reasons in words; the red title says what the terminal is
+    // doing, not always "working"
+    const BUSY_WORDS = {printing: 'it is printing right now', hold: 'a timer is pending',
+                        'background-task': 'a background task is running',
+                        working: 'it is working'};
+    const BUSY_TITLE = {printing: 'is working right now', working: 'is working right now',
+                        hold: 'is waiting on a timer',
+                        'background-task': 'has a background task running'};
+    // one at a time (⟳, 🗑, Empty trash): a 2nd question must not replace the 1st, and
+    // nothing new starts while one is still running on the server. The refusal says
+    // which: a question on screen, or what is still running.
+    let _busyWith = null;            // null | 'restart' | 'trash' | 'empty'
+    const BUSY_WAIT = {restart: 'Wait for the restart to finish',
+                       trash: 'Wait for Move to Trash to finish',
+                       empty: 'Wait for the trash to be emptied'};
+    function oneAtATime() {
+      if (!_busyWith) return false;
+      const d = document.getElementById('confirmDlg');
+      _toast(d && d.open ? 'One question at a time' : BUSY_WAIT[_busyWith], 2500);
+      return true;
+    }
+    function setBtnBusy(b, on) {
       if (!b) return;
       b.classList.toggle('busy', on);
       b.setAttribute('aria-busy', on ? 'true' : 'false');
     }
-    // the page's own question (not confirm(): it can't look different when it matters)
-    function askRestart(nm, reason) {
-      const d = document.getElementById('restartDlg');
+    // the page's own question (not confirm(): it can't look different when it matters).
+    // q = {title, text, ok, danger}: danger = red with "!", and Cancel has the focus,
+    // so Enter never interrupts work or erases anything
+    function ask(q) {
+      const d = document.getElementById('confirmDlg');
       const ok = d.querySelector('.dlg-ok'), no = d.querySelector('.dlg-cancel');
-      d.classList.toggle('busy', !!reason);
-      d.setAttribute('role', reason ? 'alertdialog' : 'dialog');
-      d.querySelector('#restartDlgTitle').textContent = reason
-        ? '“' + nm + '” ' + (RESTART_BUSY_TITLE[reason] || 'is busy right now')
-        : 'Restart “' + nm + '”?';
-      d.querySelector('#restartDlgText').textContent = reason
-        ? 'Restarting now will interrupt it (' + (RESTART_BUSY[reason] || 'it is busy')
-          + '). Claude starts again in the same conversation.'
-        : 'Claude starts again in the same conversation.';
-      ok.textContent = reason ? 'Restart anyway' : 'Restart';
+      d.classList.toggle('danger', !!q.danger);
+      d.setAttribute('role', q.danger ? 'alertdialog' : 'dialog');
+      d.querySelector('#confirmDlgTitle').textContent = q.title;
+      d.querySelector('#confirmDlgText').textContent = q.text;
+      ok.textContent = q.ok;
       return new Promise(resolve => {
         const done = yes => {
           ok.removeEventListener('click', onOk);
@@ -1382,17 +1442,26 @@
         no.addEventListener('click', onNo);
         d.addEventListener('cancel', onEsc);
         d.showModal();
-        (reason ? no : ok).focus();               // Enter never interrupts work
+        (q.danger ? no : ok).focus();
       });
+    }
+    function askRestart(nm, reason) {
+      return ask(reason
+        ? {danger: true, title: '“' + nm + '” ' + (BUSY_TITLE[reason] || 'is busy right now'),
+           text: 'Restarting now will interrupt it (' + (BUSY_WORDS[reason] || 'it is busy')
+                 + '). Claude starts again in the same conversation.',
+           ok: 'Restart anyway'}
+        : {title: 'Restart “' + nm + '”?', text: 'Claude starts again in the same conversation.',
+           ok: 'Restart'});
     }
     async function restart(id) {
       if (_restarting.has(id)) return;         // busy: a double click is one restart
-      if (_restartAsking) { _toast('One restart at a time', 2500); return; }
+      if (oneAtATime()) return;
       const s = byId(id);
       const nm = s ? s.name : id;
       _restarting.add(id);
-      _restartAsking = true;
-      setRestartBusy(rows.get(id) && rows.get(id)._restartBtn, true);
+      _busyWith = 'restart';
+      setBtnBusy(rows.get(id) && rows.get(id)._restartBtn, true);
       try {
         const c = await jpost('/api/library/restart-check', {id});
         const reason = (c && c.busy) || null;
@@ -1401,7 +1470,7 @@
         try {
           d = await jpost('/api/library/restart', reason ? {id, force: true} : {id});
         } catch (err) {
-          const why = !reason && err && err.status === 409 && err.data && RESTART_BUSY[err.data.reason];
+          const why = !reason && err && err.status === 409 && err.data && BUSY_WORDS[err.data.reason];
           if (!why) throw err;
           if (!await askRestart(nm, err.data.reason)) return;   // turned busy since we asked
           d = await jpost('/api/library/restart', {id, force: true});
@@ -1420,8 +1489,8 @@
         _toast('⚠️ Not restarted: ' + String(err && err.message || err).slice(0, 60), 5000);
       } finally {
         _restarting.delete(id);
-        _restartAsking = false;
-        setRestartBusy(rows.get(id) && rows.get(id)._restartBtn, false);
+        _busyWith = null;
+        setBtnBusy(rows.get(id) && rows.get(id)._restartBtn, false);
       }
     }
 
@@ -1474,25 +1543,208 @@
       }
     }
 
-    /* ── Delete (archived topics only): one click, no confirm — the server
-       moves the transcript to trash, so it can be recovered. ── */
-    async function del(id) {
-      const i = sessions.findIndex(s => s.id === id);
-      if (i < 0) return;
-      const s = sessions[i];
-      sessions.splice(i, 1);
-      mutSeq++;
-      render();
+    /* ── 🗑 Trash (owner 2026-10-23). Archive = needed, just not now; Trash = not
+       needed, kept just in case. 🗑 on every terminal row (the list and the
+       archive) asks ONE question — plain, or red with "!" naming what a busy
+       terminal is doing, which then forces it; the server unloads a loaded one.
+       Trashed terminals are in no list: "Show trash" lists them, each with
+       Restore (back where it was — an archived one stays archived). Nothing is
+       erased by itself: only "Empty trash", after a red question with the count,
+       and only the ones this view showed. ── */
+    function askTrash(s, nm, reason) {
+      return ask(reason
+        ? {danger: true, title: '“' + nm + '” ' + (BUSY_TITLE[reason] || 'is busy right now'),
+           text: 'Moving it to the trash now will interrupt it (' + (BUSY_WORDS[reason] || 'it is busy')
+                 + '). The terminal is unloaded; the conversation is kept in the trash.',
+           ok: 'Move to Trash anyway'}
+        : {title: 'Move “' + nm + '” to Trash?',
+           text: (s && s.active ? 'The terminal is unloaded. ' : '')
+                 + 'The conversation is kept in the trash until you empty it.',
+           ok: 'Move to Trash'});
+    }
+    async function moveToTrash(id) {
+      if (_trashing.has(id)) return;           // a double click is one question
+      if (oneAtATime()) return;
+      const s = byId(id);
+      const nm = s ? s.name : id;
+      _trashing.add(id);
+      _busyWith = 'trash';
+      setBtnBusy(rows.get(id) && rows.get(id).querySelector('.trash-btn'), true);   // pulses while it unloads
       try {
-        await jpost('/api/library/delete', {id});
-        _toast('Deleted — transcript moved to trash', 3000);
-      } catch (err) {
-        if (!byId(id)) sessions.splice(Math.min(i, sessions.length), 0, s);
+        const c = await jpost('/api/library/trash-check', {id});
+        const reason = (c && c.busy) || null;
+        if (!await askTrash(s, nm, reason)) return;
+        try {
+          await jpost('/api/library/trash', reason ? {id, force: true} : {id});
+        } catch (err) {
+          const why = !reason && err && err.status === 409 && err.data && BUSY_WORDS[err.data.reason];
+          if (!why) throw err;
+          if (!await askTrash(s, nm, err.data.reason)) return;   // turned busy since we asked
+          await jpost('/api/library/trash', {id, force: true});
+        }
+        const i = sessions.findIndex(x => x.id === id);
+        if (i >= 0) sessions.splice(i, 1);
         mutSeq++;
+        if (sel === id) showPlaceholder();
         render();
-        _toast('⚠️ Not deleted: ' + String(err && err.message || err).slice(0, 60), 5000);
+        _toast('Moved “' + nm.slice(0, 40) + '” to Trash', 3000);
+        if (showTrash) loadTrash();
+      } catch (err) {
+        _toast('⚠️ Not moved to Trash: ' + String(err && err.message || err).slice(0, 70), 5000);
+      } finally {
+        _trashing.delete(id);
+        _busyWith = null;
+        setBtnBusy(rows.get(id) && rows.get(id).querySelector('.trash-btn'), false);
       }
     }
+
+    let showTrash = false;
+    let trash = [];                  // last GET /api/library?trash=1, most recently trashed first
+    let trashSeq = 0;                // bumped on every local change: a load that started before is stale
+    let trashLoaded = false, trashKey = null;
+    let trashFailed = false;         // the last load failed and nothing was ever loaded
+    const trashList = document.getElementById('trashList');
+    const trashEmpty = document.getElementById('trashEmpty');
+    const emptyBtn = document.getElementById('emptyTrash');
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    function trashedAt(t) {
+      const d = new Date(t * 1000), two = n => String(n).padStart(2, '0');
+      return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + two(d.getHours()) + ':' + two(d.getMinutes());
+    }
+    // loud: the owner just opened the view, so a failure is also a toast (the poll's
+    // retries only keep the inline line). A failure never reads as "the trash is empty".
+    async function loadTrash(loud) {
+      const seq = trashSeq;
+      let why = null;
+      try {
+        const r = await fetch('/api/library?trash=1', {cache: 'no-store', credentials: 'same-origin'});
+        const d = r.ok ? await r.json() : null;
+        if (seq !== trashSeq) return;
+        if (!d || !Array.isArray(d.sessions)) {
+          why = r.ok ? 'a bad answer' : r.status === 401 ? 'signed out' : 'error ' + r.status;
+        } else {
+          trash = d.sessions
+            .filter(s => s && ID_RE.test(s.id) && typeof s.trashed === 'number')
+            .map(s => Object.assign({}, s, {name: String(s.name ?? '')}));
+          trashLoaded = true;
+          trashFailed = false;
+        }
+      } catch (err) {
+        if (seq !== trashSeq) return;
+        why = 'no connection';
+      }
+      if (why && !trashLoaded) {
+        trashFailed = true;
+        if (loud && showTrash) _toast('⚠️ Could not load the trash (' + why + ')', 5000);
+      }
+      renderTrash();
+    }
+    function renderTrash() {
+      trashView.hidden = !showTrash;
+      trashToggle.textContent = showTrash ? 'Hide trash' : 'Show trash';
+      trashToggle.classList.toggle('on', showTrash);
+      if (!showTrash) return;
+      document.getElementById('trashTitle').textContent = trash.length ? 'Trash · ' + trash.length : 'Trash';
+      trashEmpty.textContent = trashFailed ? 'Could not load the trash — trying again' : 'The trash is empty';
+      trashEmpty.classList.toggle('failed', trashFailed);
+      trashEmpty.hidden = !(trashFailed || (trashLoaded && trash.length === 0));
+      emptyBtn.hidden = trash.length === 0;
+      // rebuilt only when it changed: a poll must not swap a button under the pointer
+      const key = JSON.stringify(trash.map(s => [s.id, s.name, s.trashed, !!s.archived]));
+      if (key === trashKey) return;
+      trashKey = key;
+      trashList.textContent = '';
+      for (const s of trash) {
+        const r = document.createElement('div');
+        r.className = 'trash-row';
+        r.dataset.tid = s.id;
+        r.innerHTML = '<div class="trash-info"><div class="trash-name"></div><div class="when"></div></div>'
+          + '<button type="button" class="restore-btn" title="Put it back where it was">Restore</button>';
+        const n = r.querySelector('.trash-name');
+        n.textContent = s.name;
+        n.title = s.name;
+        r.querySelector('.when').textContent = s.id + ' · trashed ' + trashedAt(s.trashed)
+          + (s.archived ? ' · from the archive' : '');
+        r.querySelector('.restore-btn').addEventListener('click', () => untrash(s.id));
+        trashList.appendChild(r);
+      }
+    }
+    // bring the opened view into the list's sight once its rows are in: on a phone the
+    // list is a few rows tall, so the head goes to the top (the rows below it), never
+    // only the bottom edge — that showed just half of the red Empty trash
+    function revealTrash() {
+      const l = document.getElementById('list').getBoundingClientRect();
+      const v = trashView.getBoundingClientRect();
+      if (v.top >= l.top && v.bottom <= l.bottom) return;    // already in full sight
+      trashView.scrollIntoView({block: v.height > l.height ? 'start' : 'nearest'});
+    }
+    trashToggle.addEventListener('click', async () => {
+      showTrash = !showTrash;
+      renderTrash();
+      if (!showTrash) return;
+      revealTrash();                           // the head at once…
+      await loadTrash(true);
+      if (showTrash) revealTrash();            // …and again with the rows in
+    });
+
+    const _untrashing = new Set();
+    async function untrash(id) {
+      if (_untrashing.has(id)) return;         // a double click is one restore
+      _untrashing.add(id);
+      const t = trash.find(x => x.id === id);
+      const nm = (t ? t.name : id).slice(0, 40);
+      try {
+        const d = await jpost('/api/library/untrash', {id});
+        trashSeq++;
+        trash = trash.filter(x => x.id !== id);
+        renderTrash();
+        if (d && ID_RE.test(d.id || '') && !byId(d.id)) {    // back in the list at once
+          const row = Object.assign({}, d, {name: String(d.name ?? '')});
+          delete row.trashed;
+          sessions.push(row);
+          mutSeq++;
+          render();
+        }
+        _toast('Restored “' + nm + '”' + (d && d.archived ? ' to the archive' : ''), 3000);
+        poll();
+      } catch (err) {
+        _toast('⚠️ Not restored: ' + String(err && err.message || err).slice(0, 60), 5000);
+      } finally {
+        _untrashing.delete(id);
+      }
+    }
+
+    // why Empty trash kept one (the server's skipped[].reason)
+    const KEPT_WHY = {running: 'still running', 'not-trashed': 'restored meanwhile',
+                      unknown: 'already gone', corrupt: 'a broken entry', 'erase-failed': "couldn't erase it",
+                      'left-on-disk': 'still on disk elsewhere'};
+    async function emptyTrash() {
+      if (oneAtATime()) return;
+      const ids = trash.map(s => s.id);        // exactly what this view shows
+      if (!ids.length) return;
+      _busyWith = 'empty';
+      try {
+        const n = ids.length;
+        if (!await ask({danger: true, title: 'Empty the trash?',
+                        text: n + (n === 1 ? ' conversation will' : ' conversations will')
+                              + ' be erased for good. This cannot be undone.',
+                        ok: 'Erase for good'})) return;
+        const d = await jpost('/api/library/empty-trash', {ids});
+        const gone = new Set(Array.isArray(d && d.erased) ? d.erased : []);
+        const kept = Array.isArray(d && d.skipped) ? d.skipped : [];
+        trashSeq++;
+        trash = trash.filter(s => !gone.has(s.id));
+        renderTrash();
+        const why = [...new Set(kept.map(k => KEPT_WHY[k && k.reason] || 'kept'))].join(', ');
+        _toast('Erased ' + gone.size + (kept.length ? ' · ' + kept.length + ' kept: ' + why : ''), 5000);
+        loadTrash();
+      } catch (err) {
+        _toast('⚠️ Trash not emptied: ' + String(err && err.message || err).slice(0, 60), 5000);
+      } finally {
+        _busyWith = null;
+      }
+    }
+    emptyBtn.addEventListener('click', emptyTrash);
 
     let _frameFocus = null;
     document.addEventListener('click', e => {
@@ -2394,6 +2646,7 @@
           if (cur !== sel) pick(cur);
         }
         if (_pendingOpen) { const id = _pendingOpen; _pendingOpen = null; openTerminalById(id); }
+        if (showTrash) loadTrash();
       } catch {}
     }
     poll(); setInterval(poll, 4000);

@@ -20,6 +20,8 @@ the library, the old numbered claude-terminal[-N] slots:
   - /archive      — button menu of the archived topics; a tap restores the
                     topic (archived=false, as the dashboard's click does) and
                     picks it like /use.
+  - a topic in the dashboard's trash is in no menu, list or search, and is
+    never loaded or typed into: it is restored on the dashboard (Show trash).
   - after every pick the bot re-reads the session by itself (auto_read: what
     /read shows, once a just-loaded Claude has drawn its screen); it only
     reads the screen or the transcript, it never types.
@@ -322,11 +324,12 @@ def is_topic(key) -> bool:
 
 def topic_entry(sid: str, include_archived: bool = False) -> dict | None:
     """The terminal `sid` names: its entry, or — for an old number that a terminal
-    took over (convo_sync) — that terminal's."""
+    took over (convo_sync) — that terminal's. One in the trash only with
+    include_archived (labels, the transcript); loading refuses it (_load_topic)."""
     if not is_topic(sid):
         return None
     e = library.find_or_alias(_load_lib(), sid)
-    if e is None or (e.get("archived") and not include_archived):
+    if e is None or ((e.get("archived") or library.is_trashed(e)) and not include_archived):
         return None
     return e
 
@@ -397,7 +400,8 @@ def legacy_topics(skip=()) -> dict:
     out = {}
     for e in rows:
         sid = e.get("id")
-        if e.get("archived") or e.get("legacy_slot") is None or sid in skip:
+        if (e.get("archived") or library.is_trashed(e) or e.get("legacy_slot") is None
+                or sid in skip):
             continue
         session = legacy_session_of(sid)
         if session:
@@ -426,27 +430,29 @@ def migrated_topic(slot: str) -> dict | None:
 
 
 def archived_topics(lib: dict | None = None) -> list[dict]:
-    """The archived topics, most recently used first (the /archive menu)."""
+    """The archived topics, most recently used first (the /archive menu); not the
+    ones in the trash."""
     rows = [e for e in (lib or _load_lib())["sessions"]
-            if e.get("archived") and is_topic(e.get("id"))]
+            if e.get("archived") and not library.is_trashed(e) and is_topic(e.get("id"))]
     return sorted(rows, key=lambda e: -(e.get("last_used") or 0))
 
 
 def restore_topic(sid: str) -> tuple[dict | None, bool]:
     """Take a topic out of the archive — archived=false under the registry lock,
     what the dashboard's click on an archived terminal does. (entry, restored
-    now); (None, False) for an unknown id. It only flips the flag: loading is
+    now); (None, False) for an unknown or trashed id — trashed is checked again
+    under the lock (library.archive refuses it). It only flips the flag: loading is
     library_cli ensure's job afterwards, which still refuses a conversation
     that runs elsewhere (never two Claudes on one conversation)."""
     e = topic_entry(sid, include_archived=True)
-    if e is None:
+    if e is None or library.is_trashed(e):          # a stale button: the trash is the dashboard's
         return None, False
     if not e.get("archived"):
         return e, False
     try:
         with library.update(_lib_file()) as lib:
             e = dict(library.archive(lib, sid, False))
-    except KeyError:                     # deleted meanwhile (nothing was saved)
+    except (KeyError, library.Trashed):  # deleted or trashed meanwhile (nothing was saved)
         return None, False
     return e, True
 
@@ -564,12 +570,22 @@ def _archived_now(sid: str) -> bool:
     return bool(e and e.get("archived"))
 
 
+def _trashed_now(sid: str) -> bool:
+    e = topic_entry(sid, include_archived=True)
+    return bool(e and library.is_trashed(e))
+
+
+TRASHED_NOTE = "it is in the trash — restore it on the dashboard (Show trash)"
+
+
 async def _load_topic(sid: str) -> tuple[str | None, str, int]:
     """Make sure the topic runs: (cs-<id>, notice, 0) or (None, why not, the
     ensure exit code). A topic whose Claude still runs in its old terminal is
     already loaded there: that session, and no ensure (it would refuse: same
     conversation). An archived topic is never loaded (its conversation is left
-    alone): the owner restores it in /archive."""
+    alone): the owner restores it in /archive; a trashed one on the dashboard."""
+    if await asyncio.to_thread(_trashed_now, sid):
+        return None, TRASHED_NOTE, ENSURE_UNKNOWN
     legacy = await asyncio.to_thread(legacy_session_of, sid)
     if legacy:
         return legacy, "", 0
@@ -1599,7 +1615,9 @@ def _agents_overview(chat_id: int) -> str:
     if cur:
         head = f"Current: {target_label(cur)}"
         e = library.find(lib, cur) if is_topic(cur) else None
-        if e is not None and e.get("archived"):     # archived on the dashboard since
+        if e is not None and library.is_trashed(e):  # trashed on the dashboard since
+            head += " — 🗑 in the trash: restore it on the dashboard"
+        elif e is not None and e.get("archived"):   # archived on the dashboard since
             head += " — 🗄 in the archive: /archive to restore it"
         lines = [head, ""]
     else:
@@ -1802,6 +1820,11 @@ async def _use_number(chat_id: int, aid: str) -> tuple[str, str | None]:
         text, ok = await _apply_use(chat_id, aid)
         return text, (aid if ok else None)
     if e is not None:
+        if library.is_trashed(e):
+            # the same: never the old launch script on this very conversation
+            return (f"Slot #{aid} moved to terminal {name_label(e)}, which is in the trash — "
+                    "restore it on the dashboard (Show trash). Not starting the old terminal "
+                    "(that would be a second Claude on the same conversation)."), None
         if e.get("archived"):
             # never fall back to the old launch script: it would start a second
             # Claude on this very conversation

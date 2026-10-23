@@ -334,6 +334,18 @@ def test_archived_ids_read_the_registry(monkeypatch, tmp_path):
     assert reaper.archived_ids() == set()                     # never guess towards killing
 
 
+def test_a_trashed_terminal_counts_as_archived(monkeypatch, tmp_path):
+    # Move to Trash unloads at once; should one still be loaded (it could not be
+    # unloaded then), it gets the archive's short window, never the live 2 h
+    lib = tmp_path / "library.json"
+    monkeypatch.setenv("AGENTDECK_LIBRARY", str(lib))
+    with reaper.library.update(str(lib)) as L:
+        reaper.library.create(L, "a", cwd="/", now=1, uuid="aaaaaaaa-1111-4111-8111-111111111111")
+        reaper.library.create(L, "b", cwd="/", now=1, uuid="bbbbbbbb-1111-4111-8111-111111111111")
+        reaper.library.trash(L, "aaaaaaaa", now=5)
+    assert reaper.archived_ids() == {"aaaaaaaa"}
+
+
 # ── one number per terminal: the sweep syncs first (convo_sync) ─────────────
 @pytest.fixture
 def switched(monkeypatch, tmp_path):

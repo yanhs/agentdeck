@@ -538,7 +538,7 @@ def test_library_session_has_no_legacy_path(api):
     assert row["active"] is True and row.get("legacy_path") is None
 
 
-# ── POST /api/library/delete: archived topics only, transcript -> trash ─────
+# ── transcripts on disk (Claude's projects dir, temp) ───────────────────────
 @pytest.fixture
 def projects(tmp_path, monkeypatch):
     root = tmp_path / "projects"
@@ -548,88 +548,15 @@ def projects(tmp_path, monkeypatch):
     return d
 
 
-def test_delete_archived_topic_moves_transcript_to_trash(api, projects):
-    _seed(api, (U1, "old", 10, True), (U2, "keep", 20))
-    (projects / f"{U1}.jsonl").write_text("talk")
-    (projects / U1).mkdir()
-    (projects / U1 / "x").write_text("sub")
-    code, out = post(api, "delete", {"id": "aaaa1111"})
-    trash = Path(api.lib).parent / "trash"
-    assert code == 200 and out == {"ok": True, "trashed": str(trash / f"{U1}.jsonl")}
-    assert (trash / f"{U1}.jsonl").read_text() == "talk" and (trash / U1 / "x").is_file()
-    assert not (projects / f"{U1}.jsonl").exists()
-    ids = [e["id"] for e in library.load(api.lib)["sessions"]]
-    assert ids == ["bbbb2222"]
-
-
-def test_delete_without_transcript_still_removes_the_entry(api, projects):
+def test_the_old_delete_route_is_gone(api, projects):
+    # the archived-only Delete (transcript into .sessions/trash/) was replaced by the
+    # trash (2026-10-23); its one caller was the page's Delete button
     _seed(api, (U1, "old", 10, True))
-    code, out = post(api, "delete", {"id": "aaaa1111"})
-    assert code == 200 and out == {"ok": True, "trashed": None}
-    assert library.load(api.lib)["sessions"] == []
-
-
-def test_delete_refuses_a_topic_that_is_not_archived(api, projects):
-    _seed(api, (U1, "live", 10))
     (projects / f"{U1}.jsonl").write_text("talk")
     code, err = post(api, "delete", {"id": "aaaa1111"})
-    assert code == 409 and "error" in err
+    assert code == 404 and "error" in err
     assert library.find(library.load(api.lib), "aaaa1111") is not None
-    assert (projects / f"{U1}.jsonl").exists()
-
-
-def test_delete_unloads_an_idle_loaded_topic_then_deletes(api, projects, monkeypatch):
-    # owner 2026-09-25: archived terminals that were still loaded could not be
-    # deleted ("close it first") and the page has no close button. An idle one
-    # (no tab, no output lately) is unloaded and deleted in one click.
-    _seed(api, (U1, "old", 10, True))
-    (projects / f"{U1}.jsonl").write_text("talk")
-    _start(api, "cs-aaaa1111")
-    monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 3600)
-    code, body = post(api, "delete", {"id": "aaaa1111"})
-    assert code == 200 and body["ok"] is True
-    assert not _alive(api, "cs-aaaa1111")
-    assert library.find(library.load(api.lib), "aaaa1111") is None
-
-
-def test_delete_refuses_a_loaded_topic_that_is_working(api, projects, monkeypatch):
-    _seed(api, (U1, "old", 10, True))
-    (projects / f"{U1}.jsonl").write_text("talk")
-    _start(api, "cs-aaaa1111")
-    monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 5)
-    code, err = post(api, "delete", {"id": "aaaa1111"})
-    assert code == 409 and "working" in err["error"]
-    assert _alive(api, "cs-aaaa1111")
-    assert library.find(library.load(api.lib), "aaaa1111") is not None
-    assert (projects / f"{U1}.jsonl").exists()
-
-
-def test_delete_refuses_a_topic_running_in_a_legacy_terminal(api, projects):
-    _seed(api, (U1, "old", 10, True))
-    (projects / f"{U1}.jsonl").write_text("talk")
-    _start(api, "claude-terminal-3", f"bash -c 'sleep 600; : --resume {U1}'")
-    code, err = post(api, "delete", {"id": "aaaa1111"})
-    assert code == 409 and "error" in err
-    assert library.find(library.load(api.lib), "aaaa1111") is not None
-    assert (projects / f"{U1}.jsonl").exists()
-
-
-def test_delete_bad_and_unknown_ids(api, projects):
-    _seed(api, (U1, "old", 10, True))
-    for body in ({"id": "../x"}, {"id": "AAAA1111"}, {"id": 1}, {}):
-        assert post(api, "delete", body)[0] == 400, body
-    assert post(api, "delete", {"id": "deadbeef"})[0] == 404
-    assert len(library.load(api.lib)["sessions"]) == 1
-
-
-def test_delete_has_the_same_csrf_checks(api, projects, monkeypatch):
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
-    _seed(api, (U1, "old", 10, True))
-    body = json.dumps({"id": "aaaa1111"}).encode()
-    assert _raw_req(api, "POST", "/api/library/delete", body, {"Content-Type": "text/plain"})[0] == 415
-    assert _raw_req(api, "POST", "/api/library/delete", body,
-                    {"Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 403
-    assert len(library.load(api.lib)["sessions"]) == 1
+    assert (projects / f"{U1}.jsonl").read_text() == "talk"
 
 
 # ── speed: one legacy scan per request, no pgrep per process ─────────────────
@@ -1267,3 +1194,357 @@ def test_restart_check_has_the_same_csrf_checks(rs):
                     {"Content-Type": "text/plain"})[0] == 415
     assert _raw_req(rs, "POST", "/api/library/restart-check", body,
                     {"Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 403
+
+
+# ── the trash (owner 2026-10-23). Archive = needed, just not now; Trash = not needed,
+# kept just in case, never erased by itself. POST trash {id, force?} moves a terminal
+# there from the list or the archive — a loaded one is unloaded first, like ⟳ unloads:
+# its exact tmux session killed, its claude waited for, under the ensure lock; a busy
+# one (lib_busy_reason) only with force=true; never while its conversation runs in
+# another claude. trash-check asks first and touches nothing; untrash puts it back
+# where it was; empty-trash {ids} erases only the trashed ones among ids that run
+# nowhere — the transcript and its own folder, nothing else. ──
+def _trash_flag(A, sid):
+    e = library.find(library.load(A.lib), sid)
+    return None if e is None else e.get("trashed")
+
+
+def _fake_claude_on(u):
+    """A process that looks like `claude --resume u` (one process, no children)."""
+    return subprocess.Popen(["bash", "-c", "exec -a claude python3 -c 'import time; "
+                             f"time.sleep(600)' --resume {u}"])
+
+
+def test_trash_of_an_unloaded_terminal_hides_it_everywhere_but_the_trash(api, projects):
+    _seed(api, (U1, "в корзину", 10), (U2, "соседка", 20))
+    (projects / f"{U1}.jsonl").write_text("talk")
+    t0 = int(time.time())
+    code, e = post(api, "trash", {"id": "aaaa1111"})
+    assert code == 200, e
+    assert e["id"] == "aaaa1111" and e["unloaded"] is False and e["active"] is False
+    assert isinstance(e["trashed"], int) and e["trashed"] >= t0
+    assert _trash_flag(api, "aaaa1111") == e["trashed"]
+    assert library.find(library.load(api.lib), "aaaa1111")["archived"] is False
+    assert [s["id"] for s in get(api)[1]["sessions"]] == ["bbbb2222"]
+    assert [s["id"] for s in get(api, "/api/library?archived=1")[1]["sessions"]] == ["bbbb2222"]
+    code, data = get(api, "/api/library?trash=1")
+    assert code == 200 and [s["id"] for s in data["sessions"]] == ["aaaa1111"]
+    assert set(data["sessions"][0]) == ROW_KEYS | {"trashed"}
+    assert data["sessions"][0]["trashed"] == e["trashed"]
+    assert (projects / f"{U1}.jsonl").read_text() == "talk"     # nothing erased
+    assert set(_by_id(get(api)[1])["bbbb2222"]) == ROW_KEYS     # other rows: as ever
+
+
+def test_trash_listing_is_most_recently_trashed_first(api):
+    _seed(api, (U1, "a", 10), (U2, "b", 20, True), (U3, "c", 30))
+    with library.update(api.lib) as L:
+        library.trash(L, "aaaa1111", now=300)
+        library.trash(L, "bbbb2222", now=100)
+        library.trash(L, "c0ffee00", now=200)
+    rows = get(api, "/api/library?trash=1")[1]["sessions"]
+    assert [s["id"] for s in rows] == ["aaaa1111", "c0ffee00", "bbbb2222"]
+    assert [s["archived"] for s in rows] == [False, False, True]
+
+
+def test_untrash_puts_it_back_where_it_was(api):
+    _seed(api, (U1, "live", 10), (U2, "archived", 20, True))
+    assert post(api, "trash", {"id": "aaaa1111"})[0] == 200
+    assert post(api, "trash", {"id": "bbbb2222"})[0] == 200
+    code, e = post(api, "untrash", {"id": "bbbb2222"})
+    assert code == 200 and e["id"] == "bbbb2222" and e["archived"] is True and "trashed" not in e
+    assert [s["id"] for s in get(api)[1]["sessions"]] == []                    # still archived
+    assert [s["id"] for s in get(api, "/api/library?archived=1")[1]["sessions"]] == ["bbbb2222"]
+    code, e = post(api, "untrash", {"id": "aaaa1111"})
+    assert code == 200 and e["archived"] is False
+    assert [s["id"] for s in get(api)[1]["sessions"]] == ["aaaa1111"]
+    assert get(api, "/api/library?trash=1")[1]["sessions"] == []
+    assert post(api, "untrash", {"id": "aaaa1111"})[0] == 200                 # not trashed: no-op
+
+
+def test_trash_and_untrash_bad_and_unknown_ids(api):
+    _seed(api, (U1, "a", 10))
+    for route in ("trash", "trash-check", "untrash"):
+        for body in ({"id": "../x"}, {"id": "AAAA1111"}, {"id": 1}, {}):
+            assert post(api, route, body)[0] == 400, (route, body)
+        assert post(api, route, {"id": "deadbeef"})[0] == 404, route
+    assert post(api, "trash", {"id": "aaaa1111", "force": "yes"})[0] == 400
+    assert _trash_flag(api, "aaaa1111") is None
+
+
+def test_trash_check_of_an_unloaded_terminal_is_not_busy(api):
+    _seed(api, (U1, "a", 10))
+    code, out = post(api, "trash-check", {"id": "aaaa1111"})
+    assert code == 200 and out == {"busy": None}
+    assert _trash_flag(api, "aaaa1111") is None
+
+
+def test_trash_unloads_a_loaded_idle_terminal_and_it_does_not_come_back(rs):
+    sid = _rs_seed(rs)
+    _ensure(rs, sid)
+    code, out = post(rs, "trash-check", {"id": sid})
+    assert code == 200 and out == {"busy": None}
+    assert _alive(rs, "cs-" + sid) and _trash_flag(rs, sid) is None          # touched nothing
+    code, e = post(rs, "trash", {"id": sid})
+    assert code == 200 and e["unloaded"] is True and e["active"] is False, e
+    assert isinstance(e["trashed"], int)
+    assert not _alive(rs, "cs-" + sid)
+    assert wait_for(lambda: _claudes(U1) == [], timeout=10), _claudes(U1)    # its claude exited
+    # opening it (a tab, a link, the bridge) does not load it again
+    r = subprocess.run([sys.executable, str(TERMINAL_DIR / "library_cli.py"), "ensure", sid],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 2 and "trash" in r.stderr
+    assert len(_starts(rs)) == 1 and not _alive(rs, "cs-" + sid)
+
+
+@pytest.mark.parametrize("reason", ["printing", "hold", "background-task", "working"])
+def test_trash_of_a_busy_terminal_is_refused_without_force(rs, monkeypatch, reason):
+    sid = _rs_seed(rs)
+    _start(rs, "cs-" + sid)
+    pane = _pane_pid(rs, "cs-" + sid)
+    if reason == "printing":
+        monkeypatch.setattr(rs.ss, "lib_last_output", lambda name: time.time() - 5)
+    elif reason == "hold":
+        library.set_hold(sid, time.time() + 600, rs.lib)
+    elif reason == "background-task":
+        monkeypatch.setattr(rs.ss.idle_reaper, "tree_has_task_output", lambda pid: True)
+    else:
+        monkeypatch.setattr(rs.ss, "sample_working", lambda pids: {k: True for k in pids})
+    code, out = post(rs, "trash-check", {"id": sid})
+    assert code == 200 and out == {"busy": reason}, out
+    code, out = post(rs, "trash", {"id": sid})
+    assert code == 409 and out["reason"] == reason and "force" in out["error"], out
+    assert _pane_pid(rs, "cs-" + sid) == pane and _trash_flag(rs, sid) is None   # untouched
+
+
+def test_trash_force_unloads_a_busy_terminal(rs, monkeypatch):
+    sid = _rs_seed(rs)
+    _ensure(rs, sid)
+    monkeypatch.setattr(rs.ss, "lib_last_output", lambda name: time.time() - 1)
+    assert post(rs, "trash", {"id": sid})[1]["reason"] == "printing"
+    code, e = post(rs, "trash", {"id": sid, "force": True})
+    assert code == 200 and e["unloaded"] is True, e
+    assert not _alive(rs, "cs-" + sid) and _trash_flag(rs, sid)
+    assert wait_for(lambda: _claudes(U1) == [], timeout=10)
+    assert len(_starts(rs)) == 1                                  # nothing started again
+
+
+def test_trash_kills_a_claude_that_ignores_the_hangup(rs, monkeypatch):
+    monkeypatch.setattr(rs.ss, "RESTART_EXIT_SECONDS", 1)
+    monkeypatch.setattr(rs.ss, "RESTART_TERM_SECONDS", 1)
+    sid = _rs_seed(rs)
+    (rs.home / "stubborn").write_text("")
+    old = _ensure(rs, sid)
+    code, e = post(rs, "trash", {"id": sid})
+    assert code == 200 and e["unloaded"] is True, e
+    assert wait_for(lambda: _claudes(U1) == [], timeout=10)
+    assert _trash_flag(rs, sid) and old
+
+
+@pytest.mark.parametrize("loaded", [False, True])
+def test_trash_refuses_while_the_conversation_runs_in_another_claude(rs, loaded):
+    sid = _rs_seed(rs)
+    if loaded:
+        _start(rs, "cs-" + sid)
+    p = _fake_claude_on(U1)
+    rs.procs.append(p)
+    assert wait_for(lambda: _claudes(U1), timeout=5)
+    code, out = post(rs, "trash-check", {"id": sid})
+    assert code == 409 and out["reason"] == "elsewhere", out
+    code, out = post(rs, "trash", {"id": sid, "force": True})
+    assert code == 409 and out["reason"] == "elsewhere", out
+    assert _trash_flag(rs, sid) is None and p.poll() is None
+    assert _alive(rs, "cs-" + sid) == loaded
+
+
+def test_trash_refuses_a_conversation_running_in_a_legacy_terminal(api):
+    _seed(api, (U1, "old", 10))
+    _start(api, "claude-terminal-3", f"bash -c 'sleep 600; : --resume {U1}'")
+    code, out = post(api, "trash", {"id": "aaaa1111", "force": True})
+    assert code == 409 and out["reason"] == "elsewhere", out
+    assert _trash_flag(api, "aaaa1111") is None and _alive(api, "claude-terminal-3")
+
+
+def test_trash_by_a_vanished_number_acts_on_the_renamed_terminal(quiet):
+    api = quiet
+    _seed(api, (U1, "consent", 10))
+    _start(api, "cs-aaaa1111")
+    _claude_runs(api, "cs-aaaa1111", UNEW)
+    code, e = post(api, "trash", {"id": "aaaa1111"})
+    assert code == 200 and e["id"] == "0badc0de" and e["unloaded"] is True, e
+    assert not _alive(api, "cs-0badc0de") and not _alive(api, "cs-aaaa1111")
+    assert _trash_flag(api, "0badc0de")
+
+
+def test_trash_again_is_a_no_op(api):
+    _seed(api, (U1, "a", 10))
+    first = post(api, "trash", {"id": "aaaa1111"})[1]["trashed"]
+    code, e = post(api, "trash", {"id": "aaaa1111"})
+    assert code == 200 and e["trashed"] == first
+    assert post(api, "trash-check", {"id": "aaaa1111"}) == (200, {"busy": None})
+
+
+def test_restart_refuses_a_trashed_terminal(api):
+    _seed(api, (U1, "a", 10))
+    with library.update(api.lib) as L:
+        library.trash(L, "aaaa1111", now=5)
+    _start(api, "cs-aaaa1111")
+    for route in ("restart", "restart-check"):
+        code, out = post(api, route, {"id": "aaaa1111", "force": True} if route == "restart"
+                         else {"id": "aaaa1111"})
+        assert code == 409 and out["reason"] == "trashed", (route, out)
+    assert _alive(api, "cs-aaaa1111")
+
+
+def test_trash_routes_have_the_same_csrf_checks(api, monkeypatch):
+    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    _seed(api, (U1, "a", 10))
+    with library.update(api.lib) as L:
+        library.trash(L, "aaaa1111", now=5)
+    _seed(api, (U2, "b", 20))
+    for route, body in (("trash", {"id": "bbbb2222", "force": True}), ("trash-check", {"id": "bbbb2222"}),
+                        ("untrash", {"id": "aaaa1111"}), ("empty-trash", {"ids": ["aaaa1111"]})):
+        raw = json.dumps(body).encode()
+        assert _raw_req(api, "POST", "/api/library/" + route, raw,
+                        {"Content-Type": "text/plain"})[0] == 415, route
+        assert _raw_req(api, "POST", "/api/library/" + route, raw,
+                        {"Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 403, route
+    assert _trash_flag(api, "aaaa1111") == 5 and _trash_flag(api, "bbbb2222") is None
+
+
+# ── Empty trash: erased for good — only what was trashed AND shown, never a running one ──
+def _talk(projects, u, sidecar=True):
+    (projects / f"{u}.jsonl").write_text("talk")
+    if sidecar:
+        (projects / u / "subagents").mkdir(parents=True)
+        (projects / u / "subagents" / "a.jsonl").write_text("sub")
+
+
+def test_empty_trash_erases_only_trashed_entries_among_the_ids(api, projects):
+    _seed(api, (U1, "binned", 10), (U2, "binned, not shown", 20), (U3, "live", 30))
+    for u in (U1, U2, U3):
+        _talk(projects, u)
+    (projects / f"{U1}.jsonl.bak").write_text("keep")                      # only looks alike
+    with library.update(api.lib) as L:
+        library.trash(L, "aaaa1111", now=5)
+        library.trash(L, "bbbb2222", now=6)
+    code, out = post(api, "empty-trash", {"ids": ["aaaa1111", "c0ffee00", "deadbeef", "aaaa1111"]})
+    assert code == 200, out
+    assert out["erased"] == ["aaaa1111"]
+    assert out["skipped"] == [{"id": "c0ffee00", "reason": "not-trashed"},
+                              {"id": "deadbeef", "reason": "unknown"}]
+    assert not (projects / f"{U1}.jsonl").exists() and not (projects / U1).exists()
+    assert (projects / f"{U1}.jsonl.bak").read_text() == "keep"
+    for u in (U2, U3):                                                       # untouched
+        assert (projects / f"{u}.jsonl").read_text() == "talk"
+        assert (projects / u / "subagents" / "a.jsonl").exists()
+    assert [e["id"] for e in library.load(api.lib)["sessions"]] == ["bbbb2222", "c0ffee00"]
+    assert [s["id"] for s in get(api, "/api/library?trash=1")[1]["sessions"]] == ["bbbb2222"]
+
+
+def test_empty_trash_erases_an_archived_trashed_one_without_a_transcript(api, projects):
+    _seed(api, (U1, "binned", 10, True))
+    with library.update(api.lib) as L:
+        library.trash(L, "aaaa1111", now=5)
+    code, out = post(api, "empty-trash", {"ids": ["aaaa1111"]})
+    assert code == 200 and out == {"erased": ["aaaa1111"], "skipped": []}
+    assert library.load(api.lib)["sessions"] == []
+
+
+def test_empty_trash_skips_a_conversation_running_anywhere(api, projects):
+    _seed(api, (U1, "loaded", 10), (U2, "in another claude", 20), (U3, "in an old terminal", 30))
+    for u in (U1, U2, U3):
+        _talk(projects, u, sidecar=False)
+    with library.update(api.lib) as L:
+        for sid in ("aaaa1111", "bbbb2222", "c0ffee00"):
+            library.trash(L, sid, now=5)
+    _start(api, "cs-aaaa1111")                                              # still loaded
+    p = _fake_claude_on(U2)
+    _start(api, "claude-terminal-3", f"bash -c 'sleep 600; : --resume {U3}'")
+    try:
+        assert wait_for(lambda: library_cli.claude_processes(U2), timeout=5)
+        code, out = post(api, "empty-trash", {"ids": ["aaaa1111", "bbbb2222", "c0ffee00"]})
+        assert code == 200 and out["erased"] == [], out
+        assert out["skipped"] == [{"id": s, "reason": "running"}
+                                  for s in ("aaaa1111", "bbbb2222", "c0ffee00")]
+        for u in (U1, U2, U3):
+            assert (projects / f"{u}.jsonl").read_text() == "talk"
+        assert len(library.load(api.lib)["sessions"]) == 3
+        assert p.poll() is None and _alive(api, "cs-aaaa1111")              # nothing interrupted
+    finally:
+        p.kill()
+        p.wait(timeout=5)
+
+
+def test_empty_trash_validates_its_ids(api, projects):
+    _seed(api, (U1, "binned", 10))
+    with library.update(api.lib) as L:
+        library.trash(L, "aaaa1111", now=5)
+    for body in ({}, {"ids": "aaaa1111"}, {"ids": ["../x"]}, {"ids": ["AAAA1111"]}, {"ids": [1]},
+                 {"ids": None}):
+        assert post(api, "empty-trash", body)[0] == 400, body
+    assert post(api, "empty-trash", {"ids": []}) == (200, {"erased": [], "skipped": []})
+    assert len(library.load(api.lib)["sessions"]) == 1
+
+
+def _move_cwd(api, sid, cwd):
+    with library.update(api.lib) as L:
+        library.find(L, sid)["cwd"] = cwd
+
+
+def test_empty_trash_erases_where_claude_ran_when_the_folder_is_gone(api, projects, tmp_path):
+    # review 2026-10-23: the terminal's folder was renamed/removed, so the pane ran in
+    # WORKDIR (library_cli.effective_cwd) and the transcript is under its slug — that
+    # is the one to erase, not a "nothing there" under the old folder's slug
+    _seed(api, (U1, "folder gone", 10), (U2, "no folder at all", 20))
+    _move_cwd(api, "aaaa1111", str(tmp_path / "renamed-away"))
+    _move_cwd(api, "bbbb2222", "")
+    here = projects.parent / library.cwd_slug(library_cli.WORKDIR)
+    here.mkdir(exist_ok=True)
+    for u in (U1, U2):
+        (here / f"{u}.jsonl").write_text("talk")
+    (here / U1).mkdir()
+    with library.update(api.lib) as L:
+        library.trash(L, "aaaa1111", now=5)
+        library.trash(L, "bbbb2222", now=6)
+    code, out = post(api, "empty-trash", {"ids": ["aaaa1111", "bbbb2222"]})
+    assert code == 200 and out == {"erased": ["aaaa1111", "bbbb2222"], "skipped": []}, out
+    for u in (U1, U2):
+        assert not (here / f"{u}.jsonl").exists()
+    assert not (here / U1).exists()
+    assert library.load(api.lib)["sessions"] == []
+
+
+def test_empty_trash_keeps_one_whose_transcript_is_still_on_disk_elsewhere(api, projects):
+    # never "erased" while its conversation is still on disk: the entry stays in the
+    # trash (to restore or try again), and nothing is removed outside its own folders
+    _seed(api, (U1, "copy elsewhere", 10))
+    (projects / f"{U1}.jsonl").write_text("talk")
+    other = projects.parent / "-somewhere-else"
+    other.mkdir()
+    (other / f"{U1}.jsonl").write_text("talk too")
+    with library.update(api.lib) as L:
+        library.trash(L, "aaaa1111", now=5)
+    code, out = post(api, "empty-trash", {"ids": ["aaaa1111"]})
+    assert code == 200 and out == {"erased": [], "skipped": [{"id": "aaaa1111",
+                                                             "reason": "left-on-disk"}]}, out
+    assert (other / f"{U1}.jsonl").read_text() == "talk too"
+    assert (projects / f"{U1}.jsonl").read_text() == "talk"          # nothing half-erased
+    assert [s["id"] for s in get(api, "/api/library?trash=1")[1]["sessions"]] == ["aaaa1111"]
+    assert "left-on-disk" in api.ss.EMPTY_TRASH_REASONS
+
+
+def test_archive_refuses_a_trashed_terminal(api):
+    # review 2026-10-23: a stale row (a 2nd tab, or before the next poll) must not
+    # move a trashed terminal between the lists — Restore puts it back where it was
+    _seed(api, (U1, "archived, then binned", 10, True), (U2, "binned", 20))
+    with library.update(api.lib) as L:
+        library.trash(L, "aaaa1111", now=5)
+        library.trash(L, "bbbb2222", now=6)
+    for sid, flag in (("aaaa1111", False), ("bbbb2222", True)):
+        code, out = post(api, "archive", {"id": sid, "archived": flag})
+        assert code == 409 and out["reason"] == "trashed", (sid, out)
+    L = library.load(api.lib)
+    assert library.find(L, "aaaa1111")["archived"] is True
+    assert library.find(L, "bbbb2222")["archived"] is False
+    assert post(api, "untrash", {"id": "aaaa1111"})[1]["archived"] is True
+    assert post(api, "untrash", {"id": "bbbb2222"})[1]["archived"] is False

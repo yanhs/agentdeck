@@ -168,12 +168,14 @@ def unload(session):
 
 
 def archived_ids():
-    """Ids of archived registry entries; empty when the registry is missing or
-    unreadable (never guess towards killing)."""
+    """Ids of archived registry entries — trashed ones too (Move to Trash unloads at
+    once; one still loaded gets the archive's short window); empty when the
+    registry is missing or unreadable (never guess towards killing)."""
     path = os.getenv("AGENTDECK_LIBRARY") or library.LIB_FILE
     try:
         lib = library.load(path)
-        return {e["id"] for e in lib.get("sessions", []) if e.get("archived") and "id" in e}
+        return {e["id"] for e in lib.get("sessions", [])
+                if (e.get("archived") or library.is_trashed(e)) and "id" in e}
     except Exception:
         return set()
 
