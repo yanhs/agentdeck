@@ -1814,11 +1814,25 @@ class AuthHandler(BaseHTTPRequestHandler):
                               401 if error else 200)
         self._html(login_html(error), 401 if error else 200)
 
-    def _login_cookie(self, user):
+    def _session_cookie(self, user):
         tok = _sign_token(user or "admin", int(time.time()) + AUTH_TTL)
+        return f"{AUTH_COOKIE}={tok}; {_cookie_flags(self._secure())}"
+
+    def _login_cookie(self, user):
         self.send_response(302)
-        self.send_header("Set-Cookie", f"{AUTH_COOKIE}={tok}; {_cookie_flags(self._secure())}")
+        self.send_header("Set-Cookie", self._session_cookie(user))
         self.send_header("Location", "/")
+        self.end_headers()
+
+    def _renew(self):
+        # Sliding session: the open dashboard calls GET /login?renew=1 every few hours and a
+        # still-valid cookie is reissued for another AUTH_TTL, so daily use never reaches the
+        # expiry. No valid cookie → 401 and nothing set (an expired login is not revived).
+        user = self._user()
+        self.send_response(204 if user else 401)
+        self.send_header("Cache-Control", "no-store")
+        if user:
+            self.send_header("Set-Cookie", self._session_cookie(user))
         self.end_headers()
 
     def _cookies(self):
@@ -1853,6 +1867,8 @@ class AuthHandler(BaseHTTPRequestHandler):
             if not (PASSFILE and self._user()):
                 return self._redirect("/login")
             return self._html(_change_form())
+        if path == "/login" and parse_qs(urlparse(self.path).query).get("renew") == ["1"]:
+            return self._renew()
         self._send_login()      # /login (or anything else) → the form
 
     def do_POST(self):

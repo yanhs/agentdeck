@@ -84,6 +84,7 @@ class FakeAPI:
         self.fail_restart = False
         self.hold_restart = False  # keep Restart requests unanswered until release()
         self.held = []
+        self.renews = 0            # GET /login?renew=1 the page sent (sliding session)
         self.shell = None          # top-level "shell" of GET /api/library (None = absent)
         self._n = 0
 
@@ -284,6 +285,8 @@ def _open(browser, site, api, width=1440, height=900, mobile=False,
                                                               "ram_used_mb": 6400,
                                                               "ram_total_mb": 16000}})))
     pg.route(re.compile(r"/api/page-version"), lambda r: r.abort())
+    pg.route(re.compile(r"/login\?renew=1$"),
+             lambda r: (setattr(api, "renews", api.renews + 1), r.fulfill(status=204)))
     # the terminal endpoint: a tiny stand-in page instead of ttyd
     pg.route(re.compile(r"/sess/"),
              lambda r: r.fulfill(status=200, content_type="text/html",
@@ -3991,3 +3994,18 @@ def test_trash_is_readable_in_both_themes(page, api, theme):
     assert _contrast(ok, "rgb(255, 255, 255)") >= 4.5, ok          # white text on it
     shot(page, f"index-lib-trash-{theme}.png")
     _answer(page, False)
+
+
+# ── sliding session ─────────────────────────────────────────────────────────
+def test_open_page_renews_the_login(browser, site):
+    """The open dashboard asks for a fresh cookie on load and then every few hours,
+    so a panel in daily use never hits the 30-day expiry (25.10.2026)."""
+    api = FakeAPI()
+    ctx, pg = _open(browser, site, api,
+                    init_script="window.__ad_renew_ms = 300;")   # hours → 0.3 s for the test
+    try:
+        pg.wait_for_function("1", timeout=100)
+        pg.wait_for_timeout(1200)
+        assert api.renews >= 3, api.renews           # on load + repeated
+    finally:
+        ctx.close()

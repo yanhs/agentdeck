@@ -2667,6 +2667,12 @@
         _v = v;
       } catch { /* network blip — ignore, never reload on error */ }
     }, 1500);
+
+    // Sliding session: while the panel is open, trade the login cookie for a fresh 30-day
+    // one — on load, then every 6 h — so daily use never reaches the expiry. A 401 means
+    // already signed out: ignore it, the next request lands on /login as usual.
+    const _renewLogin = () => fetch('/login?renew=1', {cache: 'no-store', credentials: 'same-origin'}).catch(() => {});
+    _renewLogin(); setInterval(_renewLogin, window.__ad_renew_ms || 6 * 3600 * 1000);
   </script>
 </body>
 </html>
