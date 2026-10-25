@@ -1705,7 +1705,7 @@ button{width:100%;margin-top:18px;padding:11px;border:0;border-radius:8px;backgr
   color:#fff;font-size:15px;font-weight:600;cursor:pointer}
 button:hover{background:#2ea043}
 .err{margin:14px 0 0;color:#ff7b72;font-size:13px;text-align:center}
-</style></head><body>
+</style>__BREAKOUT__</head><body>
 <form class="card" method="POST" action="/login">
   <h1>🛰 AgentDeck</h1><p class="sub">Sign in to open the panel</p>
   __USER__<label for="p">Password</label>
@@ -1725,6 +1725,11 @@ def _login_needs_user():
     return not PASSFILE or _pw_seedable()
 
 
+# A framed sign-in page takes the whole tab: after an expired session the terminal iframe
+# reloads into /login, and logging in THERE nested a second dashboard inside the pane.
+_FRAME_BREAKOUT = "<script>if(window.top!==window.self)window.top.location.replace('/login')</script>"
+
+
 def login_html(error=False):
     """The sign-in page; Username field only where it is checked."""
     need_user = _login_needs_user()
@@ -1732,6 +1737,7 @@ def login_html(error=False):
     return (LOGIN_HTML
             .replace("__USER__", _LOGIN_USER_FIELD if need_user else "")
             .replace("__PFOCUS__", "" if need_user else " autofocus")
+            .replace("__BREAKOUT__", _FRAME_BREAKOUT)
             .replace("__ERR__", f'<p class="err">{err}</p>' if error else ""))
 
 
@@ -1751,7 +1757,7 @@ _AUTH_HEAD = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
   'color:#fff;font-size:15px;font-weight:600;cursor:pointer}button:hover{background:#2ea043}'
   '.err{margin:14px 0 0;color:#ff7b72;font-size:13px;text-align:center}'
   '.ok{margin:14px 0 0;color:#3fb950;font-size:13px;text-align:center}'
-  'a{color:#58a6ff}</style></head><body>')
+  'a{color:#58a6ff}</style>' + _FRAME_BREAKOUT + '</head><body>')
 
 
 def _setup_form(error=""):
