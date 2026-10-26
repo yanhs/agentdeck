@@ -1952,6 +1952,7 @@
       hideCopyHint();
       if (plain) { _frameFocus = null; return; }
       if (_isMobile) enableIframeTouchScroll(f);
+      onXtermScreen(f, attachWheelThrottle);       // touchpads: desktop and tablet alike
       if (!_isMobile) enableClipboardCopy(f);
       enablePasteImage(f);
       suppressContextMenu(f);
@@ -2110,7 +2111,8 @@
          gesture, and shows the "Copied" chip; touchcancel never copies;
        - a move before the long press scrolls: wheel events at the finger, one per three
          cell heights; two fingers do nothing. ── */
-    function enableIframeTouchScroll(iframe) {
+    // fn(win, screen) once the terminal iframe's xterm.js screen exists
+    function onXtermScreen(iframe, fn) {
       iframe.addEventListener('load', () => {
         let attempts = 0;
         const poll = setInterval(() => {
@@ -2120,10 +2122,45 @@
             const screen = doc.querySelector('.xterm-screen');
             if (!screen) return;
             clearInterval(poll);
-            attachTouchSelect(iframe.contentWindow, screen);
+            fn(iframe.contentWindow, screen);
           } catch(e) { clearInterval(poll); }
         }, 100);
       });
+    }
+
+    function enableIframeTouchScroll(iframe) {
+      onXtermScreen(iframe, (win, screen) => attachTouchSelect(win, screen));
+    }
+
+    /* ── Touchpad: a calmer terminal scroll ──
+       xterm.js sends the app (tmux, Claude) a wheel report for EVERY wheel event, and each
+       report scrolls several lines (tmux copy mode: 5), so a touchpad's stream of small
+       deltas flew past. Small pixel deltas are summed here and one report goes through per
+       WHEEL_CELLS cell heights of travel, as a phone swipe does. A mouse-wheel notch is one
+       big delta (>= NOTCH_PX) and stays one report. Ctrl+wheel (pinch zoom), line/page
+       deltas and our own synthetic events pass untouched. ── */
+    function attachWheelThrottle(win, screen) {
+      const WHEEL_CELLS = 3, NOTCH_PX = 50;
+      const cellH = () => {
+        const rows = win.term && win.term.rows;
+        return rows ? screen.getBoundingClientRect().height / rows : 20;
+      };
+      let accum = 0;
+      // capture on the window: runs before xterm.js's own listener on .xterm
+      win.addEventListener('wheel', e => {
+        if (!e.isTrusted || e.ctrlKey || e.deltaMode !== 0 || !e.deltaY) return;
+        if (!screen.contains(e.target)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (accum && Math.sign(accum) !== Math.sign(e.deltaY)) accum = 0;   // turned around
+        accum += e.deltaY;
+        if (Math.abs(e.deltaY) < NOTCH_PX && Math.abs(accum) < WHEEL_CELLS * cellH()) return;
+        accum = 0;
+        screen.dispatchEvent(new win.WheelEvent('wheel', {
+          deltaY: e.deltaY > 0 ? 120 : -120, deltaMode: 0, bubbles: true, cancelable: true,
+          clientX: e.clientX, clientY: e.clientY
+        }));
+      }, {capture: true, passive: false});
     }
 
     function attachTouchSelect(win, screen) {

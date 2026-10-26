@@ -138,7 +138,13 @@ def ipad(pw, ttyd_server):
     yield from _dashboard(pw, ttyd_server, init_script=IPAD_PLATFORM)
 
 
-def _dashboard(pw, ttyd_server, init_script=None):
+@pytest.fixture(scope="module")
+def desktop(pw, ttyd_server):
+    """The dashboard in a desktop browser (mouse wheel and touchpad, no touch)."""
+    yield from _dashboard(pw, ttyd_server, device=None)
+
+
+def _dashboard(pw, ttyd_server, init_script=None, device="Pixel 7"):
     p, b = pw
     origin = ttyd_server["origin"]
     api = FakeAPI()
@@ -150,7 +156,8 @@ def _dashboard(pw, ttyd_server, init_script=None):
             return route.fulfill(status=200, path=str(f))
         route.fulfill(status=404, body="")
 
-    ctx = b.new_context(**p.devices["Pixel 7"])
+    ctx = b.new_context(**(p.devices[device] if device
+                           else {"viewport": {"width": 1440, "height": 900}}))
     try:
         ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin=origin)
         ctx.set_default_timeout(15000)
@@ -167,7 +174,7 @@ def _dashboard(pw, ttyd_server, init_script=None):
         pg.route(re.compile(r"/api/page-version"), lambda r: r.abort())
         pg.goto(origin + "/index-lib.html")
         pg.wait_for_selector(".card[data-sid]")
-        pg.tap(row("dddd0004") + " .proj")
+        (pg.tap if device else pg.click)(row("dddd0004") + " .proj")
         pg.wait_for_selector("#wrap iframe[src^='/sess/']")
         pg.frame_locator("#wrap iframe").locator(".xterm.enable-mouse-events").wait_for()
         term = next(f for f in pg.frames if "/sess/" in f.url)
@@ -287,3 +294,32 @@ def test_swipe_scrolls_with_wheel_reports_and_no_press(phone):
     ev = _events(_since(log, p))
     assert any(b in (64, 65) for b, _ in ev), ev
     assert not [e for e in ev if e[0] in (0, 1, 2)], ev
+
+
+# ── desktop: touchpad vs mouse wheel ────────────────────────────────────────
+# 26.10.2026 «очень быстро идёт прокрутка на тачпаде»: xterm.js sends a wheel report
+# per cell height of touchpad travel and tmux (or Claude) scrolls several lines on each.
+# The dashboard now lets one report through per three cell heights (like a phone swipe);
+# a mouse-wheel notch (one big delta) stays exactly one report.
+def _wheel_reports(ph, steps, delta, pause):
+    pg, log = ph["page"], ph["log"]
+    x, y, ch = _geometry(ph)
+    pg.mouse.move(x, y + ch * 5)
+    pg.wait_for_timeout(300)
+    p = _pos(log)
+    for _ in range(steps):
+        pg.mouse.wheel(0, delta)
+        pg.wait_for_timeout(pause)
+    pg.wait_for_timeout(800)
+    return [b for b, _ in _events(_since(log, p)) if b in (64, 65)], ch
+
+
+def test_touchpad_scroll_is_three_cells_per_report(desktop):
+    reports, ch = _wheel_reports(desktop, steps=60, delta=4, pause=15)   # 240 px of glide
+    assert reports and set(reports) == {65}, reports                     # still scrolls, down
+    assert len(reports) <= 240 / (3 * ch) + 1, (len(reports), ch)
+
+
+def test_mouse_wheel_notch_is_still_one_report(desktop):
+    reports, _ = _wheel_reports(desktop, steps=5, delta=-100, pause=60)
+    assert reports == [64] * 5, reports
