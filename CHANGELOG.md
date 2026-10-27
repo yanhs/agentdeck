@@ -8,6 +8,7 @@ All notable changes to AgentDeck. Newest first.
 - **The terminal list no longer reorders itself.** It used to put loaded terminals above unloaded ones and, until you dragged something, the most recently used one on top — so opening a terminal, or the idle reaper unloading one, made the list jump. Now the order only changes when you change it: a new terminal goes on top, dragging moves it, and nothing else does. Loaded terminals still show their status dot; unloaded ones are still greyed. The same order is used by `/list` in the Telegram bot. Terminals from before the update that never got a place keep a fixed order too (newest first) until you drag them.
 
 ### Telegram
+- **A reply is no longer lost to a slow moment.** The bot waited only 5 seconds for Telegram and, if the edit that puts Claude's final answer into the message timed out once, gave up — the answer never showed. It now waits 15 seconds and retries the final answer after a timeout or a dropped connection (an edit that turns out to have landed counts as delivered).
 - **/restart** restarts the current terminal, like ⟳ on the page: Claude starts again on the same conversation. If Claude is busy, the bot asks first with a "Restart anyway" button; when a restart isn't possible it says why (not loaded, archived, in the trash, open elsewhere).
 - **TG_BRIDGE_API_BASE** points the bridge at a Bot API relay instead of api.telegram.org — for setups where the real bot token must not be on the machine running the bridge (for example, one sandbox per person behind a shared bot).
 

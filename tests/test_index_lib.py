@@ -41,20 +41,20 @@ def _free_port():
 
 
 def base_sessions():
-    # Deliberately NOT in display order: the page itself must put loaded first,
-    # then most recently used.
+    # Deliberately NOT in display order: the page itself must sort by place (pos)
+    # — dddd, bbbb, aaaa, cccc — and never by loaded state or last use.
     return [
         {"id": "aaaa0001", "name": "ImmAppeal деплой", "cwd": "/home/ubuntu/pr",
-         "created": 1, "last_used": 100, "archived": False,
+         "created": 1, "last_used": 100, "archived": False, "pos": 2,
          "active": False, "attached": False, "status": "off"},
         {"id": "bbbb0002", "name": "Светлота сайт", "cwd": "/home/ubuntu/pr",
-         "created": 2, "last_used": 50, "archived": False,
+         "created": 2, "last_used": 50, "archived": False, "pos": 1,
          "active": True, "attached": False, "status": "working"},
         {"id": "cccc0003", "name": "Старая тема", "cwd": "/home/ubuntu/pr",
-         "created": 3, "last_used": 10, "archived": False,
+         "created": 3, "last_used": 10, "archived": False, "pos": 3,
          "active": False, "attached": False, "status": "off"},
         {"id": "dddd0004", "name": "TG мост", "cwd": "/home/ubuntu/pr",
-         "created": 4, "last_used": 200, "archived": False,
+         "created": 4, "last_used": 200, "archived": False, "pos": 0,
          "active": True, "attached": True, "status": "idle"},
     ]
 
@@ -367,8 +367,21 @@ def test_rows_show_name_and_short_code(page):
     assert code_px < name_px
 
 
-def test_loaded_first_then_most_recent(page):
+def test_order_is_by_place_never_by_activity(page):
     assert row_ids(page) == ["dddd0004", "bbbb0002", "aaaa0001", "cccc0003"]
+
+
+def test_without_places_newest_created_first_whatever_is_loaded(browser, site):
+    """Libraries from before places: fixed newest-created-first order; the loaded
+    ones (bbbb, dddd) and the recently used ones don't float up (27.10.2026)."""
+    api = FakeAPI()
+    for s in api.sessions:
+        s.pop("pos", None)
+    ctx, pg = _open(browser, site, api)
+    try:
+        assert row_ids(pg) == ["dddd0004", "cccc0003", "bbbb0002", "aaaa0001"]
+    finally:
+        ctx.close()
 
 
 def test_status_dots_and_greyed_unloaded(page):
@@ -454,13 +467,14 @@ def test_buttons_do_not_open_the_row(page):
     assert page.query_selector("#wrap iframe") is None
 
 
-def test_poll_moves_a_freshly_loaded_session_up(page, api):
+def test_poll_does_not_move_a_freshly_loaded_session(page, api):
+    before = row_ids(page)
     api.sessions[2].update(active=True, status="working", last_used=300)  # cccc0003
     page.wait_for_function(
-        "() => document.querySelector('#list .card[data-sid]').dataset.sid === 'cccc0003'",
-        timeout=6000)
-    assert "working" in page.get_attribute(row("cccc0003") + " .dot", "class")
+        "() => (document.querySelector('[data-sid=\"cccc0003\"] .dot')||{}).className"
+        "?.includes('working')", timeout=6000)
     assert "unloaded" not in page.get_attribute(row("cccc0003"), "class")
+    assert row_ids(page) == before                    # the list didn't jump
 
 
 # ── new theme ───────────────────────────────────────────────────────────────
@@ -785,8 +799,8 @@ def test_initial_order_follows_pos(browser, site):
         s["pos"] = p
     ctx, pg = _open(browser, site, api)
     try:
-        # loaded first (bbbb pos 0, dddd pos 1), then the rest (cccc pos 0, aaaa pos 1)
-        assert row_ids(pg) == ["bbbb0002", "dddd0004", "cccc0003", "aaaa0001"]
+        # by place only, loaded or not: pos 0 (bbbb, cccc), then pos 1 (aaaa, dddd)
+        assert row_ids(pg) == ["bbbb0002", "cccc0003", "aaaa0001", "dddd0004"]
     finally:
         ctx.close()
 

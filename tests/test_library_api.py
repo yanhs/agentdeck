@@ -148,9 +148,10 @@ def test_get_carries_system_stats_like_the_terminal_status(api):
 
 def test_get_lists_registry_in_display_order_with_tmux_state(api):
     _seed(api, (U1, "ImmAppeal деплой", 10), (U2, "Налоги", 20), (U3, "Старое", 5))
-    _start(api, "cs-c0ffee00")                          # oldest, but loaded -> first
+    _start(api, "cs-c0ffee00")                          # loaded, but the list doesn't jump
     code, data = get(api)
     assert code == 200 and data["max_active"] == library.MAX_ACTIVE
+    # by place: each new one went on top — c0ffee00 (seeded last), bbbb, aaaa
     assert [s["id"] for s in data["sessions"]] == ["c0ffee00", "bbbb2222", "aaaa1111"]
     for s in data["sessions"]:
         assert set(s) == ROW_KEYS
@@ -160,7 +161,8 @@ def test_get_lists_registry_in_display_order_with_tmux_state(api):
     assert by["aaaa1111"] == {"id": "aaaa1111", "name": "ImmAppeal деплой", "cwd": "/home/ubuntu/pr",
                               "created": 10, "last_used": 10, "archived": False,
                               "active": False, "attached": False, "status": "off", "legacy_path": None,
-                              "pos": None}
+                              "pos": by["aaaa1111"]["pos"]}
+    assert isinstance(by["aaaa1111"]["pos"], int)       # every terminal has a place
 
 
 def test_status_working_is_the_terminal_cards_cpu_measure(api, monkeypatch):
@@ -616,22 +618,24 @@ def test_reorder_rewrites_the_display_order(api):
 
 def test_reorder_validates_ids(api):
     _seed(api, (U1, "a", 10), (U2, "b", 20))
+    before = [e["pos"] for e in library.load(api.lib)["sessions"]]
     for body in ({}, {"ids": "aaaa1111"}, {"ids": []}, {"ids": ["aaaa1111", "../x"]},
                  {"ids": ["aaaa1111", 5]}, {"ids": ["aaaa1111", "deadbeef"]},
                  {"ids": ["aaaa1111", "aaaa1111"]}):
         code, err = post(api, "reorder", body)
         assert code == 400 and "error" in err, body
-    assert all("pos" not in e for e in library.load(api.lib)["sessions"])
+    assert [e["pos"] for e in library.load(api.lib)["sessions"]] == before
 
 
 def test_reorder_has_the_same_csrf_checks(api, monkeypatch):
     monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
     _seed(api, (U1, "a", 10), (U2, "b", 20))
+    before = [e["pos"] for e in library.load(api.lib)["sessions"]]
     body = json.dumps({"ids": ["aaaa1111", "bbbb2222"]}).encode()
     assert _raw_req(api, "POST", "/api/library/reorder", body, {"Content-Type": "text/plain"})[0] == 415
     assert _raw_req(api, "POST", "/api/library/reorder", body,
                     {"Content-Type": "application/json", "Origin": "https://evil.example"})[0] == 403
-    assert all("pos" not in e for e in library.load(api.lib)["sessions"])
+    assert [e["pos"] for e in library.load(api.lib)["sessions"]] == before
 
 
 # ── Archive unloads at once unless the terminal is working (owner 2026-09-25:
