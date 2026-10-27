@@ -181,6 +181,34 @@ def test_an_existing_claude_md_gets_the_services_rule_once(tmp_path):
     assert "/home/u/projects/.services/<name>.sh" in text
 
 
+def test_a_new_claude_md_says_where_the_agent_runs(tmp_path):
+    """27.10.2026: asked "if I change the password and open the web, does the first terminal
+    stop?", a sandbox agent answered "I can't tell how your platform works" and that it
+    would not remember the conversation. The agents must know AgentDeck's facts."""
+    md = tmp_path / "CLAUDE.md"
+    r = run(tmp_path, "--claude-md", str(md))
+    assert r.returncode == 0, r.stderr
+    text = md.read_text()
+    assert "<!-- agentdeck-environment -->" in text
+    assert "same terminals" in text                       # web and Telegram: one terminal
+    assert "password" in text and "stops nothing" in text
+    assert "claude --resume" in text                      # restart / reopen: same conversation
+    assert "new terminal" in text.lower() and "memory" in text
+    assert text.isascii()
+
+
+def test_a_claude_md_agentdeck_wrote_earlier_gets_the_environment_note_once(tmp_path):
+    """Sandboxes and servers set up before the note have AgentDeck's file without it.
+    A person's own CLAUDE.md is still never touched (test_claude_md_written_only_when_missing)."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Working rules (AgentDeck)\n\n## Put multi-step work on the task board\n")
+    for _ in range(2):
+        run(tmp_path, "--claude-md", str(md))
+    text = md.read_text()
+    assert text.startswith("# Working rules (AgentDeck)\n")
+    assert text.count("<!-- agentdeck-environment -->") == 1
+
+
 def test_remove_never_touches_claude_md(tmp_path):
     md = tmp_path / "CLAUDE.md"
     run(tmp_path, "--claude-md", str(md))

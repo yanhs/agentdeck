@@ -59,6 +59,20 @@ nothing scheduled. Leave something that brings you back: a background command
 Otherwise close or park the task on the board.
 """
 
+# What the agents must know about where they run. 27.10.2026 a sandbox agent, asked
+# whether changing the password and opening the web would stop the first terminal,
+# answered "I can't tell how your platform works". Every fact below is AgentDeck's.
+ENV_MARK = "<!-- agentdeck-environment -->"
+ENV_MD = """\
+{mark}
+## Where you run: an AgentDeck terminal
+The dashboard and the Telegram bot are two windows into the same terminals: closing
+them, logging in elsewhere or changing the password stops nothing. A terminal is one
+conversation; restart or reopening after an idle unload resumes it (claude --resume).
+A new terminal is a new conversation and sees no other: keep shared facts in files or memory.
+"""
+AGENTDECK_HEADER = "# Working rules (AgentDeck)"
+
 SERVICES_MARK = "<!-- agentdeck-services -->"
 SERVICES_MD = """\
 {mark}
@@ -191,6 +205,13 @@ def main(argv=None) -> int:
         os.makedirs(os.path.dirname(a.claude_md) or ".", exist_ok=True)
         with open(a.claude_md, "w") as f:
             f.write(CLAUDE_MD.format(tracker=a.tracker))
+    if a.claude_md and not a.remove and os.path.exists(a.claude_md):
+        # once, and only into the file AgentDeck wrote — a person's own CLAUDE.md is theirs
+        text = open(a.claude_md).read()
+        if text.startswith(AGENTDECK_HEADER) and ENV_MARK not in text:
+            with open(a.claude_md, "a") as f:
+                f.write(("\n" if not text.endswith("\n\n") else "")
+                        + ENV_MD.format(mark=ENV_MARK))
     if a.claude_md and a.services_dir and not a.remove:
         # once, also into the user's own CLAUDE.md (keep the mark line to opt out)
         text = open(a.claude_md).read() if os.path.exists(a.claude_md) else ""
