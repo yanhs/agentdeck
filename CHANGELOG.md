@@ -2,6 +2,18 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## v1.9.0 — The terminal list stays put; /restart in Telegram
+
+### Dashboard and Telegram
+- **The terminal list no longer reorders itself.** It used to put loaded terminals above unloaded ones and, until you dragged something, the most recently used one on top — so opening a terminal, or the idle reaper unloading one, made the list jump. Now the order only changes when you change it: a new terminal goes on top, dragging moves it, and nothing else does. Loaded terminals still show their status dot; unloaded ones are still greyed. The same order is used by `/list` in the Telegram bot. Terminals from before the update that never got a place keep a fixed order too (newest first) until you drag them.
+
+### Telegram
+- **/restart** restarts the current terminal, like ⟳ on the page: Claude starts again on the same conversation. If Claude is busy, the bot asks first with a "Restart anyway" button; when a restart isn't possible it says why (not loaded, archived, in the trash, open elsewhere).
+- **TG_BRIDGE_API_BASE** points the bridge at a Bot API relay instead of api.telegram.org — for setups where the real bot token must not be on the machine running the bridge (for example, one sandbox per person behind a shared bot).
+
+### Upgrading
+- Restart the dashboard's status server and the Telegram bridge after updating (with Docker, rebuilding and restarting the container does it).
+
 ## v1.8.0 — Trash and ⟳ restart; select several lines on a phone
 
 ### Dashboard

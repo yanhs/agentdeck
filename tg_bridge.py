@@ -68,7 +68,7 @@ import convo_sync           # a terminal takes the number of its live conversati
 
 from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatAction
-from telegram.error import TelegramError, RetryAfter
+from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError, TimedOut
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters,
@@ -731,8 +731,22 @@ async def _safe_edit(message, text: str, reply_markup=None, retries: int = 0) ->
                 await asyncio.sleep(_retry_after_secs(e) + 1)
                 continue
             return False
+        except BadRequest as e:          # (a NetworkError subclass: handle it first)
+            if "not modified" in str(e).lower():
+                # unchanged content — e.g. a retry after a timeout whose edit landed
+                _convo("EDIT-OK", text, "already there")
+                return True
+            _convo("EDIT-FAIL", f"{type(e).__name__}: {e}", "")
+            return False
+        except (TimedOut, NetworkError) as e:
+            # a slow or dropped connection: the FINAL reply (retries>0) must still
+            # land — 27.10.2026 answers were lost to a single 5 s TimedOut
+            _convo("EDIT-FAIL", f"{type(e).__name__}: {e} (attempt {attempt + 1}/{retries + 1})", "")
+            if attempt < retries:
+                await asyncio.sleep(2 * (attempt + 1))
+                continue
+            return False
         except TelegramError as e:
-            # "message is not modified" is benign (content unchanged); log the rest
             _convo("EDIT-FAIL", f"{type(e).__name__}: {e}", "")
             return False
     return False
@@ -750,6 +764,15 @@ async def _safe_send(bot, chat_id: int, text: str, retries: int = 0):
             _convo("SEND-FLOOD", f"retry in {_retry_after_secs(e)}s (attempt {attempt + 1}/{retries + 1})", f"chat={chat_id}")
             if attempt < retries:
                 await asyncio.sleep(_retry_after_secs(e) + 1)
+                continue
+            return None
+        except BadRequest as e:
+            _convo("SEND-FAIL", f"{type(e).__name__}: {e}", f"chat={chat_id}")
+            return None
+        except (TimedOut, NetworkError) as e:
+            _convo("SEND-FAIL", f"{type(e).__name__}: {e} (attempt {attempt + 1}/{retries + 1})", f"chat={chat_id}")
+            if attempt < retries:
+                await asyncio.sleep(2 * (attempt + 1))
                 continue
             return None
         except TelegramError as e:
@@ -2392,7 +2415,9 @@ async def _post_init(app: Application) -> None:
 
 def build_app() -> Application:
     """The bot: handlers for every BOT_COMMANDS entry and every button kind."""
-    builder = Application.builder().token(TOKEN).post_init(_post_init)
+    builder = (Application.builder().token(TOKEN).post_init(_post_init)
+               # 5 s (the default) is too tight for a busy edit stream or a relay
+               .connect_timeout(10).read_timeout(15).write_timeout(15).pool_timeout(10))
     # TG_BRIDGE_API_BASE: talk to Telegram through a relay (a guest sandbox holds only
     # a pass; the relay on the host holds the real token). Unset = api.telegram.org.
     api_base = os.environ.get("TG_BRIDGE_API_BASE", "").rstrip("/")

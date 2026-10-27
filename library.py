@@ -151,12 +151,9 @@ def create(lib, name, cwd, now, uuid=None):
     e = {"id": sid, "uuid": u, "name": (name or "").strip() or default_name(now),
          "cwd": cwd, "created": now, "last_used": now, "archived": False}
     placed = [x["pos"] for x in lib["sessions"] if _has_pos(x)]
-    if placed:                                  # manual order in use: new one on top
-        e["pos"] = min(placed) - 1
-    elif os.environ.get("AGENTDECK_STABLE_ORDER") == "1":
-        # a fixed list from the first terminal on: opening one never reorders it
-        # (guest sandboxes, owner 27.10.2026); unset = most recent first, as before
-        e["pos"] = 0
+    # every new terminal gets a place on top; after that only a drag moves it —
+    # the list never reorders itself (owner 27.10.2026)
+    e["pos"] = (min(placed) - 1) if placed else 0
     lib["sessions"].append(e)
     return e
 
@@ -508,12 +505,14 @@ def _has_pos(e):
     return isinstance(p, (int, float)) and not isinstance(p, bool)
 
 
-def order_key(e, active_ids):
-    """Active (loaded) first, then the rest; inside each group the manual order
-    (`pos`, set by dragging on the page) first, then the others most recent first."""
+def order_key(e, active_ids=()):
+    """The list never jumps (owner 27.10.2026): the manual order (`pos` — a new
+    terminal gets one on top, dragging on the page changes it), then entries from
+    before that rule newest-created first. Using a terminal, loading or unloading
+    it never moves it; `active_ids` is kept for callers and ignored."""
     if _has_pos(e):
-        return (e["id"] not in active_ids, 0, e["pos"])
-    return (e["id"] not in active_ids, 1, -(e.get("last_used") or 0))
+        return (0, e["pos"])
+    return (1, -(e.get("created") or 0))
 
 
 def display_order(lib, active_ids, include_archived=False, trashed=False):

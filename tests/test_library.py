@@ -377,17 +377,12 @@ def test_reorder_sets_pos_and_display_order_follows_it():
     assert [lib.find(L, s)["pos"] for s in ("aaaaaaaa", "cccccccc")] == [0, 1]
 
 
-def test_active_group_still_comes_first_with_manual_order():
+def test_manual_order_holds_whatever_is_loaded():
+    """Loaded ones used to float to the top; the list must not jump (27.10.2026)."""
     L = _lib4()
     lib.reorder(L, ["aaaaaaaa", "bbbbbbbb", "cccccccc", "dddddddd"])
     order = [e["id"][:1] for e in lib.display_order(L, {"cccccccc", "bbbbbbbb"})]
-    assert order == ["b", "c", "a", "d"]
-
-
-def test_entries_without_pos_go_by_recency_after_positioned_ones():
-    L = _lib4()
-    lib.reorder(L, ["aaaaaaaa", "bbbbbbbb"])
-    assert [e["id"][:1] for e in lib.display_order(L, set())] == ["a", "b", "d", "c"]
+    assert order == ["a", "b", "c", "d"]
 
 
 def test_new_entry_goes_to_the_top_of_its_group_when_order_is_manual():
@@ -396,18 +391,14 @@ def test_new_entry_goes_to_the_top_of_its_group_when_order_is_manual():
     e = lib.create(L, "new", cwd="/", now=1, uuid="eeeeeeee-5555-4555-8555-555555555555")
     assert [x["id"][:1] for x in lib.display_order(L, set())][0] == "e"
     assert e["pos"] < 0
-    # without any manual order a new one is on top by recency, no pos needed
-    L2 = lib.empty()
-    lib.create(L2, "old", cwd="/", now=10, uuid=U1)
-    n = lib.create(L2, "new", cwd="/", now=20, uuid=U2)
-    assert "pos" not in n and lib.display_order(L2, set())[0]["id"] == n["id"]
 
 
 def test_reorder_unknown_id_raises_and_changes_nothing():
     L = _lib4()
+    before = [e.get("pos") for e in L["sessions"]]
     with pytest.raises(KeyError):
         lib.reorder(L, ["aaaaaaaa", "deadbeef"])
-    assert all("pos" not in e for e in L["sessions"])
+    assert [e.get("pos") for e in L["sessions"]] == before
 
 
 # ── one number per terminal: the terminal follows its conversation ─────────
@@ -661,7 +652,8 @@ def test_trashed_entries_leave_every_listing_search_and_resolve():
     # the trash itself: only the trashed ones, the most recently trashed first
     assert ids(lib.display_order(L, set(), trashed=True)) == ["bbbbbbbb", "cccccccc"]
     lib.untrash(L, "cccccccc")
-    assert ids(lib.display_order(L, set(), include_archived=True)) == ["aaaaaaaa", "cccccccc"]
+    # created last, so its place is on top (the list goes by place, not by activity)
+    assert ids(lib.display_order(L, set(), include_archived=True)) == ["cccccccc", "aaaaaaaa"]
     assert ids(lib.resolve(L, "старая", archived=True)) == ["cccccccc"]
 
 
@@ -845,30 +837,44 @@ def test_archive_refuses_a_trashed_entry():
     assert lib.find(L, "aaaaaaaa")["archived"] is False
 
 
-# ── AGENTDECK_STABLE_ORDER=1: a fixed list (guest sandboxes, owner 27.10.2026) ──
-def test_stable_order_gives_every_new_terminal_a_place_on_top(monkeypatch):
-    monkeypatch.setenv("AGENTDECK_STABLE_ORDER", "1")
+# ── The list never jumps (owner 27.10.2026): only a drag or a new terminal moves it ──
+def test_every_new_terminal_gets_a_place_on_top():
     L = lib.empty()
     old = lib.create(L, "old", cwd="/", now=10, uuid=U1)
     new = lib.create(L, "new", cwd="/", now=20, uuid=U2)
     assert "pos" in old and "pos" in new
-    assert lib.display_order(L, set())[0]["id"] == new["id"]
+    assert [e["id"] for e in lib.display_order(L, set())] == [new["id"], old["id"]]
 
 
-def test_stable_order_opening_a_terminal_does_not_reorder(monkeypatch):
-    monkeypatch.setenv("AGENTDECK_STABLE_ORDER", "1")
+def test_using_a_terminal_never_reorders_the_list():
     L = lib.empty()
     a = lib.create(L, "a", cwd="/", now=10, uuid=U1)
     b = lib.create(L, "b", cwd="/", now=20, uuid=U2)
-    both = {a["id"], b["id"]}
-    before = [e["id"] for e in lib.display_order(L, both)]
-    lib.touch(L, a["id"], now=99)          # what opening / using a terminal does
-    assert [e["id"] for e in lib.display_order(L, both)] == before
+    before = [e["id"] for e in lib.display_order(L, set())]
+    lib.touch(L, a["id"], now=99)          # opening / typing into a terminal
+    assert [e["id"] for e in lib.display_order(L, set())] == before
 
 
-def test_without_stable_order_nothing_changes(monkeypatch):
-    monkeypatch.delenv("AGENTDECK_STABLE_ORDER", raising=False)
+def test_loading_or_unloading_never_reorders_the_list():
     L = lib.empty()
-    lib.create(L, "old", cwd="/", now=10, uuid=U1)
-    n = lib.create(L, "new", cwd="/", now=20, uuid=U2)
-    assert "pos" not in n
+    a = lib.create(L, "a", cwd="/", now=10, uuid=U1)
+    b = lib.create(L, "b", cwd="/", now=20, uuid=U2)
+    orders = {tuple(e["id"] for e in lib.display_order(L, act))
+              for act in (set(), {a["id"]}, {b["id"]}, {a["id"], b["id"]})}
+    assert len(orders) == 1                # loaded or not, same place
+
+
+def test_old_entries_without_a_place_keep_a_fixed_order_too():
+    """Libraries from before this change: no pos -> newest first by creation,
+    which never changes; positioned entries come first."""
+    L = lib.empty()
+    L["sessions"] += [
+        {"id": "aaaaaaaa", "uuid": U1, "name": "a", "cwd": "/", "created": 10,
+         "last_used": 999, "archived": False},
+        {"id": "bbbbbbbb", "uuid": U2, "name": "b", "cwd": "/", "created": 20,
+         "last_used": 1, "archived": False},
+        {"id": "cccccccc", "uuid": "cccccccc-3333-4333-8333-333333333333", "name": "c",
+         "cwd": "/", "created": 5, "last_used": 5, "archived": False, "pos": 3},
+    ]
+    order = [e["id"] for e in lib.display_order(L, {"aaaaaaaa"})]
+    assert order == ["cccccccc", "bbbbbbbb", "aaaaaaaa"]

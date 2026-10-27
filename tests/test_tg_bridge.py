@@ -1238,13 +1238,13 @@ def test_use_by_id_prefix(world):
 def test_use_several_matches_offers_buttons_and_selects_nothing(world):
     world.add("Налоги 2025", uuid=U1, last_used=10)
     world.add("Налоги 2026", uuid=U2, last_used=20)
-    world.loaded.append("aaaa1111")                      # loaded → listed first
+    world.loaded.append("aaaa1111")                      # loaded, but the list doesn't jump
     replies = run_cmd(tb.cmd_use, ["налоги"])
     assert tb.get_current(CHAT) is None
     assert world.ensured() == []                          # nothing loaded until a pick
     text, markup = replies[-1]
     assert markup is not None
-    assert _callbacks(markup) == ["use:aaaa1111", "use:bbbb2222"]
+    assert _callbacks(markup) == ["use:bbbb2222", "use:aaaa1111"]   # fixed order: newest first
 
 
 def test_use_unknown_topic_says_so_and_points_to_new(world):
@@ -1297,7 +1297,7 @@ def test_use_without_args_lists_topics_then_running_legacy_terminals(world, monk
                         lambda s: s == "claude-terminal-6" or (s.startswith("cs-") and s[3:] in world.loaded))
     replies = run_cmd(tb.cmd_use, [])
     cbs = _callbacks(replies[-1][1])
-    assert cbs[:2] == ["use:aaaa1111", "use:bbbb2222"]    # loaded topic first
+    assert cbs[:2] == ["use:bbbb2222", "use:aaaa1111"]    # fixed order, loaded or not
     assert "use:6" in cbs                                 # running legacy terminal kept
     assert "use:5" not in cbs                             # stopped legacy ones hidden
 
@@ -1325,7 +1325,7 @@ def test_legacy_callback_still_works(world, monkeypatch):
 
 # --- /list -----------------------------------------------------------------
 
-def test_list_loaded_topics_first_and_marks_current(world):
+def test_list_keeps_its_fixed_order_and_marks_current(world):
     world.add("Старая загруженная", uuid=U1, last_used=10)
     world.add("Новая выгруженная", uuid=U2, last_used=20)
     world.add("В архиве", uuid=U3, archived=True)
@@ -1336,8 +1336,9 @@ def test_list_loaded_topics_first_and_marks_current(world):
     assert text.startswith("Current: «Новая выгруженная» · bbbb2222\n\n")  # header names the current one
     assert "Terminals (🟢 loaded · ⚪️ unloaded · ⚙️ working):" in text
     rows = [l for l in text.splitlines() if l.startswith(("🟢", "⚪"))]
-    assert [("Старая" in l, "Новая" in l) for l in rows] == [(True, False), (False, True)]
-    loaded, cur = rows
+    # fixed order (newest place first), loaded or not — the list never jumps
+    assert [("Старая" in l, "Новая" in l) for l in rows] == [(False, True), (True, False)]
+    cur, loaded = rows
     assert "🟢" in loaded and "aaaa1111" in loaded
     assert "⚪" in cur and "bbbb2222" in cur and cur.endswith(" ← current")
     assert "В архиве" not in text
@@ -1823,9 +1824,10 @@ def test_list_shows_legacy_topic_as_loaded_and_not_twice(world, monkeypatch):
     tb.set_current(CHAT, "aaaa1111")
     text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
     rows = [l for l in text.splitlines() if l.startswith(("🟢", "⚪"))]
-    assert rows[0].startswith("🟢") and "aaaa1111" in rows[0]
-    assert "old terminal #2" in rows[0] and "⚙️" not in rows[0]
-    assert rows[0].endswith(" ← current")
+    legacy = [r for r in rows if "aaaa1111" in r]
+    assert len(legacy) == 1 and legacy[0].startswith("🟢")
+    assert "old terminal #2" in legacy[0] and "⚙️" not in legacy[0]
+    assert legacy[0].endswith(" ← current")
     assert "Old terminals" not in text and "claude-terminal-2)" not in text
 
 
@@ -1845,9 +1847,9 @@ def test_use_buttons_show_legacy_topic_loaded_and_drop_its_slot(world, monkeypat
     replies = run_cmd(tb.cmd_use, [])
     markup = replies[-1][1]
     cbs = _callbacks(markup)
-    assert cbs[0] == "use:aaaa1111" and "use:2" not in cbs
-    first = markup.inline_keyboard[0][0].text
-    assert first.startswith("🟢") and "#2" in first
+    assert "use:aaaa1111" in cbs and "use:2" not in cbs
+    btn = [b.text for row in markup.inline_keyboard for b in row if b.callback_data == "use:aaaa1111"][0]
+    assert btn.startswith("🟢") and "#2" in btn
 
 
 def test_read_topic_in_legacy_terminal_shows_its_screen(world, monkeypatch):
@@ -2847,3 +2849,57 @@ def test_restart_says_why_it_cannot(world, monkeypatch):
     monkeypatch.setattr(tb.ss, "lib_restart", _fake_restart(calls, error=err))
     sink = run_cmd(tb.cmd_restart, [])
     assert "isn't running" in sink[-1][0]
+
+
+# ── the FINAL reply survives a timeout / network blip (27.10.2026: answers lost) ──
+class _FlakyMsg:
+    def __init__(self, errors):
+        self.errors = list(errors)
+        self.calls = 0
+        self.chat_id = CHAT
+
+    async def edit_text(self, text, reply_markup=None, **k):
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+
+
+def _no_sleep(monkeypatch):
+    async def fast(*a, **k):
+        pass
+    monkeypatch.setattr(tb.asyncio, "sleep", fast)
+
+
+def test_final_edit_is_retried_after_a_timeout(monkeypatch):
+    from telegram.error import TimedOut
+    _no_sleep(monkeypatch)
+    m = _FlakyMsg([TimedOut()])
+    assert asyncio.run(tb._safe_edit(m, "answer", retries=3)) is True
+    assert m.calls == 2
+
+
+def test_final_edit_retry_that_finds_it_already_there_is_success(monkeypatch):
+    from telegram.error import BadRequest, TimedOut
+    _no_sleep(monkeypatch)
+    m = _FlakyMsg([TimedOut(), BadRequest("Message is not modified: specified new message content and reply markup are exactly the same")])
+    assert asyncio.run(tb._safe_edit(m, "answer", retries=3)) is True
+
+
+def test_final_edit_is_retried_after_a_network_error(monkeypatch):
+    from telegram.error import NetworkError
+    _no_sleep(monkeypatch)
+    m = _FlakyMsg([NetworkError("connection reset")])
+    assert asyncio.run(tb._safe_edit(m, "answer", retries=3)) is True
+
+
+def test_live_edit_without_retries_still_gives_up_at_once(monkeypatch):
+    from telegram.error import TimedOut
+    _no_sleep(monkeypatch)
+    m = _FlakyMsg([TimedOut()])
+    assert asyncio.run(tb._safe_edit(m, "live", retries=0)) is False
+    assert m.calls == 1
+
+
+def test_bot_waits_longer_than_five_seconds_for_telegram():
+    t = tb.build_app().bot.request._client_kwargs["timeout"]
+    assert t.read >= 15 and t.write >= 15
