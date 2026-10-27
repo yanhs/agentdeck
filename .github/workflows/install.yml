@@ -36,9 +36,12 @@ jobs:
       - name: services active
         run: |
           for u in agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service \
-                   agentdeck-caddy.service agentdeck-reaper.timer; do
+                   agentdeck-caddy.service agentdeck-reaper.timer agentdeck-services.service; do
             systemctl is-active "$u"; systemctl is-enabled "$u"
           done
+      - name: the services keeper answers
+        run: |
+          for i in $(seq 20); do curl -fsS http://127.0.0.1:9876/status && exit 0; sleep 1; done; exit 1
       - name: smoke test (login, new terminal, board, server tab)
         run: python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --first-run --new-terminal --id-file /tmp/sid
       - name: claude runs in the new terminal
@@ -60,6 +63,55 @@ jobs:
       - name: logs on failure
         if: failure()
         run: sudo journalctl -u 'agentdeck-*' --no-pager -n 200 || true
+
+  guests:
+    name: install.sh --guests, then guests/install.sh, on a fresh VM
+    runs-on: ubuntu-24.04
+    env:
+      PW: ci-password-123
+      AGENTDECK_ACME_CA: https://127.0.0.1:9/directory
+      AGENTDECK_CERT_WAIT: "20"
+    steps:
+      - uses: actions/checkout@v5
+      - name: ./install.sh --yes --guests
+        run: ./install.sh --yes --guests
+      - name: the answer is recorded, the dashboard works
+        run: |
+          grep -x 'AGENTDECK_GUESTS=1' ~/.config/agentdeck/install.env
+          python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --first-run
+      - name: guests/install.sh --check
+        run: guests/install.sh --check
+      - name: guests/install.sh --yes (guests/.env not filled in yet)
+        run: guests/install.sh --yes
+      - name: network, firewall, images, units
+        run: |
+          tag="$(python3 guests/guestctl.py image-tag)"; echo "$tag"
+          docker image inspect "$tag" >/dev/null
+          docker network inspect sbx --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' | grep -x 172.31.250.0/24
+          systemctl is-active sbx-firewall.timer
+          for u in agentdeck-guest-turnstile agentdeck-guest-tgrelay agentdeck-guest-sitegate; do
+            test -f /etc/systemd/system/$u.service
+          done
+          test "$(stat -c %a guests/.env)" = 600
+          python3 guests/guestctl.py doctor --json | python3 -m json.tool
+      - name: a sandbox from the guest image runs AgentDeck and the services keeper
+        run: |
+          tag="$(python3 guests/guestctl.py image-tag)"
+          docker run -d --name g1 --init -e AGENTDECK_PASSWORD="$PW" -e AGENTDECK_SITE=:8765 \
+            -p 127.0.0.1:18765:8765 "$tag"
+          python3 tests/install/smoke.py http://127.0.0.1:18765 --password "$PW" --wait 120
+          docker exec g1 sh -c 'mkdir -p /work/.services && printf "#!/bin/sh\nexec sleep 600\n" > /work/.services/demo.sh'
+          for i in $(seq 30); do
+            out="$(docker exec g1 python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9876/status').read().decode())" || true)"
+            if echo "$out" | grep -q '"demo"' && echo "$out" | grep -q '"running"'; then echo "$out"; exit 0; fi
+            sleep 2
+          done
+          echo "$out"; exit 1
+      - name: logs on failure
+        if: failure()
+        run: |
+          sudo journalctl -u 'agentdeck-*' -u 'sbx-*' --no-pager -n 200 || true
+          docker logs g1 2>&1 | tail -100 || true
 
   container:
     name: install.sh in a ${{ matrix.distro }} systemd container (${{ matrix.scenario }})
