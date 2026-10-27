@@ -35,6 +35,10 @@ Docker, the bot, the domain — and manage guests there: today's spend, the limi
 remove. The installer asks once whether other people will work on the server (default
 no); you can turn guests on any time later. Details: [guests/README.md](guests/README.md).
 
+<p align="center">
+  <img src="docs/screenshots/telegram-invite.png" width="640" alt="Left: a stranger writes /start to the guest bot and later gets their sandbox's address and password. Right: the owner gets an access request with Let in and Refuse buttons">
+</p>
+
 | Services and guests on the Server page | Setting up guests | /services in Telegram |
 |---|---|---|
 | ![The Server page: four services with their state and one log open; three guests with today's tokens against their daily limit](docs/screenshots/services-guests.png) | ![The guests setup wizard: Docker and the bot checked, the domain still to do, then one command to turn it on](docs/screenshots/guests-wizard.png) | ![The /services command in Telegram: each service's state with restart, stop and start buttons](docs/screenshots/telegram-services.png) |

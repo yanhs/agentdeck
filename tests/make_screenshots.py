@@ -655,7 +655,26 @@ def tg_services_html() -> str:
     return tg_frame(msgs, "09:41")
 
 
-def tg_frame(msgs, clock) -> str:
+def tg_invite_htmls():
+    """The invitation, both sides, from the guest bot's real English texts (guests/)."""
+    os.environ["GUESTS_LANG"] = "en"
+    for sub in ("guests", "guests/tgrelay"):
+        sys.path.insert(0, str(ROOT / sub))
+    import texts
+    import tgrelay
+    out, inc = tg_bubbles()
+    rec = {"first_name": "Maria", "username": "maria_k"}
+    who = tgrelay._who(rec, "5512")
+    welcome = tgrelay.web_text({"url": "https://sb-maria.example.com", "password": "q7Lm-2xVt9Rk"},
+                               welcome=True, domain="example.com")
+    guest = [out("/start", "10:02"), inc(texts.t("invite_sent"), "10:02"), inc(welcome, "10:04")]
+    owner = [inc(texts.t("invite_request", who=who, uid=5512, name="maria"), "10:02",
+                 [[texts.t("btn_allow"), texts.t("btn_deny")]])]   # (a tap turns it into "created")
+    return (tg_frame(guest, "10:04", title="Deck guests", sub="Maria's chat with the bot"),
+            tg_frame(owner, "10:04", title="Deck guests", sub="your chat with the bot"))
+
+
+def tg_frame(msgs, clock, title="AgentDeck", sub="bot") -> str:
     dots = "".join(f'<i class="bokeh" style="left:{x}px;top:{y}px;width:{r}px;height:{r}px"></i>'
                    for x, y, r in [(40, 80, 20), (310, 140, 16), (160, 330, 20), (360, 390, 18),
                                    (70, 620, 14), (300, 760, 20), (120, 930, 16), (340, 1080, 14)])
@@ -693,7 +712,7 @@ body{width:420px;font:14.5px/1.38 -apple-system,'Segoe UI',Roboto,'Helvetica Neu
 </style></head><body><div class="phone">""" + dots + """
 <div class="status"><span>""" + clock + """</span><span>&#x1F4F6; &#x1F50B;</span></div>
 <div class="head"><div class="circ">&larr;</div><div class="ava">&#x1F916;</div>
-<div class="nm"><b>AgentDeck</b><span>bot</span></div><div class="circ" style="font-size:18px">&#8942;</div></div>
+<div class="nm"><b>""" + html.escape(title) + """</b><span>""" + html.escape(sub) + """</span></div><div class="circ" style="font-size:18px">&#8942;</div></div>
 <div class="chat">""" + "".join(msgs) + """</div>
 <div class="bar"><span class="menu">&#9776; Menu</span><span class="ic">&#9786;</span><span class="msg">Message</span>
 <span class="ic">&#x1F4CE;</span><span class="mic">&#x1F3A4;</span></div>
@@ -890,6 +909,32 @@ def main() -> int:
             pg.wait_for_timeout(300)
             save(pg, "telegram-services.png", full_page=True)
             ctx.close()
+
+        # telegram-invite.png — a stranger asks, you let them in (guest left, you right)
+        if want("telegram-invite.png"):
+            print("telegram-invite.png")
+            from PIL import Image
+            parts = []
+            for i, page in enumerate(tg_invite_htmls()):
+                ctx = b.new_context(viewport={"width": 420, "height": 800}, device_scale_factor=SCALE)
+                pg = ctx.new_page()
+                pg.set_content(page)
+                pg.wait_for_timeout(300)
+                path = Path(tempfile.mkdtemp()) / f"side{i}.png"
+                pg.screenshot(path=str(path), full_page=True)
+                check_english(pg, f"telegram-invite.png side {i}")
+                parts.append(Image.open(path).convert("RGB"))
+                ctx.close()
+            gap = 24 * SCALE
+            w = sum(im.width for im in parts) + gap
+            h = max(im.height for im in parts)
+            sheet = Image.new("RGB", (w, h), (255, 255, 255))
+            x = 0
+            for im in parts:
+                sheet.paste(im, (x, 0))
+                x += im.width + gap
+            sheet.save(OUT / "telegram-invite.png", optimize=True)
+            print(f"  wrote {OUT / 'telegram-invite.png'}")
 
         # telegram.png — the bridge, with its real reply formats (in English)
         if want("telegram.png"):
