@@ -340,3 +340,12 @@ def test_dockerfile_sets_the_board_state_for_every_process():
     TRACKER_STATE, tracker.py run there writes a different board than the hooks read."""
     src = code(ROOT / "Dockerfile")
     assert "TRACKER_STATE=/app/.sessions/tasks-state.json" in src
+
+
+def test_compose_runs_an_init_that_reaps_orphans():
+    """PID 1 is caddy (the entrypoint execs it), which never reaps: every orphan that
+    exits — an SSH ProxyCommand, a dead terminal's Claude — stays a zombie, holds a
+    slot of the process limit and looks alive to "already open elsewhere".
+    2026-10-27: 980 zombies of 1024 slots stopped a guest's work."""
+    src = code(ROOT / "docker-compose.yml")
+    assert re.search(r"^init:\s*true\s*$", src, re.M)     # code() strips the indent

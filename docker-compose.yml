@@ -34,6 +34,9 @@ services:
       # replace this line with a bind mount:  - ./my-project:/work
       - agentdeck-work:/work
     restart: unless-stopped
+    # an init as PID 1 reaps orphans (caddy, which the entrypoint execs, never does):
+    # without it every exited orphan stays a zombie and eats the process limit
+    init: true
 
 volumes:
   agentdeck-claude:

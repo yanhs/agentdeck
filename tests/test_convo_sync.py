@@ -218,6 +218,20 @@ def test_live_files_skip_dead_reused_pid_sdk_and_garbage(w):
     assert all(isinstance(f["start"], int) for f in w.cs.live_files())
 
 
+def test_live_files_skip_a_zombie(w):
+    """A Claude that died with nobody to reap it stays in /proc as a zombie, its pid
+    file in place: that conversation is free. 2026-10-27: in a container whose PID 1
+    (caddy) never reaps, a guest's dead Claude kept its terminal from reopening
+    ("already open in another Claude: pid 340 (outside tmux)")."""
+    z = subprocess.Popen(["true"])                    # exits; not waited for = zombie
+    try:
+        assert wait_for(lambda: stat_fields(z.pid)[0] == "Z")
+        w.pidfile(z.pid, UA)
+        assert w.cs.live_files() == []
+    finally:
+        z.wait()
+
+
 def test_live_files_of_a_missing_dir_is_empty(w, tmp_path):
     assert w.cs.live_files(str(tmp_path / "nope")) == []
 

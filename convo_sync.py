@@ -105,7 +105,7 @@ def _argv0(pid):
 # ── live Claude processes ───────────────────────────────────────────────────
 def live_files(directory=None):
     """[{pid, uuid, start}] for every live interactive Claude CLI process, from
-    its pid file. Skips: a dead pid; a pid now used by another process (its start
+    its pid file. Skips: a dead pid (a zombie too: died, not yet reaped); a pid now used by another process (its start
     time differs from the file's procStart; without procStart, argv[0] must be
     claude); `claude -p` and other non-terminal kinds; anything unreadable."""
     directory = directory or sessions_dir()
@@ -131,8 +131,8 @@ def live_files(directory=None):
                 or d.get("kind") != "interactive" or d.get("entrypoint") != "cli"):
             continue
         st = _stat(pid)
-        if st is None or len(st) < 20:
-            continue
+        if st is None or len(st) < 20 or st[0] in ("Z", "X"):
+            continue                                   # gone, or a zombie nobody reaped
         ps = d.get("procStart")
         if isinstance(ps, str) and ps:
             if ps != st[19]:
