@@ -366,6 +366,108 @@ def _auth_session(line):
     line('<span class="or">&#x2736; Wiring up the device list&hellip;</span> <span class="dim">(38s &middot; &darr; 1.2k tokens &middot; esc to interrupt)</span>')
 
 
+# ─────────────────────── services + guests (GET /api/services, /api/guests) ──
+def services_payload() -> dict:
+    return {"available": True, "dir": "/home/deck/projects/.services", "now": NOW, "services": {
+        "tailscale": {"state": "running", "pid": 2101, "since": NOW - 6 * 86400, "restarts": 0,
+                      "last_exit": None, "log": "tailscale.log"},
+        "shop-preview": {"state": "running", "pid": 2290, "since": NOW - 3 * 3600 - 20 * 60,
+                         "restarts": 1, "last_exit": 1, "log": "shop-preview.log"},
+        "support-bot": {"state": "waiting", "pid": None, "since": None, "restarts": 3,
+                        "last_exit": 1, "log": "support-bot.log"},
+        "price-watcher": {"state": "stopped", "pid": None, "since": None, "restarts": 0,
+                          "last_exit": None, "log": "price-watcher.log"},
+    }}
+
+
+SERVICE_LOG = [
+    "--- 2026-10-27 09:12:40 start shop-preview",
+    "> shop@0.4.2 start",
+    "> next start -p 3000",
+    "  ▲ Next.js 15.1.0",
+    "  - Local:        http://localhost:3000",
+    " ✓ Ready in 1.4s",
+    "GET / 200 in 38ms",
+    "GET /products/linen-shirt 200 in 61ms",
+    "GET /api/cart 200 in 12ms",
+    "POST /api/checkout 201 in 240ms",
+    "GET /products/wool-scarf 200 in 44ms",
+]
+
+
+def guests_payload(configured=True, checks=None) -> dict:
+    guests = [
+        {"name": "maria", "telegram_id": 5512, "port": 18101, "state": "running", "enabled": True,
+         "spent_today": 6_400_000, "limit": 20_000_000, "url": "https://sb-maria.example.com",
+         "created": "2026-10-20 10:00:00"},
+        {"name": "alex", "telegram_id": 7731, "port": 18102, "state": "running", "enabled": True,
+         "spent_today": 17_200_000, "limit": 20_000_000, "url": "https://sb-alex.example.com",
+         "created": "2026-10-22 16:30:00"},
+        {"name": "sam", "telegram_id": 9044, "port": 18103, "state": "exited", "enabled": False,
+         "spent_today": 0, "limit": 10_000_000, "url": "https://sb-sam.example.com",
+         "created": "2026-10-24 08:10:00"},
+    ]
+    return {"installed": True, "configured": configured, "dir": "/home/deck/agentdeck/guests",
+            "env": ({"bot_token_set": True, "owner_id": "4412", "domain": "example.com"} if configured
+                    else {"bot_token_set": True, "owner_id": "4412", "domain": ""}),
+            "guests": guests if configured else None, "list_error": None,
+            "checks": checks, "checking": False, "jobs": {}}
+
+
+WIZARD_CHECKS = [
+    {"id": "docker", "title": "Docker", "ok": True, "detail": "Docker 27.3 works for deck", "fix": ""},
+    {"id": "bot", "title": "Guest bot", "ok": True, "detail": "@deck_guests_bot answers", "fix": ""},
+    {"id": "owner", "title": "Your Telegram ID", "ok": True, "detail": "Telegram ID 4412", "fix": ""},
+    {"id": "domain", "title": "Domain", "ok": False, "detail": "No domain yet",
+     "fix": "Add a DNS record *.example.com → 203.0.113.7 (this server), then enter the domain."},
+    {"id": "services", "title": "Services", "ok": False, "detail": "The guest services aren't installed yet",
+     "fix": ""},
+]
+
+
+def open_server_page(browser, base, *, width, height, guests):
+    ctx = browser.new_context(viewport={"width": width, "height": height}, device_scale_factor=SCALE)
+    ctx.set_default_timeout(15000)
+    pg = ctx.new_page()
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    server_json = json.dumps(server_payload())
+    pg.route(re.compile(r"/api/server(\?|$)"),
+             lambda r: r.fulfill(status=200, content_type="application/json", body=server_json))
+
+    def svc(route):
+        path = urlparse(route.request.url).path
+        if "/log/" in path:
+            body = {"name": path.rsplit("/", 1)[1], "lines": SERVICE_LOG}
+        else:
+            body = services_payload()
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+
+    def gst(route):
+        if route.request.method == "POST":
+            return route.fulfill(status=200, content_type="application/json", body='{"ok": true}')
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(guests()))
+
+    pg.route(re.compile(r"/api/services(/|\?|$)"), svc)
+    pg.route(re.compile(r"/api/guests(/|\?|$)"), gst)
+    pg.goto(base + "/server.html?poll=60000")
+    pg.wait_for_selector("#services .svc[data-name]")
+    pg.wait_for_selector("#guests:not([hidden])")
+    return ctx, pg, errors
+
+
+def clip_of(pg, *selectors, pad=10):
+    """The page area (full_page coordinates) around these elements."""
+    boxes = [pg.eval_on_selector(s, "e => { const r = e.getBoundingClientRect();"
+                                    " return {x: r.x + scrollX, y: r.y + scrollY, width: r.width, height: r.height}; }")
+             for s in selectors]
+    x0 = min(b["x"] for b in boxes) - pad
+    y0 = min(b["y"] for b in boxes) - pad
+    x1 = max(b["x"] + b["width"] for b in boxes) + pad
+    y1 = max(b["y"] + b["height"] for b in boxes) + pad
+    return {"x": max(0, x0), "y": max(0, y0), "width": x1 - max(0, x0), "height": y1 - max(0, y0)}
+
+
 # ───────────────────────────────────────────────────────────── servers ──
 def _free_port() -> int:
     with closing(socket.socket()) as s:
@@ -521,6 +623,39 @@ def tg_html() -> str:
             "▫️ 2. Production\n      ↳ live traffic, needs a green CI run",
             "14:06", kb=["1. Staging", "2. Production", "💬 Talk"]),
     ]
+    return tg_frame(msgs, "14:06")
+
+
+def tg_bubbles():
+    def esc(s):
+        return html.escape(s).replace("\n", "<br>")
+
+    def out(text, t):
+        return f'<div class="row out"><div class="bub out"><span class="txt">{esc(text)}</span><span class="tm">{t} <b>&#10003;&#10003;</b></span></div></div>'
+
+    def inc(text, t, rows=None):
+        k = ""
+        if rows:
+            k = '<div class="kb">' + "".join(
+                '<div class="kbrow">' + "".join(f'<div class="kbtn">{esc(b)}</div>' for b in r) + "</div>"
+                for r in rows) + "</div>"
+        return (f'<div class="row in"><div class="col"><div class="bub in"><span class="txt">{esc(text)}</span>'
+                f'<span class="tm">{t}</span></div>{k}</div></div>')
+    return out, inc
+
+
+def tg_services_html() -> str:
+    """/services exactly as the bot draws it: services_keeper.telegram_view on the demo list."""
+    sys.path.insert(0, str(ROOT))
+    import services_keeper
+    out, inc = tg_bubbles()
+    text, rows = services_keeper.telegram_view(services_payload()["services"], now=NOW)
+    msgs = [out("/services", "09:41"),
+            inc(text, "09:41", [[label for label, _ in r] for r in rows])]
+    return tg_frame(msgs, "09:41")
+
+
+def tg_frame(msgs, clock) -> str:
     dots = "".join(f'<i class="bokeh" style="left:{x}px;top:{y}px;width:{r}px;height:{r}px"></i>'
                    for x, y, r in [(40, 80, 20), (310, 140, 16), (160, 330, 20), (360, 390, 18),
                                    (70, 620, 14), (300, 760, 20), (120, 930, 16), (340, 1080, 14)])
@@ -545,6 +680,7 @@ body{width:420px;font:14.5px/1.38 -apple-system,'Segoe UI',Roboto,'Helvetica Neu
 .tm{float:right;margin:6px 0 -3px 10px;font-size:11.5px;color:#8a9a8a;position:relative;top:2px}
 .out .tm{color:#5fa35a}.tm b{font-weight:400;letter-spacing:-3px;margin-right:3px}
 .kb{display:flex;flex-direction:column;gap:5px;margin-top:5px}
+.kbrow{display:flex;gap:5px}.kbrow .kbtn{flex:1}
 .kbtn{background:rgba(255,255,255,.55);backdrop-filter:blur(2px);border-radius:10px;text-align:center;padding:8px 6px;color:#2a7fcf;font-weight:500;box-shadow:0 1px 1px rgba(0,0,0,.06)}
 .voice{display:inline-flex;align-items:center;gap:9px;min-width:190px}
 .play{width:36px;height:36px;border-radius:50%;background:#5fbf55;color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;padding-left:3px}
@@ -555,7 +691,7 @@ body{width:420px;font:14.5px/1.38 -apple-system,'Segoe UI',Roboto,'Helvetica Neu
 .msg{flex:1;color:#9aa3ab;font-size:15px}.ic{font-size:20px;color:#8c96a0}
 .mic{width:38px;height:38px;border-radius:50%;background:#55a8f0;display:flex;align-items:center;justify-content:center;font-size:18px}
 </style></head><body><div class="phone">""" + dots + """
-<div class="status"><span>14:06</span><span>&#x1F4F6; &#x1F50B;</span></div>
+<div class="status"><span>""" + clock + """</span><span>&#x1F4F6; &#x1F50B;</span></div>
 <div class="head"><div class="circ">&larr;</div><div class="ava">&#x1F916;</div>
 <div class="nm"><b>AgentDeck</b><span>bot</span></div><div class="circ" style="font-size:18px">&#8942;</div></div>
 <div class="chat">""" + "".join(msgs) + """</div>
@@ -721,6 +857,39 @@ def main() -> int:
             settle(pg)
             save(pg, name, full_page=True)
             done(ctx, errs, name)
+
+        # services-guests.png — the Server page: Services (one log open) and Guests
+        if want("services-guests.png"):
+            print("services-guests.png")
+            ctx, pg, errs = open_server_page(b, base, width=1180, height=1400, guests=guests_payload)
+            pg.wait_for_selector("#guests .guest[data-name]")
+            pg.click('#services .svc[data-name="shop-preview"] button[data-act="log"]')
+            pg.wait_for_selector('#services .svc[data-name="shop-preview"] pre.svc-log')
+            settle(pg)
+            save(pg, "services-guests.png", clip=clip_of(pg, "#services", "#guests"), full_page=True)
+            done(ctx, errs, "services-guests.png")
+
+        # guests-wizard.png — guests off, the setup wizard open half-way
+        if want("guests-wizard.png"):
+            print("guests-wizard.png")
+            ctx, pg, errs = open_server_page(
+                b, base, width=1180, height=1400,
+                guests=lambda: guests_payload(configured=False, checks=WIZARD_CHECKS))
+            pg.click("#gSetup")
+            pg.wait_for_selector('#gWizard .gstep[data-step="bot"][data-ok="1"]')
+            settle(pg)
+            save(pg, "guests-wizard.png", clip=clip_of(pg, "#guests"), full_page=True)
+            done(ctx, errs, "guests-wizard.png")
+
+        # telegram-services.png — /services in the bot: the keeper's real Telegram view
+        if want("telegram-services.png"):
+            print("telegram-services.png")
+            ctx = b.new_context(viewport={"width": 420, "height": 800}, device_scale_factor=SCALE)
+            pg = ctx.new_page()
+            pg.set_content(tg_services_html())
+            pg.wait_for_timeout(300)
+            save(pg, "telegram-services.png", full_page=True)
+            ctx.close()
 
         # telegram.png — the bridge, with its real reply formats (in English)
         if want("telegram.png"):

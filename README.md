@@ -16,6 +16,29 @@
 
 ![AgentDeck: many Claude Code agents in one dashboard, a task board per terminal, what uses your server, from your phone and from Telegram](docs/demo.gif)
 
+## 🆕 What's new in 2.0
+
+**Services — programs that outlive a terminal.** An idle terminal is unloaded, and
+whatever was started from it (`&`, `nohup`, tmux) used to die with it. Now a tunnel, a
+site's server or a bot becomes a *service*: the agent puts its command into
+`.services/<name>.sh` in your work folder, and the services keeper starts it, restarts it
+after a crash and keeps its log. Agents know the rule and tell you in one line when they
+add, stop or remove a service. You see them on the **Server** page — state, log,
+Restart / Stop / Start — and with **/services** in Telegram.
+
+**Guests — other people on your server (optional, off by default).** Each guest gets a
+sandbox of their own (an AgentDeck in Docker), works on your Claude subscription with a
+daily token limit, and talks to it through one shared Telegram bot. Someone writes
+`/start` to the bot, you get "Let in?" with a button, and their sandbox, address and
+password are made for them. Set it up on the Server page — a four-step wizard checks
+Docker, the bot, the domain — and manage guests there: today's spend, the limit, stop,
+remove. The installer asks once whether other people will work on the server (default
+no); you can turn guests on any time later. Details: [guests/README.md](guests/README.md).
+
+| Services and guests on the Server page | Setting up guests | /services in Telegram |
+|---|---|---|
+| ![The Server page: four services with their state and one log open; three guests with today's tokens against their daily limit](docs/screenshots/services-guests.png) | ![The guests setup wizard: Docker and the bot checked, the domain still to do, then one command to turn it on](docs/screenshots/guests-wizard.png) | ![The /services command in Telegram: each service's state with restart, stop and start buttons](docs/screenshots/telegram-services.png) |
+
 ## Why AgentDeck
 
 - **The real Claude Code terminal, in your browser.** Not a chat wrapper: every agent is
