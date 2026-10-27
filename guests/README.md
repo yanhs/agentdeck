@@ -15,8 +15,11 @@ you set it up.
   and tells you if a guest burns more than 1% of your week in an hour.
 - **One bot for everyone.** The Telegram turnstile holds the real bot token and gives each
   sandbox a Bot API of its own: a guest's agent writes only to that guest's chat.
-  Someone new writes `/start` to the bot; you get "… wants access. Let them in?" with
-  buttons; on "yes" the sandbox is made and the person gets the address and password.
+- **You decide in your own bot.** Someone new writes `/start` to the guest bot; it only
+  records the request (it is open to everyone, so it can't create anything). Your own
+  AgentDeck bot — the one on the dashboard's Telegram page — asks you "… Let them in?"
+  with buttons; on "yes" the sandbox is made and the person gets the address and password
+  through the guest bot. Spend warnings come to your bot too.
 - **Files and sites.** A guest's agent hands out files as links (`https://sbx.<domain>/f/…`)
   and can publish a site from the sandbox as `https://<site>-<guest>.<domain>` (at most 3;
   you are told about each).
@@ -30,7 +33,8 @@ your user may use, systemd, and — for web addresses — nginx and certbot.
    run) and fill in:
    - `GUESTS_DOMAIN` — guests' addresses live under it;
    - `GUEST_BOT_TOKEN` — a new bot from @BotFather, used only for guests;
-   - `OWNER_TG_ID` — your Telegram id (a number);
+   - `OWNER_TG_ID` — your Telegram id: the owner of your own AgentDeck bot (the dashboard's
+     Guests wizard fills it in from there); requests to join go to that bot;
    - `GUESTS_LANG` — `en` (default) or `ru`: the bot, invitations, alerts and the rules
      written for the guests' agents;
    - DNS: a Cloudflare API token in `~/.cf_token` (names are created per guest), or a

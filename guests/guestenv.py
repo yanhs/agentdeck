@@ -93,9 +93,27 @@ def _post(url: str, data: Dict, timeout: float) -> Dict:
         return json.loads(resp.read() or b"{}")
 
 
+def admin_bot_conf() -> Path:
+    """AgentDeck's own Telegram settings ("Your bot"): <AgentDeck>/.sessions/telegram.json."""
+    return Path(os.environ.get("AGENTDECK_TG_CONF")
+                or Path(__file__).resolve().parent.parent / ".sessions" / "telegram.json")
+
+
+def _admin_bot(path: Optional[Path] = None) -> Optional[Dict]:
+    try:
+        cfg = json.loads(Path(path or admin_bot_conf()).read_text())
+    except (OSError, ValueError):
+        return None
+    if isinstance(cfg, dict) and cfg.get("token") and cfg.get("owner"):
+        return cfg
+    return None
+
+
 def notify_owner(text: str, settings: Optional[Mapping[str, str]] = None,
-                 run: Callable = subprocess.run, post: Callable = _post) -> None:
-    """Tell the owner: GUESTS_NOTIFY_CMD if set, else the guest bot -> OWNER_TG_ID.
+                 run: Callable = subprocess.run, post: Callable = _post,
+                 admin_conf: Optional[Path] = None) -> None:
+    """Tell the owner: GUESTS_NOTIFY_CMD if set, else the owner's own bot (AgentDeck's
+    Telegram page, when its owner is OWNER_TG_ID), else the guest bot -> OWNER_TG_ID.
     Raises when it could not (the callers log it; a guest's request never waits on it)."""
     s = load() if settings is None else settings
     cmd = s.get("GUESTS_NOTIFY_CMD")
@@ -105,6 +123,9 @@ def notify_owner(text: str, settings: Optional[Mapping[str, str]] = None,
             raise RuntimeError(f"GUESTS_NOTIFY_CMD exit {r.returncode}")
         return
     token, owner = s.get("GUEST_BOT_TOKEN"), s.get("OWNER_TG_ID")
+    admin = _admin_bot(admin_conf)
+    if owner and admin and str(admin.get("owner")) == str(owner):
+        token = admin["token"]          # the admin's own bot (decision 27.10.2026)
     if not (token and owner):
         raise RuntimeError("nowhere to send: set GUEST_BOT_TOKEN + OWNER_TG_ID "
                            "(or GUESTS_NOTIFY_CMD) in guests/.env")

@@ -57,6 +57,7 @@ import re
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 import time
 import urllib.request
 import uuid as _uuid
@@ -2432,6 +2433,70 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _deliver_to_terminal(msg, update.effective_chat.id, text)
 
 
+# ── guests: "Let in?" in the owner's own bot (2.0, decision 27.10.2026) ───────
+# The guest bot (guests/tgrelay) is open to everyone, so it only records a request
+# (guests/invites.py RequestBook). Here — the owner's bot — new requests are announced
+# with buttons, and "Let in" creates the sandbox (guestctl) and tells the person through
+# the guest bot. Only when guests/.env names this bot's owner as the guests' admin.
+INVITES_POLL = 5.0
+
+
+def guests_desk():
+    """guests/invites.Desk for this bot's owner, or None (no module / not set up / another admin)."""
+    gdir = Path(os.environ.get("GUESTS_DIR") or Path(__file__).resolve().parent / "guests")
+    if not (gdir / "invites.py").is_file():
+        return None
+    try:
+        if str(gdir) not in sys.path:
+            sys.path.insert(0, str(gdir))
+        import invites
+        return invites.desk_for_admin(OWNER_ID, log=lambda line: log.info("%s", line))
+    except Exception as e:  # noqa: BLE001 — a broken module must not stop the bot
+        log.warning("guests desk unavailable: %s", e)
+        return None
+
+
+def _invite_markup(buttons):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=data)
+                                  for label, data in buttons]]) if buttons else None
+
+
+async def invites_tick(bot, desk) -> None:
+    for tid, text, buttons in await asyncio.to_thread(desk.announcements):
+        msg = await bot.send_message(OWNER_ID, text, reply_markup=_invite_markup(buttons))
+        await asyncio.to_thread(desk.book.mark_announced, tid, msg.message_id)
+
+
+async def invites_loop(app) -> None:
+    while True:
+        try:
+            desk = await asyncio.to_thread(guests_desk)
+            if desk is not None:
+                await invites_tick(app.bot, desk)
+        except Exception as e:  # noqa: BLE001 — keep watching
+            log.warning("invites: %s", e)
+        await asyncio.sleep(INVITES_POLL)
+
+
+async def on_invite_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    user = getattr(update, "effective_user", None)
+    if user is None or getattr(user, "id", None) != OWNER_ID:
+        await q.answer()
+        return
+    _, action, tid = ((q.data or "").split(":", 2) + ["", ""])[:3]
+    desk = await asyncio.to_thread(guests_desk)
+    if desk is None:
+        await q.answer("guests are not set up here")
+        return
+    await q.answer()
+    creating = await asyncio.to_thread(desk.creating_text, tid) if action == "ok" else None
+    if creating:
+        await q.edit_message_text(creating)
+    text, buttons = await asyncio.to_thread(desk.decide, action, tid)   # minutes: off the loop
+    await q.edit_message_text(text, reply_markup=_invite_markup(buttons))
+
+
 BOT_COMMANDS = [
     BotCommand("use", "pick a terminal: buttons, or /use <part of the name or id>"),
     BotCommand("list", "terminals: loaded first, current one marked"),
@@ -2460,6 +2525,7 @@ async def _post_init(app: Application) -> None:
         except Exception as ex:
             log.warning("resume failed for %s: %s", mid, ex)
     _streams_save({})  # the running tasks re-register themselves
+    asyncio.create_task(invites_loop(app))   # guests' requests to join (if set up here)
 
 
 def build_app() -> Application:
@@ -2486,6 +2552,7 @@ def build_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_restart_cb, pattern=r"^rst:"))
     app.add_handler(CommandHandler("services", cmd_services, filters=owner))
     app.add_handler(CallbackQueryHandler(on_services_cb, pattern=r"^svc:"))
+    app.add_handler(CallbackQueryHandler(on_invite_cb, pattern=r"^ginv:"))
     app.add_handler(CallbackQueryHandler(on_use_cb, pattern=r"^use:"))
     app.add_handler(CallbackQueryHandler(on_archive_cb, pattern=r"^arch:"))
     app.add_handler(CallbackQueryHandler(on_menu_select_cb, pattern=r"^msel:"))

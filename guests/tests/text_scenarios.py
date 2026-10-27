@@ -15,6 +15,7 @@ for sub in ("", "turnstile", "tgrelay", "sitegate"):
         sys.path.insert(0, p)
 
 import guestctl as gc  # noqa: E402
+import invites  # noqa: E402
 import sitegate as sg  # noqa: E402
 import texts  # noqa: E402
 import tgrelay as tr  # noqa: E402
@@ -58,39 +59,47 @@ class Keeper:
         return svc != "broken"
 
 
+def _desk(tmp: Path, ok: bool, told: list, taken=()):
+    return invites.Desk(invites.RequestBook(tmp / "requests.json"), Prov(ok),
+                        tell_guest=lambda tid, text: told.append(["tell", tid, text]),
+                        info_for={"masha": {"url": "https://sb-masha.example.test",
+                                            "password": "pw-M"}}.get,
+                        taken=lambda: set(taken))
+
+
 def _invitation_flow(tmp: Path, ok: bool) -> list:
+    """The guest bot records and answers; the owner's bot (Desk) asks and decides."""
     book = ts.GuestBook(tmp / "guests.json")
     book.add("anna", daily_limit=10, telegram_id=1001)
     tg = Recorder()
-    inv = tr.Invitations(tmp / "requests.json", owner_tid=OWNER, provisioner=Prov(ok),
-                         taken=lambda: set(book.names()), background=False)
-    info = {"masha": {"url": "https://sb-masha.example.test", "password": "pw-M"}}
-    relay = tr.Relay(book, tg, invites=inv, info_for=info.get)
+    inv = tr.Invitations(invites.RequestBook(tmp / "requests.json"), owner_tid=OWNER)
+    relay = tr.Relay(book, tg, invites=inv)
     who = {"id": MASHA, "first_name": "Маша", "username": "masha"}
     relay.route({"update_id": 1, "message": {"message_id": 1, "chat": {"id": MASHA},
                  "from": who, "text": "/start"}})
     relay.route({"update_id": 2, "message": {"message_id": 2, "chat": {"id": MASHA},
                  "from": who, "text": "ну что?"}})
-    press = {"id": "c", "from": {"id": MASHA}, "data": f"inv:ok:{MASHA}",
-             "message": {"message_id": 77, "chat": {"id": OWNER}}}
-    relay.route({"update_id": 3, "callback_query": press})                 # not the owner
-    relay.route({"update_id": 4, "callback_query": {**press, "from": {"id": OWNER}}})
-    relay.route({"update_id": 5, "callback_query": {**press, "from": {"id": OWNER}}})
-    return tg.calls
+    told = []
+    desk = _desk(tmp, ok, told, taken=book.names())
+    out = list(tg.calls)
+    out += [["announce", tid, text, buttons] for tid, text, buttons in desk.announcements()]
+    out += [["decide"] + list(desk.decide("ok", str(MASHA)))]
+    out += [["decide"] + list(desk.decide("ok", str(MASHA)))]        # a second press
+    return out + told
 
 
 def _rejection_flow(tmp: Path) -> list:
     book = ts.GuestBook(tmp / "guests.json")
     tg = Recorder()
-    inv = tr.Invitations(tmp / "requests.json", owner_tid=OWNER, provisioner=Prov(True),
-                         taken=lambda: set(), background=False)
-    relay = tr.Relay(book, tg, invites=inv)
+    relay = tr.Relay(book, tg, invites=tr.Invitations(
+        invites.RequestBook(tmp / "requests.json"), owner_tid=OWNER))
     relay.route({"update_id": 1, "message": {"message_id": 1, "chat": {"id": 7},
                  "from": {"id": 7}, "text": "hi"}})
-    relay.route({"update_id": 2, "callback_query": {
-        "id": "c", "from": {"id": OWNER}, "data": "inv:no:7",
-        "message": {"message_id": 77, "chat": {"id": OWNER}}}})
-    return tg.calls
+    told, before = [], len(tg.calls)
+    decided = ["decide"] + list(_desk(tmp, True, told).decide("no", "7"))
+    relay.route({"update_id": 2, "message": {"message_id": 2, "chat": {"id": 7},
+                 "from": {"id": 7}, "text": "hi again"}})                # after the "no"
+    return tg.calls[:before] + [decided] + told + tg.calls[before:]
 
 
 def _services_flow(tmp: Path) -> list:
@@ -214,7 +223,8 @@ def scenarios() -> dict:
         "web_again": tr.web_text({"url": "https://sb-anna.example.test", "password": "pw-1"},
                                  welcome=False),
         "web_no_password": tr.web_text({"url": "https://sb-anna.example.test"}, welcome=False),
-        "buttons": tr.Invitations._buttons("5"),
+        "buttons": {"inline_keyboard": [[{"text": label, "callback_data": data}
+                                         for label, data in invites.Desk.buttons("5")]]},
         "invite_ok": _invitation_flow(tmp / "a", ok=True),
         "invite_fail": _invitation_flow(tmp / "b", ok=False),
         "invite_no": _rejection_flow(tmp / "c"),

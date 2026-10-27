@@ -29,14 +29,15 @@ Restart / Stop / Start — and with **/services** in Telegram.
 **Guests — other people on your server (optional, off by default).** Each guest gets a
 sandbox of their own (an AgentDeck in Docker), works on your Claude subscription with a
 daily token limit, and talks to it through one shared Telegram bot. Someone writes
-`/start` to the bot, you get "Let in?" with a button, and their sandbox, address and
-password are made for them. Set it up on the Server page — a four-step wizard checks
+`/start` to the guest bot; your own AgentDeck bot asks you "Let them in?", and on a tap
+their sandbox, address and password are made for them (the bot open to everyone only
+passes the request on — it can't create anything). Set it up on the Server page — a four-step wizard checks
 Docker, the bot, the domain — and manage guests there: today's spend, the limit, stop,
 remove. The installer asks once whether other people will work on the server (default
 no); you can turn guests on any time later. Details: [guests/README.md](guests/README.md).
 
 <p align="center">
-  <img src="docs/screenshots/telegram-invite.png" width="640" alt="Left: a stranger writes /start to the guest bot and later gets their sandbox's address and password. Right: the owner gets an access request with Let in and Refuse buttons">
+  <img src="docs/screenshots/telegram-invite.png" width="640" alt="Left: a stranger writes /start to the guest bot and later gets their sandbox's address and password. Right: the owner's own AgentDeck bot asks Let them in, with Let in and Refuse buttons">
 </p>
 
 | Services and guests on the Server page | Setting up guests | /services in Telegram |

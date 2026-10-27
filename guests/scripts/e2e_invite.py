@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """End-to-end check of invitations on a THROWAWAY guest "probe" (Telegram id 1 = nobody):
-the real provisioner (guestctl add + web: container, pass, DNS, certificate), the real
-guest book and address — only Telegram itself is a recorder. Then removes the guest with
+the guest bot's side records the request, the admin's side (invites.Desk — what the
+owner's own bot runs) announces it and lets in with the real provisioner (guestctl add +
+web: container, pass, DNS, certificate), the real guest book and address — only Telegram
+itself is a recorder. Then removes the guest with
 its address and checks the address is gone. Prints PASS/FAIL; exit code = failures.
 Needs guests/.env (GUESTS_DOMAIN; DNS as for any guest) and the image install.sh built."""
 
@@ -17,6 +19,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(HERE), str(HERE / "tgrelay"), str(HERE / "turnstile")]
 import guestenv  # noqa: E402
+import invites  # noqa: E402
 import tgrelay as tr  # noqa: E402
 import turnstile as ts  # noqa: E402
 
@@ -69,21 +72,23 @@ if book.get(NAME):
     sys.exit("probe already exists — clean it up first")
 tg = Recorder()
 with tempfile.TemporaryDirectory() as tmp:
-    inv = tr.Invitations(Path(tmp) / "requests.json", OWNER,
-                         tr.GuestctlProvisioner(HERE / "guestctl.py"),
-                         taken=lambda: set(book.names()), background=False)
-    relay = tr.Relay(book, tg, invites=inv, info_for=info_for)
+    requests = invites.RequestBook(Path(tmp) / "requests.json")
+    relay = tr.Relay(book, tg, invites=tr.Invitations(requests, OWNER), info_for=info_for)
     relay.route({"update_id": 1, "message": {"message_id": 1, "chat": {"id": TID},
-                 "from": {"id": TID, "first_name": "Проба", "username": NAME}, "text": "/start"}})
-    check(any("Пустить" in t for t in tg.texts(OWNER)), "owner asked «Пустить?»")
+                 "from": {"id": TID, "first_name": "Probe", "username": NAME}, "text": "/start"}})
+    check(tg.texts(OWNER) == [], "the guest bot does not ask the owner itself")
+    told = []
+    desk = invites.Desk(requests, invites.GuestctlProvisioner(HERE / "guestctl.py"),
+                        tell_guest=lambda tid, text: told.append((tid, text)),
+                        info_for=info_for, taken=lambda: set(book.names()))
+    asked = desk.announcements()
+    check(len(asked) == 1 and asked[0][2][0][1] == f"ginv:ok:{TID}",
+          "the owner's bot gets the request with Let in / Refuse")
     started = time.time()
-    relay.route({"update_id": 2, "callback_query": {
-        "id": "c", "from": {"id": OWNER}, "data": f"inv:ok:{TID}",
-        "message": {"message_id": 7, "chat": {"id": OWNER}}}})
+    done, _ = desk.decide("ok", str(TID))
     print(f"      provisioning took {time.time() - started:.0f} s", flush=True)
-    done = tg.texts(OWNER, "editMessageText")[-1]
     check(done.startswith("✅"), f"owner told: {done[:90]}")
-    welcome = tg.texts(TID)[-1]
+    welcome = told[-1][1] if told else ""
     pw_file = DATA / f"{NAME}.dashboard-password"
     check(HOST in welcome and pw_file.exists() and pw_file.read_text().strip() in welcome,
           "guest got the address and password")

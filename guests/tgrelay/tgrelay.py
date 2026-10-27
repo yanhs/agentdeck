@@ -37,6 +37,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parent / "turnstile"))
 import guestenv  # noqa: E402
+import invites as inv  # noqa: E402  (requests only; deciding is the owner's bot)
 import texts  # noqa: E402
 import turnstile as ts  # noqa: E402
 from texts import t as _t  # noqa: E402
@@ -219,192 +220,33 @@ def web_text(info: Optional[Dict], welcome: bool, domain: Optional[str] = None) 
 
 
 # --------------------------------------------------------------------------- #
-# invitations: a stranger asks, the owner lets in with a button, the sandbox is made
+# invitations, the guest bot's side: a stranger's request is only RECORDED here.
+# "Let in?" is asked and answered in the owner's own bot (AgentDeck's tg_bridge with
+# guests/invites.py Desk) — this bot is open to everyone, so it can't create sandboxes.
 # --------------------------------------------------------------------------- #
-def _who(rec: Dict, tid: str) -> str:
-    name = rec.get("first_name") or _t("who_noname")
-    return f"{name} (@{rec['username']})" if rec.get("username") else name
-
-
 class Invitations:
-    """Pending requests live in ``path`` (JSON, survives a restart). Only the owner's
-    button counts; a request in progress or already decided is not acted on twice."""
-
-    def __init__(self, path, owner_tid: int, provisioner, taken=lambda: set(),
-                 background: bool = True, cooldown: float = 600,
+    def __init__(self, book: "inv.RequestBook", owner_tid: int,
                  log=lambda line: print(line, file=sys.stderr, flush=True)) -> None:
-        self.path = Path(path)
+        self.book = book
         self.owner = owner_tid
-        self.prov = provisioner
-        self.taken = taken
-        self.background = background
-        self.cooldown = cooldown
         self.log = log
-        self._lock = threading.Lock()
-        self._busy: set = set()
 
-    # -- storage ---------------------------------------------------------- #
-    def _load(self) -> Dict:
-        try:
-            data = json.loads(self.path.read_text())
-        except (OSError, ValueError):
-            return {}
-        return data if isinstance(data, dict) else {}
-
-    def _save(self, data: Dict) -> None:
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1))
-        tmp.chmod(0o600)
-        tmp.replace(self.path)
-
-    def choose_name(self, rec: Dict, tid: str) -> str:
-        u = (rec.get("username") or "").lower().replace("_", "-")[:31].strip("-")
-        if u and ts.NAME_RE.match(u) and u not in self.taken():
-            return u
-        return f"g{tid}"
-
-    # -- a stranger writes -------------------------------------------------- #
     def on_stranger(self, relay: "Relay", update: Dict, uid: int) -> None:
         who = (update.get("message") or {}).get("from") or {}
-        now = time.time()
-        tid = str(uid)
-        with self._lock:
-            data = self._load()
-            rec = data.get(tid)
-            if rec is None:
-                rec = {"first_name": str(who.get("first_name") or "")[:64],
-                       "username": str(who.get("username") or "")[:64],
-                       "state": "pending", "at": now, "told": now, "nagged": False}
-                data[tid] = rec
-                self._save(data)
-                new = True
-            else:
-                new = False
-                if rec.get("state") == "rejected":
-                    relay._tell_stranger(uid)
-                    return
-                if rec.get("nagged") and now - rec.get("told", 0) < self.cooldown:
-                    return
-                rec.update(nagged=True, told=now)
-                self._save(data)
-        if new:
+        answer = self.book.ask(uid, who.get("first_name") or "", who.get("username") or "")
+        if answer == "new":
             self.log(f"INVITE-REQUEST tg={uid}")
-            name = self.choose_name(rec, tid)
-            self._send(relay, self.owner,
-                       _t("invite_request", who=_who(rec, tid), uid=uid, name=name),
-                       markup=self._buttons(tid))
             self._send(relay, uid, _t("invite_sent"))
-        else:
+        elif answer == "waiting":
             self._send(relay, uid, _t("invite_waiting"))
+        elif answer == "rejected":
+            relay._tell_stranger(uid)
 
-    # -- the owner presses -------------------------------------------------- #
-    def on_press(self, relay: "Relay", cb: Dict, uid: Optional[int]) -> None:
-        parts = str(cb.get("data") or "").split(":")
-        action, tid = (parts[1], parts[2]) if len(parts) == 3 else ("", "")
-        if uid != self.owner:
-            self.log(f"INVITE-DENY presser={uid} data={cb.get('data')!r}")
-            self._answer(relay, cb, _t("invite_not_yours"))
-            return
-        msg_id = (cb.get("message") or {}).get("message_id")
-        with self._lock:
-            data = self._load()
-            rec = data.get(tid)
-            if (action not in ("ok", "no") or not tid.isdigit() or rec is None
-                    or rec.get("state") in ("approved", "rejected") or tid in self._busy):
-                self._answer(relay, cb, _t("invite_decided"))
-                return
-            if action == "no":
-                rec["state"] = "rejected"
-                self._save(data)
-            else:
-                self._busy.add(tid)
-        self._answer(relay, cb, "")
-        if action == "no":
-            self.log(f"INVITE-REJECTED tg={tid}")
-            self._edit(relay, msg_id, _t("invite_rejected", who=_who(rec, tid)))
-            self._send(relay, int(tid), _t("invite_refused"))
-            return
-        self._edit(relay, msg_id, _t("invite_creating", who=_who(rec, tid)))
-        if self.background:
-            threading.Thread(target=self._provision, args=(relay, tid, rec, msg_id),
-                             daemon=True).start()
-        else:
-            self._provision(relay, tid, rec, msg_id)
-
-    def _provision(self, relay: "Relay", tid: str, rec: Dict, msg_id) -> None:
-        name = self.choose_name(rec, tid)
+    def _send(self, relay: "Relay", chat: int, text: str) -> None:
         try:
-            ok, err = self.prov.provision(name, int(tid))
-        except Exception as exc:  # never lose the request over a crash
-            ok, err = False, repr(exc)
-        with self._lock:
-            data = self._load()
-            cur = data.get(tid, rec)
-            cur.update(state="approved", name=name) if ok else cur.update(state="pending",
-                                                                          error=err[-300:])
-            data[tid] = cur
-            self._save(data)
-            self._busy.discard(tid)
-        self.log(f"INVITE-{'APPROVED' if ok else 'FAILED'} tg={tid} name={name} {err[-200:]}")
-        if ok:
-            self._edit(relay, msg_id, _t("invite_created", who=_who(rec, tid), name=name))
-            self._send(relay, int(tid), web_text(relay.info_for(name), welcome=True))
-        else:
-            self._edit(relay, msg_id, _t("invite_create_failed", name=name,
-                                         who=_who(rec, tid), err=err[-300:]),
-                       markup=self._buttons(tid))
-            self._send(relay, int(tid), _t("invite_failed"))
-
-    # -- Telegram ----------------------------------------------------------- #
-    @staticmethod
-    def _buttons(tid: str) -> Dict:
-        return {"inline_keyboard": [[{"text": _t("btn_allow"), "callback_data": f"inv:ok:{tid}"},
-                                     {"text": _t("btn_deny"), "callback_data": f"inv:no:{tid}"}]]}
-
-    def _send(self, relay: "Relay", chat: int, text: str, markup: Optional[Dict] = None) -> None:
-        params = {"chat_id": chat, "text": text}
-        if markup:
-            params["reply_markup"] = json.dumps(markup, ensure_ascii=False)
-        try:
-            relay.tg.call("sendMessage", params)
+            relay.tg.call("sendMessage", {"chat_id": chat, "text": text})
         except Exception as exc:
             self.log(f"INVITE-SEND-FAILED chat={chat} {exc!r}")
-
-    def _edit(self, relay: "Relay", msg_id, text: str, markup: Optional[Dict] = None) -> None:
-        if not msg_id:
-            return self._send(relay, self.owner, text, markup)
-        params = {"chat_id": self.owner, "message_id": msg_id, "text": text,
-                  "reply_markup": json.dumps(markup or {"inline_keyboard": []},
-                                             ensure_ascii=False)}
-        try:
-            relay.tg.call("editMessageText", params)
-        except Exception as exc:
-            self.log(f"INVITE-EDIT-FAILED {exc!r}")
-
-    def _answer(self, relay: "Relay", cb: Dict, text: str) -> None:
-        try:
-            relay.tg.call("answerCallbackQuery", {"callback_query_id": cb.get("id"),
-                                                  "text": text})
-        except Exception as exc:
-            self.log(f"INVITE-ANSWER-FAILED {exc!r}")
-
-
-class GuestctlProvisioner:
-    """The real thing: guestctl add (container, pass, limit) + web (address, certificate)."""
-
-    def __init__(self, guestctl: Path, timeout: float = 900) -> None:
-        self.guestctl, self.timeout = guestctl, timeout
-
-    def provision(self, name: str, tid: int) -> Tuple[bool, str]:
-        for argv in (["add", name, "--tg", str(tid)], ["web", name]):
-            try:
-                r = subprocess.run([sys.executable, str(self.guestctl), *argv],
-                                   capture_output=True, text=True, timeout=self.timeout)
-            except subprocess.TimeoutExpired:
-                return False, f"guestctl {argv[0]}: timeout"
-            if r.returncode != 0:
-                return False, f"guestctl {argv[0]}: " + (r.stderr or r.stdout).strip()[-300:]
-        return True, ""
 
 
 class Relay:
@@ -440,11 +282,6 @@ class Relay:
 
     def route(self, update: Dict) -> Optional[str]:
         uid = _sender(update)
-        cb = update.get("callback_query")
-        if (self.invites is not None and isinstance(cb, dict)
-                and str(cb.get("data") or "").startswith("inv:")):
-            self.invites.on_press(self, cb, uid)     # the presser is checked inside
-            return None
         guest = self._guest_by_tid(uid) if uid is not None else None
         if guest is None:
             if uid is None:
@@ -831,7 +668,7 @@ def _bot_token() -> str:
 
 
 def dashboard_info(name: str, data: Path, sites: Path) -> Optional[Dict]:
-    """sb-<name>.<domain> and its first password, once guestctl web has opened it."""
+    """sb-<name>.<domain> and its first password, once its web address has been opened."""
     domain = guestenv.domain()
     if not domain or not (Path(sites) / f"sb-{name}.{domain}.conf").exists():
         return None
@@ -859,15 +696,7 @@ def main() -> int:
     owner = _env_value("OWNER_TG_ID")             # set: strangers may ask, the owner decides
     invites = None
     if owner and owner.isdigit():
-        def taken() -> set:
-            try:
-                reg = json.loads((data / "sandboxes.json").read_text())
-            except (OSError, ValueError):
-                reg = {}
-            return set(book.names()) | set(reg)
-
-        invites = Invitations(data / "requests.json", int(owner),
-                              GuestctlProvisioner(HERE.parent / "guestctl.py"), taken=taken)
+        invites = Invitations(inv.RequestBook(data / "requests.json"), int(owner))
     relay = Relay(book, api, info_for=info_for, services=KeeperClient(keeper_base),
                   invites=invites)
     bind = os.environ.get("TGRELAY_BIND", "127.0.0.1")

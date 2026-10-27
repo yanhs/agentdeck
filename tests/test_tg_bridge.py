@@ -2956,3 +2956,112 @@ def test_a_bad_services_button_does_nothing(world, monkeypatch, data):
     monkeypatch.setattr(tb, "SERVICES_SETTLE", 0)
     run_cb(tb.on_services_cb, data)
     assert fake.acts == []
+
+
+# ── guests: "Let in?" in the owner's own bot (2.0, decision 27.10.2026) ───────
+class _FakeBook:
+    def __init__(self):
+        self.marked = []
+
+    def mark_announced(self, tid, msg_id):
+        self.marked.append((tid, msg_id))
+
+
+class _FakeDesk:
+    def __init__(self):
+        self.book = _FakeBook()
+        self.pending = [("5550001", "🔔 Access request: Masha", [("✅ Let in", "ginv:ok:5550001"),
+                                                                 ("✖ Refuse", "ginv:no:5550001")])]
+        self.decided = []
+
+    def announcements(self):
+        out, self.pending = self.pending, []
+        return out
+
+    def creating_text(self, tid):
+        return "⏳ Creating a sandbox for Masha…"
+
+    def decide(self, action, tid):
+        self.decided.append((action, tid))
+        return "✅ Masha — sandbox \"masha\" created", None
+
+
+def test_a_request_is_announced_to_the_owner_with_buttons(world):
+    desk, sent = _FakeDesk(), []
+
+    class Bot:
+        async def send_message(self, chat_id, text, reply_markup=None, **k):
+            sent.append((chat_id, text, reply_markup))
+            return type("M", (), {"message_id": 91})()
+
+    asyncio.run(tb.invites_tick(Bot(), desk))
+    asyncio.run(tb.invites_tick(Bot(), desk))                    # nothing new: nothing sent
+    [(chat, text, markup)] = sent
+    assert chat == tb.OWNER_ID and "Access request" in text
+    assert [b.callback_data for row in markup.inline_keyboard for b in row] == \
+        ["ginv:ok:5550001", "ginv:no:5550001"]
+    assert desk.book.marked == [("5550001", 91)]
+
+
+def test_let_in_from_the_owners_bot(world, monkeypatch):
+    desk = _FakeDesk()
+    monkeypatch.setattr(tb, "guests_desk", lambda: desk)
+    sink = run_cb(tb.on_invite_cb, "ginv:ok:5550001")
+    assert desk.decided == [("ok", "5550001")]
+    assert [s[0] for s in sink] == ["⏳ Creating a sandbox for Masha…",
+                                    "✅ Masha — sandbox \"masha\" created"]
+
+
+def test_an_invite_button_from_someone_else_does_nothing(world, monkeypatch):
+    desk = _FakeDesk()
+    monkeypatch.setattr(tb, "guests_desk", lambda: desk)
+    edits = []
+
+    class Q:
+        data = "ginv:ok:5550001"
+
+        async def answer(self, *a, **k):
+            pass
+
+        async def edit_message_text(self, text, **k):
+            edits.append(text)
+
+    upd = type("U", (), {"callback_query": Q(),
+                         "effective_user": type("E", (), {"id": tb.OWNER_ID + 1})()})()
+    asyncio.run(tb.on_invite_cb(upd, None))                       # a stranger forging it
+    assert desk.decided == [] and edits == []
+
+
+def test_invite_buttons_when_guests_are_off(world, monkeypatch):
+    monkeypatch.setattr(tb, "guests_desk", lambda: None)
+    assert run_cb(tb.on_invite_cb, "ginv:ok:5550001") == []
+
+
+def test_no_guests_module_no_desk(world, monkeypatch, tmp_path):
+    monkeypatch.setenv("GUESTS_DIR", str(tmp_path / "nowhere"))
+    assert tb.guests_desk() is None
+
+
+def test_the_desk_is_for_the_bots_owner_only(world, monkeypatch, tmp_path):
+    """guests/.env names the admin; another bot's owner gets no desk."""
+    import shutil
+    g = tmp_path / "guests"
+    root = Path(tb.__file__).resolve().parent / "guests"
+    shutil.copytree(root, g, ignore=shutil.ignore_patterns("tests", "__pycache__", ".env",
+                                                           "data", "public"))
+    env = tmp_path / "guests.env"
+    monkeypatch.setenv("GUESTS_DIR", str(g))
+    monkeypatch.setenv("GUESTS_ENV_FILE", str(env))
+    monkeypatch.setenv("TURNSTILE_DATA", str(tmp_path / "data"))
+    for k in ("OWNER_TG_ID", "GUEST_BOT_TOKEN", "GUESTS_DOMAIN"):
+        monkeypatch.delenv(k, raising=False)
+    env.write_text(f"GUEST_BOT_TOKEN=1:abc\nOWNER_TG_ID={tb.OWNER_ID}\nGUESTS_DOMAIN=example.com\n")
+    assert tb.guests_desk() is not None
+    env.write_text(f"GUEST_BOT_TOKEN=1:abc\nOWNER_TG_ID={tb.OWNER_ID + 1}\nGUESTS_DOMAIN=example.com\n")
+    assert tb.guests_desk() is None
+
+
+def test_invite_buttons_are_handled():
+    app = tb.build_app()
+    patterns = [getattr(h, "pattern", None) for h in app.handlers[0]]
+    assert any(p is not None and p.pattern == r"^ginv:" for p in patterns)

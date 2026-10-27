@@ -1,5 +1,6 @@
 """guestenv: the module's settings come from guests/.env (the process environment wins),
 and the owner is told things through a configurable channel."""
+import json
 
 import sys
 from pathlib import Path
@@ -84,10 +85,32 @@ def test_a_failing_notify_command_raises():
         ge.notify_owner("x", settings={"GUESTS_NOTIFY_CMD": "false"}, run=Runner(rc=1))
 
 
-def test_notify_without_a_command_writes_to_the_owner_through_the_guest_bot():
+def test_notify_goes_to_the_admins_own_bot(tmp_path):
+    """Decision 27.10: warnings go to the admin's own bot (AgentDeck's Telegram page)."""
+    conf = tmp_path / "telegram.json"
+    conf.write_text(json.dumps({"enabled": True, "token": "9:ADMIN", "owner": 42}))
     posts = []
     ge.notify_owner("hi", settings={"GUEST_BOT_TOKEN": "1:T", "OWNER_TG_ID": "42"},
-                    run=Runner(), post=lambda url, data, timeout: posts.append((url, data)))
+                    run=Runner(), post=lambda url, data, timeout: posts.append((url, data)),
+                    admin_conf=conf)
+    assert posts == [("https://api.telegram.org/bot9:ADMIN/sendMessage", {"chat_id": "42", "text": "hi"})]
+
+
+def test_notify_not_through_a_bot_of_someone_else(tmp_path):
+    conf = tmp_path / "telegram.json"
+    conf.write_text(json.dumps({"enabled": True, "token": "9:ADMIN", "owner": 7}))
+    posts = []
+    ge.notify_owner("hi", settings={"GUEST_BOT_TOKEN": "1:T", "OWNER_TG_ID": "42"},
+                    run=Runner(), post=lambda url, data, timeout: posts.append((url, data)),
+                    admin_conf=conf)
+    assert posts[0][0] == "https://api.telegram.org/bot1:T/sendMessage"
+
+
+def test_notify_without_the_admins_bot_falls_back_to_the_guest_bot(tmp_path):
+    posts = []
+    ge.notify_owner("hi", settings={"GUEST_BOT_TOKEN": "1:T", "OWNER_TG_ID": "42"},
+                    run=Runner(), post=lambda url, data, timeout: posts.append((url, data)),
+                    admin_conf=tmp_path / "none.json")
     (url, data), = posts
     assert url == "https://api.telegram.org/bot1:T/sendMessage"
     assert data == {"chat_id": "42", "text": "hi"}
@@ -95,7 +118,8 @@ def test_notify_without_a_command_writes_to_the_owner_through_the_guest_bot():
 
 def test_notify_with_nowhere_to_send_raises():
     with pytest.raises(RuntimeError):
-        ge.notify_owner("x", settings={}, run=Runner(), post=lambda *a, **k: None)
+        ge.notify_owner("x", settings={}, run=Runner(), post=lambda *a, **k: None,
+                        admin_conf=Path("/nonexistent/telegram.json"))
 
 
 def test_env_example_names_every_setting_and_holds_no_secret():

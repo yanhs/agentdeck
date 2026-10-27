@@ -657,22 +657,26 @@ def tg_services_html() -> str:
 
 
 def tg_invite_htmls():
-    """The invitation, both sides, from the guest bot's real English texts (guests/)."""
+    """The invitation, both sides, through the real code (guests/, GUESTS_LANG=en): the
+    guest bot records the request; YOUR OWN bot asks "Let them in?" (invites.Desk)."""
     os.environ["GUESTS_LANG"] = "en"
     for sub in ("guests", "guests/tgrelay"):
         sys.path.insert(0, str(ROOT / sub))
+    import invites
     import texts
     import tgrelay
     out, inc = tg_bubbles()
-    rec = {"first_name": "Maria", "username": "maria_k"}
-    who = tgrelay._who(rec, "5512")
-    welcome = tgrelay.web_text({"url": "https://sb-maria.example.com", "password": "q7Lm-2xVt9Rk"},
+    book = invites.RequestBook(Path(tempfile.mkdtemp()) / "requests.json")
+    book.ask(5512, "Maria", "maria_k")
+    desk = invites.Desk(book, provisioner=None, tell_guest=lambda tid, text: None,
+                        info_for=lambda name: None, taken=lambda: set())
+    [(_, ask, buttons)] = desk.announcements()
+    welcome = tgrelay.web_text({"url": "https://sb-maria-k.example.com", "password": "q7Lm-2xVt9Rk"},
                                welcome=True, domain="example.com")
     guest = [out("/start", "10:02"), inc(texts.t("invite_sent"), "10:02"), inc(welcome, "10:04")]
-    owner = [inc(texts.t("invite_request", who=who, uid=5512, name="maria"), "10:02",
-                 [[texts.t("btn_allow"), texts.t("btn_deny")]])]   # (a tap turns it into "created")
-    return (tg_frame(guest, "10:04", title="Deck guests", sub="Maria's chat with the bot"),
-            tg_frame(owner, "10:04", title="Deck guests", sub="your chat with the bot"))
+    owner = [inc(ask, "10:02", [[label for label, _ in buttons]])]   # a tap turns it into "created"
+    return (tg_frame(guest, "10:04", title="Deck guests", sub="Maria's chat with the guest bot"),
+            tg_frame(owner, "10:04", title="AgentDeck", sub="your own bot"))
 
 
 def tg_frame(msgs, clock, title="AgentDeck", sub="bot") -> str:

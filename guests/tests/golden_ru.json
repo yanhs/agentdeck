@@ -117,11 +117,11 @@
    [
     {
      "text": "✅ Пустить",
-     "callback_data": "inv:ok:5"
+     "callback_data": "ginv:ok:5"
     },
     {
      "text": "✖ Отказать",
-     "callback_data": "inv:no:5"
+     "callback_data": "ginv:no:5"
     }
    ]
   ]
@@ -130,14 +130,6 @@
   [
    "sendMessage",
    {
-    "chat_id": 4242,
-    "text": "🔔 Запрос на доступ: Маша (@masha), Telegram ID 5550001.\nПустить? Будет создана песочница «masha» с дневным лимитом по умолчанию.",
-    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:5550001\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:5550001\"}]]}"
-   }
-  ],
-  [
-   "sendMessage",
-   {
     "chat_id": 5550001,
     "text": "Запрос на доступ отправлен владельцу. Как только он одобрит, я пришлю сюда адрес и пароль."
    }
@@ -150,64 +142,40 @@
    }
   ],
   [
-   "answerCallbackQuery",
-   {
-    "callback_query_id": "c",
-    "text": "Это не ваша кнопка."
-   }
+   "announce",
+   "5550001",
+   "🔔 Запрос на доступ: Маша (@masha), Telegram ID 5550001.\nПустить? Будет создана песочница «masha» с дневным лимитом по умолчанию.",
+   [
+    [
+     "✅ Пустить",
+     "ginv:ok:5550001"
+    ],
+    [
+     "✖ Отказать",
+     "ginv:no:5550001"
+    ]
+   ]
   ],
   [
-   "answerCallbackQuery",
-   {
-    "callback_query_id": "c",
-    "text": ""
-   }
+   "decide",
+   "✅ Маша (@masha) — песочница «masha» создана, адрес и пароль отправлены.",
+   null
   ],
   [
-   "editMessageText",
-   {
-    "chat_id": 4242,
-    "message_id": 77,
-    "text": "⏳ Создаю песочницу для Маша (@masha)…",
-    "reply_markup": "{\"inline_keyboard\": []}"
-   }
+   "decide",
+   "Уже решено или в работе.",
+   null
   ],
   [
-   "editMessageText",
-   {
-    "chat_id": 4242,
-    "message_id": 77,
-    "text": "✅ Маша (@masha) — песочница «masha» создана, адрес и пароль отправлены.",
-    "reply_markup": "{\"inline_keyboard\": []}"
-   }
-  ],
-  [
-   "sendMessage",
-   {
-    "chat_id": 5550001,
-    "text": "Здравствуйте! Это ваша песочница с Claude.\n\nПишите задачи прямо сюда. Команды:\n/new — новый терминал, /list — ваши терминалы, /use — переключиться,\n/restart — перезапустить зависший терминал, /esc — прервать Claude,\n/services — что работает без терминала (Tailscale, сайт, бот),\n/web — адрес и пароль ещё раз.\n\nВ браузере: https://sb-masha.example.test\nПароль: pw-M\nПосле первого входа смените его на свой: https://sb-masha.example.test/change-password\n(если вы его уже сменили — действует ваш)\n\nФайлы агент присылает интернет-ссылками; сайт можно опубликовать как <сайт>-<ваше имя>.example.test."
-   }
-  ],
-  [
-   "answerCallbackQuery",
-   {
-    "callback_query_id": "c",
-    "text": "Уже решено или в работе."
-   }
+   "tell",
+   5550001,
+   "Здравствуйте! Это ваша песочница с Claude.\n\nПишите задачи прямо сюда. Команды:\n/new — новый терминал, /list — ваши терминалы, /use — переключиться,\n/restart — перезапустить зависший терминал, /esc — прервать Claude,\n/services — что работает без терминала (Tailscale, сайт, бот),\n/web — адрес и пароль ещё раз.\n\nВ браузере: https://sb-masha.example.test\nПароль: pw-M\nПосле первого входа смените его на свой: https://sb-masha.example.test/change-password\n(если вы его уже сменили — действует ваш)\n\nФайлы агент присылает интернет-ссылками; сайт можно опубликовать как <сайт>-<ваше имя>.example.test."
   ]
  ],
  "invite_fail": [
   [
    "sendMessage",
    {
-    "chat_id": 4242,
-    "text": "🔔 Запрос на доступ: Маша (@masha), Telegram ID 5550001.\nПустить? Будет создана песочница «masha» с дневным лимитом по умолчанию.",
-    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:5550001\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:5550001\"}]]}"
-   }
-  ],
-  [
-   "sendMessage",
-   {
     "chat_id": 5550001,
     "text": "Запрос на доступ отправлен владельцу. Как только он одобрит, я пришлю сюда адрес и пароль."
    }
@@ -220,86 +188,60 @@
    }
   ],
   [
-   "answerCallbackQuery",
-   {
-    "callback_query_id": "c",
-    "text": "Это не ваша кнопка."
-   }
+   "announce",
+   "5550001",
+   "🔔 Запрос на доступ: Маша (@masha), Telegram ID 5550001.\nПустить? Будет создана песочница «masha» с дневным лимитом по умолчанию.",
+   [
+    [
+     "✅ Пустить",
+     "ginv:ok:5550001"
+    ],
+    [
+     "✖ Отказать",
+     "ginv:no:5550001"
+    ]
+   ]
   ],
   [
-   "answerCallbackQuery",
-   {
-    "callback_query_id": "c",
-    "text": ""
-   }
+   "decide",
+   "🚨 Не вышло создать песочницу «masha» для Маша (@masha): docker: no space left\nМожно нажать ещё раз.",
+   [
+    [
+     "✅ Пустить",
+     "ginv:ok:5550001"
+    ],
+    [
+     "✖ Отказать",
+     "ginv:no:5550001"
+    ]
+   ]
   ],
   [
-   "editMessageText",
-   {
-    "chat_id": 4242,
-    "message_id": 77,
-    "text": "⏳ Создаю песочницу для Маша (@masha)…",
-    "reply_markup": "{\"inline_keyboard\": []}"
-   }
+   "decide",
+   "🚨 Не вышло создать песочницу «masha» для Маша (@masha): docker: no space left\nМожно нажать ещё раз.",
+   [
+    [
+     "✅ Пустить",
+     "ginv:ok:5550001"
+    ],
+    [
+     "✖ Отказать",
+     "ginv:no:5550001"
+    ]
+   ]
   ],
   [
-   "editMessageText",
-   {
-    "chat_id": 4242,
-    "message_id": 77,
-    "text": "🚨 Не вышло создать песочницу «masha» для Маша (@masha): docker: no space left\nМожно нажать ещё раз.",
-    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:5550001\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:5550001\"}]]}"
-   }
+   "tell",
+   5550001,
+   "Не получилось создать песочницу — владелец уже знает и разберётся."
   ],
   [
-   "sendMessage",
-   {
-    "chat_id": 5550001,
-    "text": "Не получилось создать песочницу — владелец уже знает и разберётся."
-   }
-  ],
-  [
-   "answerCallbackQuery",
-   {
-    "callback_query_id": "c",
-    "text": ""
-   }
-  ],
-  [
-   "editMessageText",
-   {
-    "chat_id": 4242,
-    "message_id": 77,
-    "text": "⏳ Создаю песочницу для Маша (@masha)…",
-    "reply_markup": "{\"inline_keyboard\": []}"
-   }
-  ],
-  [
-   "editMessageText",
-   {
-    "chat_id": 4242,
-    "message_id": 77,
-    "text": "🚨 Не вышло создать песочницу «masha» для Маша (@masha): docker: no space left\nМожно нажать ещё раз.",
-    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:5550001\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:5550001\"}]]}"
-   }
-  ],
-  [
-   "sendMessage",
-   {
-    "chat_id": 5550001,
-    "text": "Не получилось создать песочницу — владелец уже знает и разберётся."
-   }
+   "tell",
+   5550001,
+   "Не получилось создать песочницу — владелец уже знает и разберётся."
   ]
  ],
  "invite_no": [
-  [
-   "sendMessage",
-   {
-    "chat_id": 4242,
-    "text": "🔔 Запрос на доступ: без имени, Telegram ID 7.\nПустить? Будет создана песочница «g7» с дневным лимитом по умолчанию.",
-    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:7\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:7\"}]]}"
-   }
-  ],
   [
    "sendMessage",
    {
@@ -308,26 +250,20 @@
    }
   ],
   [
-   "answerCallbackQuery",
-   {
-    "callback_query_id": "c",
-    "text": ""
-   }
+   "decide",
+   "✖ Отказано: без имени.",
+   null
   ],
   [
-   "editMessageText",
-   {
-    "chat_id": 4242,
-    "message_id": 77,
-    "text": "✖ Отказано: без имени.",
-    "reply_markup": "{\"inline_keyboard\": []}"
-   }
+   "tell",
+   7,
+   "Владелец не дал доступ."
   ],
   [
    "sendMessage",
    {
     "chat_id": 7,
-    "text": "Владелец не дал доступ."
+    "text": "Это закрытый бот. Доступ выдаёт владелец."
    }
   ]
  ],

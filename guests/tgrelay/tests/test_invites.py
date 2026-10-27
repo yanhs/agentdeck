@@ -1,6 +1,8 @@
-"""Invitations: a stranger writes to the guest bot -> the owner gets "Пустить?" with buttons
-in the same bot -> on "Пустить" the sandbox is created and the person gets their address
-and password. Only the owner's button counts; nothing is created twice."""
+"""Invitations, the guest bot's side (decision 27.10.2026): a stranger writes to the guest
+bot -> the request is RECORDED (guests/invites.py RequestBook) and the person is told it
+went to the owner. "Пустить?" is asked by the owner's own bot (tg_bridge + invites.Desk,
+see guests/tests/test_invites_desk.py); the guest bot can't create sandboxes and ignores
+any invitation button."""
 
 import json
 import sys
@@ -9,9 +11,11 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "turnstile"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import turnstile as ts  # noqa: E402
 
+import invites  # noqa: E402
 import tgrelay as tr  # noqa: E402
 
 OWNER, MASHA, IVAN, ANNA = 4242, 5550001, 5550002, 1001
@@ -29,15 +33,6 @@ class FakeTelegram:
         return [p for m, p in self.calls if m == method and p.get("chat_id") == chat]
 
 
-class FakeProvisioner:
-    def __init__(self, ok=True):
-        self.ok, self.made = ok, []
-
-    def provision(self, name, tid):
-        self.made.append((name, tid))
-        return (True, "") if self.ok else (False, "docker: no space left")
-
-
 @pytest.fixture
 def book(tmp_path):
     b = ts.GuestBook(tmp_path / "guests.json")
@@ -50,21 +45,14 @@ def tg():
     return FakeTelegram()
 
 
-@pytest.fixture
-def prov():
-    return FakeProvisioner()
-
-
-def make(book, tg, prov, tmp_path, owner=OWNER):
-    inv = tr.Invitations(tmp_path / "requests.json", owner_tid=owner, provisioner=prov,
-                         taken=lambda: set(book.names()), background=False)
-    info = {"masha": {"url": "https://sb-masha.example.test", "password": "pw-M"}}
-    return tr.Relay(book, tg, invites=inv, info_for=info.get), inv
+def make(book, tg, tmp_path, owner=OWNER):
+    inv = tr.Invitations(invites.RequestBook(tmp_path / "requests.json"), owner_tid=owner)
+    return tr.Relay(book, tg, invites=inv), inv
 
 
 @pytest.fixture
-def relay(book, tg, prov, tmp_path):
-    return make(book, tg, prov, tmp_path)[0]
+def relay(book, tg, tmp_path):
+    return make(book, tg, tmp_path)[0]
 
 
 def hello(uid, text="/start", username="Masha", first="Маша", update_id=1):
@@ -81,99 +69,50 @@ def press(uid, data, update_id=50):
         "message": {"message_id": 77, "chat": {"id": uid}}}}
 
 
-def buttons(params):
-    markup = json.loads(params["reply_markup"])
-    return [b["callback_data"] for row in markup["inline_keyboard"] for b in row]
-
-
-def test_a_stranger_becomes_a_request_to_the_owner(relay, tg, tmp_path):
+def test_a_stranger_becomes_a_recorded_request(relay, tg, tmp_path):
     relay.route(hello(MASHA))
-    (ask,) = tg.to(OWNER)
-    assert "Маша" in ask["text"] and "@Masha" in ask["text"] and str(MASHA) in ask["text"]
-    assert buttons(ask) == [f"inv:ok:{MASHA}", f"inv:no:{MASHA}"]
+    assert tg.to(OWNER) == []                    # the guest bot doesn't ask the owner
     (told,) = tg.to(MASHA)
     assert "владельц" in told["text"]
     saved = json.loads((tmp_path / "requests.json").read_text())
     assert saved[str(MASHA)]["state"] == "pending"
+    assert saved[str(MASHA)]["first_name"] == "Маша" and saved[str(MASHA)]["username"] == "Masha"
 
 
-def test_writing_again_does_not_bother_the_owner_twice(relay, tg):
+def test_writing_again_says_waiting_once_then_quiet(relay, tg):
     relay.route(hello(MASHA, update_id=1))
     relay.route(hello(MASHA, "можно?", update_id=2))
     relay.route(hello(MASHA, "ау", update_id=3))
-    assert len(tg.to(OWNER)) == 1
     assert len(tg.to(MASHA)) == 2            # "sent" + one "still waiting" (then quiet)
 
 
-def test_owner_lets_in_and_the_sandbox_is_made(relay, tg, prov, book):
+@pytest.mark.parametrize("presser", [OWNER, ANNA, MASHA])
+def test_invitation_buttons_do_nothing_in_the_guest_bot(relay, tg, tmp_path, presser):
     relay.route(hello(MASHA))
-    relay.route(press(OWNER, f"inv:ok:{MASHA}"))
-    assert prov.made == [("masha", MASHA)]
-    welcome = tg.to(MASHA)[-1]["text"]
-    assert "https://sb-masha.example.test" in welcome and "pw-M" in welcome
-    done = tg.to(OWNER, "editMessageText")[-1]["text"]
-    assert "✅" in done and "masha" in done
+    before = list(tg.calls)
+    for data in (f"inv:ok:{MASHA}", f"ginv:ok:{MASHA}"):
+        relay.route(press(presser, data))
+    saved = json.loads((tmp_path / "requests.json").read_text())
+    assert saved[str(MASHA)]["state"] == "pending"
+    sent = [c for c in tg.calls[len(before):] if c[0] != "answerCallbackQuery"]
+    assert all(c[1]["chat_id"] == presser for c in sent)  # nobody else hears of it
+    if presser == ANNA:     # a guest's own tap goes to her own sandbox, like any button
+        assert len(relay.get_updates("anna", 0, 100, 0)) == 2
 
 
-def test_only_the_owners_button_counts(relay, tg, prov):
+def test_a_refused_person_is_told_no(relay, tg, tmp_path):
     relay.route(hello(MASHA))
-    relay.route(press(ANNA, f"inv:ok:{MASHA}"))           # a guest forging the button
-    relay.route(press(MASHA, f"inv:ok:{MASHA}"))          # the stranger herself
-    assert prov.made == []
-    assert relay.get_updates("anna", 0, 100, 0) == []     # not passed to anna's sandbox
-
-
-def test_a_double_press_makes_one_sandbox(relay, prov):
-    relay.route(hello(MASHA))
-    relay.route(press(OWNER, f"inv:ok:{MASHA}", 50))
-    relay.route(press(OWNER, f"inv:ok:{MASHA}", 51))
-    assert len(prov.made) == 1
-
-
-def test_owner_says_no(relay, tg, prov):
-    relay.route(hello(MASHA))
-    relay.route(press(OWNER, f"inv:no:{MASHA}"))
-    assert prov.made == []
-    assert "не дал" in tg.to(MASHA)[-1]["text"]
-    assert "✖" in tg.to(OWNER, "editMessageText")[-1]["text"]
+    invites.RequestBook(tmp_path / "requests.json").reject(MASHA)   # the owner said no
     relay.route(hello(MASHA, "ну пожалуйста", update_id=9))
-    assert len(tg.to(OWNER)) == 1                         # no new request after a "no"
+    assert tg.to(MASHA)[-1]["text"] == "Это закрытый бот. Доступ выдаёт владелец."
 
 
-def test_a_failed_sandbox_is_reported_and_can_be_retried(book, tg, tmp_path):
-    bad = FakeProvisioner(ok=False)
-    relay, _ = make(book, tg, bad, tmp_path)
-    relay.route(hello(MASHA))
-    relay.route(press(OWNER, f"inv:ok:{MASHA}"))
-    edit = tg.to(OWNER, "editMessageText")[-1]
-    assert "🚨" in edit["text"] and "no space" in edit["text"]
-    assert f"inv:ok:{MASHA}" in buttons(edit)             # the buttons stay for a retry
-    bad.ok = True
-    relay.route(press(OWNER, f"inv:ok:{MASHA}", 52))
-    assert len(bad.made) == 2
+def test_the_owner_writing_to_the_guest_bot_is_ignored(relay, tg, tmp_path):
+    relay.route(hello(OWNER))
+    assert tg.calls == [] and not (tmp_path / "requests.json").exists()
 
 
-@pytest.mark.parametrize("username,expected", [
-    ("Masha", "masha"), ("Masha_P", "masha-p"), (None, f"g{IVAN}"),
-    ("anna", f"g{IVAN}"),                                  # taken by a guest already
-    ("x" * 40, "x" * 31),
-])
-def test_the_sandbox_name(book, tg, prov, tmp_path, username, expected):
-    relay, _ = make(book, tg, prov, tmp_path)
-    relay.route(hello(IVAN, username=username))
-    relay.route(press(OWNER, f"inv:ok:{IVAN}"))
-    assert prov.made == [(expected, IVAN)]
-
-
-def test_requests_survive_a_restart(book, tg, prov, tmp_path):
-    relay, _ = make(book, tg, prov, tmp_path)
-    relay.route(hello(MASHA))
-    relay2, _ = make(book, tg, prov, tmp_path)            # the relay restarted
-    relay2.route(press(OWNER, f"inv:ok:{MASHA}"))
-    assert prov.made == [("masha", MASHA)]
-
-
-def test_without_an_owner_strangers_are_just_told_no(book, tg, prov, tmp_path):
+def test_without_an_owner_strangers_are_just_told_no(book, tg):
     relay = tr.Relay(book, tg)                            # invitations off
     relay.route(hello(MASHA))
     assert tg.to(OWNER) == []
