@@ -153,6 +153,10 @@ def create(lib, name, cwd, now, uuid=None):
     placed = [x["pos"] for x in lib["sessions"] if _has_pos(x)]
     if placed:                                  # manual order in use: new one on top
         e["pos"] = min(placed) - 1
+    elif os.environ.get("AGENTDECK_STABLE_ORDER") == "1":
+        # a fixed list from the first terminal on: opening one never reorders it
+        # (guest sandboxes, owner 27.10.2026); unset = most recent first, as before
+        e["pos"] = 0
     lib["sessions"].append(e)
     return e
 

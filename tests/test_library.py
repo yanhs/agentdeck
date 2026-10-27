@@ -843,3 +843,32 @@ def test_archive_refuses_a_trashed_entry():
     assert lib.find(L, "aaaaaaaa")["archived"] is True     # back in the archive
     lib.archive(L, "aaaaaaaa", False)                      # restored: it works again
     assert lib.find(L, "aaaaaaaa")["archived"] is False
+
+
+# ── AGENTDECK_STABLE_ORDER=1: a fixed list (guest sandboxes, owner 27.10.2026) ──
+def test_stable_order_gives_every_new_terminal_a_place_on_top(monkeypatch):
+    monkeypatch.setenv("AGENTDECK_STABLE_ORDER", "1")
+    L = lib.empty()
+    old = lib.create(L, "old", cwd="/", now=10, uuid=U1)
+    new = lib.create(L, "new", cwd="/", now=20, uuid=U2)
+    assert "pos" in old and "pos" in new
+    assert lib.display_order(L, set())[0]["id"] == new["id"]
+
+
+def test_stable_order_opening_a_terminal_does_not_reorder(monkeypatch):
+    monkeypatch.setenv("AGENTDECK_STABLE_ORDER", "1")
+    L = lib.empty()
+    a = lib.create(L, "a", cwd="/", now=10, uuid=U1)
+    b = lib.create(L, "b", cwd="/", now=20, uuid=U2)
+    both = {a["id"], b["id"]}
+    before = [e["id"] for e in lib.display_order(L, both)]
+    lib.touch(L, a["id"], now=99)          # what opening / using a terminal does
+    assert [e["id"] for e in lib.display_order(L, both)] == before
+
+
+def test_without_stable_order_nothing_changes(monkeypatch):
+    monkeypatch.delenv("AGENTDECK_STABLE_ORDER", raising=False)
+    L = lib.empty()
+    lib.create(L, "old", cwd="/", now=10, uuid=U1)
+    n = lib.create(L, "new", cwd="/", now=20, uuid=U2)
+    assert "pos" not in n
