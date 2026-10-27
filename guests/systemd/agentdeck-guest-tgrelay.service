@@ -1,0 +1,13 @@
+[Unit]
+Description=AgentDeck guests: Telegram turnstile (real bot token stays on the host)
+After=network-online.target
+
+[Service]
+Environment=TGRELAY_BIND=172.31.250.1
+Environment=TGRELAY_PORT=8792
+ExecStart=/usr/bin/python3 -I /home/ubuntu/pr/agentdeck-guests/tgrelay/tgrelay.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

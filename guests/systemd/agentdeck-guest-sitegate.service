@@ -1,0 +1,13 @@
+[Unit]
+Description=AgentDeck guests: site gate (<site>-<guest>.reimake.com on request)
+After=network-online.target
+
+[Service]
+Environment=SITEGATE_BIND=172.31.250.1
+Environment=SITEGATE_PORT=8794
+ExecStart=/usr/bin/python3 -I /home/ubuntu/pr/agentdeck-guests/sitegate/sitegate.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

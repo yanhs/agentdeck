@@ -1,0 +1,7 @@
+# secrets and this server's state — never in git
+.env
+turnstile/data/
+public/
+nginx/sites/
+build/
+*.log

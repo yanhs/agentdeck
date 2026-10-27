@@ -1,0 +1,9 @@
+[Unit]
+Description=Re-apply the guest sandbox firewall (boot + every 2 minutes)
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target
