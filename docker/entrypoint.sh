@@ -53,6 +53,7 @@ else
   python3 /app/hooks/install_guards.py --settings /root/.claude/settings.json \
     --hooks-dir /app/hooks --tracker-state "$TRACKER_STATE" \
     --claude-md /root/.claude/CLAUDE.md --tracker /app/tasks-dashboard/tracker.py \
+    --services-dir "${AGENTDECK_WORKDIR:-/work}/.services" \
     && echo "[agentdeck] guard hooks: on (task board before edits, no silent mid-task stop, timers keep the terminal loaded)"
 fi
 
@@ -75,6 +76,11 @@ ttyd -W -a -O -i lo -p 3031 --base-path /sess bash /app/open-session.sh &
 # idle reaper: unloads topics nobody uses (no cron in the container — a loop instead)
 echo "[agentdeck] idle reaper: idle_reaper.py once a minute"
 ( while true; do python3 idle_reaper.py >> /app/.sessions/idle_reaper.log 2>&1; sleep 60; done ) &
+
+# services: programs that must outlive a terminal (<work folder>/.services/<name>.sh);
+# the keeper runs, restarts and stops them — and is itself brought back if it dies
+echo "[agentdeck] services keeper: services_keeper.py (<work folder>/.services)"
+( while true; do python3 services_keeper.py >> /app/.sessions/services_keeper.log 2>&1; sleep 3; done ) &
 
 CADDYFILE=/app/docker/Caddyfile
 # Let's Encrypt refuses a contact address at example.com, and the compose default is the

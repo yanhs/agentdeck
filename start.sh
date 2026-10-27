@@ -75,6 +75,11 @@ ttyd -W -a -O -i lo -p 3031 --base-path /sess bash "$PWD/open-session.sh" & pids
 echo "[agentdeck] idle reaper: idle_reaper.py once a minute"
 ( while true; do python3 idle_reaper.py >> .sessions/idle_reaper.log 2>&1; sleep 60; done ) & pids+=($!)
 
+# services: programs that must outlive a terminal (<work folder>/.services/<name>.sh);
+# the keeper runs, restarts and stops them — and is itself brought back if it dies
+echo "[agentdeck] services keeper: services_keeper.py (<work folder>/.services)"
+( while true; do python3 services_keeper.py >> .sessions/services_keeper.log 2>&1; sleep 3; done ) & pids+=($!)
+
 CADDYFILE=Caddyfile
 # AGENTDECK_SITE=https://... (a port/IP, not a real domain) → self-signed HTTPS:
 # generate a certificate on first run (kept in .sessions/) and serve with it.

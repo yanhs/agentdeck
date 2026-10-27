@@ -65,9 +65,9 @@ HTTP_PORT="${AGENTDECK_HTTP_PORT:-80}"
 HTTPS_PORT="${AGENTDECK_HTTPS_PORT:-443}"
 ALT_PORT="${AGENTDECK_ALT_PORT:-8443}"
 SUDO="${SUDO-sudo}"
-UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.service agentdeck-reaper.timer"
+UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.service agentdeck-reaper.timer agentdeck-services.service"
 # the units that run (the reaper .service is started by its timer)
-RUN_UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.timer"
+RUN_UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.timer agentdeck-services.service"
 SANDBOX_HINT="git clone https://github.com/yanhs/agentdeck && cd agentdeck && docker compose up -d"
 CERT_WAIT="${AGENTDECK_CERT_WAIT:-120}"
 CERT_POLL="${AGENTDECK_CERT_POLL:-3}"
@@ -297,6 +297,22 @@ After=network-online.target
 [Service]
 $(unit_service_common)
 ExecStart=$py $(sd_arg "$d/tasks-dashboard/server.py")
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+      ;;
+    agentdeck-services.service)
+      cat <<EOF
+[Unit]
+Description=AgentDeck services keeper (<work folder>/.services: programs that outlive a terminal)
+After=network-online.target
+
+[Service]
+$(unit_service_common)
+ExecStart=$py $(sd_arg "$d/services_keeper.py")
 Restart=always
 RestartSec=2
 
@@ -795,7 +811,8 @@ install_guards() {
   mkdir -p "$HOME/.claude"
   python3 "$DIR/hooks/install_guards.py" --settings "$HOME/.claude/settings.json" \
     --hooks-dir "$DIR/hooks" --tracker-state "$DIR/.sessions/tasks-state.json" \
-    --claude-md "$HOME/.claude/CLAUDE.md" --tracker "$DIR/tasks-dashboard/tracker.py"
+    --claude-md "$HOME/.claude/CLAUDE.md" --tracker "$DIR/tasks-dashboard/tracker.py" \
+    --services-dir "$WORKDIR/.services"
   say "guard hooks: on in ~/.claude/settings.json (task board before edits, no silent mid-task stop)"
 }
 

@@ -4,6 +4,10 @@ All notable changes to AgentDeck. Newest first.
 
 ## Unreleased
 
+### Services — programs that outlive a terminal
+- **A tunnel, a site's server or a bot no longer dies with its terminal.** An idle terminal is unloaded, and everything started from it (`&`, `nohup`, tmux) went with it. Now such a program becomes a *service*: its command goes into `<work folder>/.services/<name>.sh`, and the services keeper starts it within seconds, restarts it if it crashes (with a growing pause), keeps its output in `<name>.log`, and stops it together with its child processes when the file is removed. At most 10 services. The keeper starts with AgentDeck — its own unit (`agentdeck-services`) on a server install, the entrypoint in Docker — and is brought back if it dies itself. State and actions: `curl localhost:9876/status`, `POST /stop|start|restart/<name>` (this machine only).
+- **Agents know about it.** The default `~/.claude/CLAUDE.md` now carries a short services rule, and an existing one gets it appended once (a block marked `<!-- agentdeck-services -->`; keep the mark line to opt out): long-running programs go into services, and the agent tells you in one line when it adds, stops or removes one.
+
 ### Docker
 - **Dead processes no longer pile up in the container.** The container's first process (Caddy) never cleans up finished processes, so every program that ended after its parent (an SSH connection helper, a crashed terminal's Claude) stayed behind as a "zombie" and took one of the container's process slots — enough of them and nothing new could start, Claude included. `docker-compose.yml` now runs a tiny init first (`init: true`) that cleans them up. Re-create the container to get it: `docker compose up -d`.
 - **A terminal whose Claude died reopens.** A dead-but-not-cleaned-up Claude still looked alive, and opening its conversation was refused as "already open in another Claude". It is now treated as gone.

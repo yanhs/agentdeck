@@ -83,6 +83,15 @@ def test_script_runs_backend_task_board_and_reaper(name):
 
 
 @pytest.mark.parametrize("name", SCRIPTS)
+def test_script_runs_the_services_keeper(name):
+    """2.0: programs that must outlive a terminal live in <work folder>/.services; the
+    keeper starts with the stack, in a loop that brings it back if it ever dies."""
+    src = code(SCRIPTS[name])
+    loops = re.findall(r"while\s+(?:true|:)\s*;\s*do(.*?)done", src, re.S)
+    assert any(re.search(r"python3\s+services_keeper\.py\b", body) for body in loops), src
+
+
+@pytest.mark.parametrize("name", SCRIPTS)
 def test_script_keeps_the_login_gate_and_persisted_secrets(name):
     src = code(SCRIPTS[name])
     for var in ("AGENTDECK_PASSFILE", "AGENTDECK_AUTH_SECRET", "TRACKER_STATE"):
@@ -349,3 +358,8 @@ def test_compose_runs_an_init_that_reaps_orphans():
     2026-10-27: 980 zombies of 1024 slots stopped a guest's work."""
     src = code(ROOT / "docker-compose.yml")
     assert re.search(r"^init:\s*true\s*$", src, re.M)     # code() strips the indent
+
+
+def test_entrypoint_gives_the_agents_the_services_rule():
+    src = code(SCRIPTS["entrypoint"])
+    assert re.search(r'--services-dir\s+"\$\{AGENTDECK_WORKDIR:-/work\}/\.services"', src), src

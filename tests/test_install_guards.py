@@ -157,6 +157,30 @@ def test_claude_md_written_only_when_missing(tmp_path):
     assert md.read_text() == "my own rules\n"
 
 
+def test_a_new_claude_md_tells_the_agents_about_services(tmp_path):
+    """2.0: a program that must outlive a terminal goes into the services folder, and the
+    agent says so to the user."""
+    md = tmp_path / "CLAUDE.md"
+    r = run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    assert r.returncode == 0, r.stderr
+    text = md.read_text()
+    assert "/work/.services/<name>.sh" in text and "localhost:9876" in text
+    assert "tell the user" in text
+    assert text.isascii() and len(text.splitlines()) < 40
+    assert "tracker.py add-task" in text                  # the board part is still there
+
+
+def test_an_existing_claude_md_gets_the_services_rule_once(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("my own rules\n")
+    for _ in range(2):
+        run(tmp_path, "--claude-md", str(md), "--services-dir", "/home/u/projects/.services")
+    text = md.read_text()
+    assert text.startswith("my own rules\n")
+    assert text.count("<!-- agentdeck-services -->") == 1
+    assert "/home/u/projects/.services/<name>.sh" in text
+
+
 def test_remove_never_touches_claude_md(tmp_path):
     md = tmp_path / "CLAUDE.md"
     run(tmp_path, "--claude-md", str(md))

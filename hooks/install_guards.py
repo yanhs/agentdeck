@@ -20,6 +20,8 @@ that is not valid JSON is left untouched (with a warning) — never overwritten.
   --tracker-state PATH   bake TRACKER_STATE=PATH into the hook commands
   --claude-md PATH       also write a short default CLAUDE.md there, only if none exists
   --tracker PATH         tracker.py path shown in that CLAUDE.md
+  --services-dir PATH    with --claude-md: the services rule (programs that outlive a
+                         terminal go there); appended once to an existing CLAUDE.md too
 
 The Docker entrypoint runs this on every start (opt-out: AGENTDECK_GUARDS=0).
 """
@@ -55,6 +57,19 @@ While your task is active on the board, do not end a turn with "continuing..." a
 nothing scheduled. Leave something that brings you back: a background command
 (run_in_background), a timer (ScheduleWakeup / CronCreate), a Monitor or a sub-agent.
 Otherwise close or park the task on the board.
+"""
+
+SERVICES_MARK = "<!-- agentdeck-services -->"
+SERVICES_MD = """\
+{mark}
+## Programs that must keep running: make them services
+A terminal is unloaded when idle and what it started dies with it (&, nohup, tmux).
+A tunnel, a site's server, a bot: put its command in {dir}/<name>.sh
+(name: a-z 0-9 - _), in the foreground (`exec <program>`, no &, no daemon mode).
+The keeper starts it in seconds, restarts it if it crashes, logs to <name>.log.
+State: `curl -s localhost:9876/status`; `curl -X POST localhost:9876/stop/<name>`
+(also start, restart). Delete the file to remove it. At most 10 services.
+When you add, stop or remove a service, tell the user in one line what and why.
 """
 
 
@@ -144,6 +159,7 @@ def main(argv=None) -> int:
     ap.add_argument("--tracker-state", default="")
     ap.add_argument("--claude-md", default="")
     ap.add_argument("--tracker", default=os.path.join(REPO, "tasks-dashboard", "tracker.py"))
+    ap.add_argument("--services-dir", default="")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--remove", action="store_true")
     mode.add_argument("--check", action="store_true")
@@ -175,6 +191,13 @@ def main(argv=None) -> int:
         os.makedirs(os.path.dirname(a.claude_md) or ".", exist_ok=True)
         with open(a.claude_md, "w") as f:
             f.write(CLAUDE_MD.format(tracker=a.tracker))
+    if a.claude_md and a.services_dir and not a.remove:
+        # once, also into the user's own CLAUDE.md (keep the mark line to opt out)
+        text = open(a.claude_md).read() if os.path.exists(a.claude_md) else ""
+        if SERVICES_MARK not in text:
+            block = SERVICES_MD.format(mark=SERVICES_MARK, dir=a.services_dir.rstrip("/"))
+            with open(a.claude_md, "a") as f:
+                f.write(("\n" if text and not text.endswith("\n\n") else "") + block)
     return 0
 
 

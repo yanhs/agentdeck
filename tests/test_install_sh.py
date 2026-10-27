@@ -425,7 +425,8 @@ def test_rerun_our_own_caddy_on_the_port_is_not_busy(box):
 # ── systemd units ────────────────────────────────────────────────────────────────
 UNITS = ("agentdeck-status.service", "agentdeck-tasks.service",
          "agentdeck-sessions.service", "agentdeck-caddy.service",
-         "agentdeck-reaper.service", "agentdeck-reaper.timer")
+         "agentdeck-reaper.service", "agentdeck-reaper.timer",
+         "agentdeck-services.service")
 
 UNIT_ENV = {"AGENTDECK_DIR": "/home/tester/agentdeck", "AGENTDECK_USER": "tester",
             "AGENTDECK_HOME": "/home/tester", "AGENTDECK_SITE": ":8765"}
@@ -486,6 +487,18 @@ def test_caddy_unit_site_and_low_ports(box):
     assert "AmbientCapabilities=CAP_NET_BIND_SERVICE" in u
     assert "/usr/local/bin/caddy run" in u
     assert "XDG_DATA_HOME=/home/tester/.local/share" in u
+
+
+def test_services_unit_runs_the_keeper(box):
+    """2.0: programs that must outlive a terminal (Tailscale, a site, a bot) live in
+    <work folder>/.services; the keeper is a unit of its own, so it starts at boot and
+    keeps them up without any terminal open."""
+    u = render(box, "agentdeck-services.service")
+    line = next(l for l in u.splitlines() if l.startswith("ExecStart="))
+    assert "/home/tester/agentdeck/services_keeper.py" in line
+    assert "Restart=always" in u and "WantedBy=multi-user.target" in u
+    assert "SERVICES_BIND" not in u          # the API stays on 127.0.0.1 (keeper default)
+    assert "agentdeck-services.service" in box.lib("echo $RUN_UNITS").stdout.split()
 
 
 def test_reaper_is_a_timer_every_minute(box):
@@ -1061,3 +1074,11 @@ def test_final_message_says_where_terminals_open(box):
 
 def test_docker_sandbox_keeps_work():
     assert "AGENTDECK_WORKDIR=/work" in (ROOT / "Dockerfile").read_text()
+
+
+def test_install_gives_the_agents_the_services_rule():
+    """The rule names the same folder the keeper unit watches (<work folder>/.services)."""
+    src = (Path(__file__).resolve().parents[1] / "install.sh").read_text()
+    body = src[src.index("install_guards() {"):]
+    body = body[:body.index("\n}\n")]
+    assert '--services-dir "$WORKDIR/.services"' in body
