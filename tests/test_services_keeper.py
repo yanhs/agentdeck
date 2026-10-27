@@ -238,3 +238,52 @@ def test_without_a_work_folder_set_it_is_agentdecks_default(monkeypatch):
     monkeypatch.delenv("AGENTDECK_WORKDIR", raising=False)
     repo = Path(kp.__file__).resolve().parent
     assert kp.default_dir() == repo.parent / ".services"
+
+
+# ── the Telegram view of the services (/services in the bridge) ──────────────
+def _view_data(rows):
+    return [data for row in rows for _, data in row]
+
+
+def test_view_lists_each_state_with_its_buttons():
+    now = 10_000.0
+    text, rows = kp.telegram_view({
+        "tunnel": {"state": "running", "since": now - 3 * 3600, "restarts": 0},
+        "site": {"state": "waiting", "last_exit": 1, "restarts": 3},
+        "bot": {"state": "stopped"},
+        "extra": {"state": "skipped", "limit": 10},
+    }, now=now)
+    assert "tunnel" in text and "running 3 h" in text
+    assert "site" in text and "crashed (exit 1)" in text and "restarts: 3" in text
+    assert "bot" in text and "stopped" in text
+    assert "extra" in text and "10" in text
+    data = _view_data(rows)
+    assert {"svc:restart:tunnel", "svc:stop:tunnel", "svc:start:bot", "svc:refresh:"} <= set(data)
+    assert "svc:stop:bot" not in data and not any(d.endswith(":extra") for d in data)
+
+
+def test_view_explains_services_when_there_are_none():
+    text, rows = kp.telegram_view({})
+    assert "No services yet" in text and _view_data(rows) == ["svc:refresh:"]
+
+
+def test_view_says_when_the_keeper_is_down():
+    text, _ = kp.telegram_view(None)
+    assert "isn't running" in text
+
+
+def test_client_talks_to_the_keeper(tmp_path):
+    k = kp.Keeper(tmp_path, backoff=(0,))
+    svc(tmp_path, "web", "sleep 30")
+    k.tick()
+    srv = kp.make_server("127.0.0.1", 0, k)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = kp.Client(f"http://127.0.0.1:{srv.server_address[1]}")
+        assert c.status()["web"]["state"] == "running"
+        assert c.act("restart", "web") is True and c.act("restart", "nope") is False
+        assert c.act("rm", "web") is False and c.act("stop", "../x") is False
+        assert kp.Client("http://127.0.0.1:1").status() is None
+    finally:
+        srv.shutdown()
+        k.stop_all()

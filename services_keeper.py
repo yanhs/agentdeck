@@ -25,11 +25,13 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, List, Optional
 
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
+MAX_DEFAULT = 10
 LOG_MAX = 1_000_000          # bytes; then <name>.log -> <name>.log.1
 
 
@@ -58,7 +60,7 @@ def start_ticks(pid: int) -> Optional[int]:
 
 
 class Keeper:
-    def __init__(self, directory: Path, max_services: int = 10,
+    def __init__(self, directory: Path, max_services: int = MAX_DEFAULT,
                  backoff=(5, 10, 30, 60), cwd: Optional[Path] = None) -> None:
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -245,6 +247,88 @@ class Keeper:
                     break
 
 
+# ── the Telegram view (/services in the bridge) and a client for this machine ─
+ACTIONS = ("restart", "stop", "start")
+
+
+def _ago(seconds: float) -> str:
+    minutes = int(max(0, seconds) // 60)
+    if minutes < 60:
+        return f"{minutes} min"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 48:
+        return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+    return f"{hours // 24} d"
+
+
+def telegram_view(services: Optional[Dict], now: Optional[float] = None):
+    """(text, rows of (label, callback_data)) for the /services message."""
+    now = time.time() if now is None else now
+    refresh = [("🔄 Refresh", "svc:refresh:")]
+    if services is None:
+        return ("The services keeper isn't running, so the list is unavailable. It starts "
+                "with AgentDeck: the agentdeck-services unit on a server, the entrypoint in "
+                "Docker.", [refresh])
+    if not services:
+        return ("No services yet.\n\nA service is a program that keeps running without an "
+                "open terminal: a tunnel, a site's server, a bot. Ask the agent: \"make this "
+                "a service\".", [refresh])
+    running = sum(1 for st in services.values() if st.get("state") == "running")
+    lines, rows = [f"Services (running {running} of {len(services)}):", ""], []
+    for name, st in sorted(services.items()):
+        state, restarts = st.get("state"), st.get("restarts") or 0
+        tail = f", restarts: {restarts}" if restarts else ""
+        if state == "running":
+            since = st.get("since")
+            lines.append(f"🟢 {name} — running" + (f" {_ago(now - since)}" if since else "") + tail)
+        elif state == "waiting":
+            code = st.get("last_exit")
+            why = (f"crashed (exit {code}), restarting soon" if code is not None
+                   else "starting")
+            lines.append(f"🟠 {name} — {why}{tail}")
+        elif state == "skipped":
+            lines.append(f"⚪ {name} — not started: at most {st.get('limit') or MAX_DEFAULT} services")
+        else:
+            lines.append(f"⚪ {name} — stopped")
+        if state == "stopped":
+            rows.append([(f"▶ {name}", f"svc:start:{name}")])
+        elif state != "skipped":
+            rows.append([(f"🔁 {name}", f"svc:restart:{name}"), (f"⏹ {name}", f"svc:stop:{name}")])
+    lines += ["", "Logs: .services/<name>.log"]
+    return "\n".join(lines), rows + [refresh]
+
+
+class Client:
+    """The keeper's HTTP API on this machine (SERVICES_URL, else 127.0.0.1:SERVICES_PORT)."""
+
+    def __init__(self, base: Optional[str] = None, timeout: float = 4) -> None:
+        self.base = (base or os.environ.get("SERVICES_URL")
+                     or f"http://127.0.0.1:{os.environ.get('SERVICES_PORT') or 9876}")
+        self.timeout = timeout
+
+    def status(self) -> Optional[Dict]:
+        try:
+            with urllib.request.urlopen(f"{self.base}/status", timeout=self.timeout) as r:
+                data = json.loads(r.read())
+        except (OSError, ValueError):
+            return None
+        services = data.get("services") if isinstance(data, dict) else None
+        if not isinstance(services, dict):
+            return None
+        return {n: st for n, st in services.items()
+                if isinstance(st, dict) and NAME_RE.match(str(n))}
+
+    def act(self, action: str, name: str) -> bool:
+        if action not in ACTIONS or not NAME_RE.match(name):
+            return False
+        req = urllib.request.Request(f"{self.base}/{action}/{name}", data=b"", method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                return r.status == 200
+        except (OSError, ValueError):
+            return False
+
+
 def make_server(bind: str, port: int, keeper: Keeper) -> ThreadingHTTPServer:
     class Handler(BaseHTTPRequestHandler):
         def _json(self, status: int, payload: dict) -> None:
@@ -299,7 +383,7 @@ def default_bind() -> str:
 
 def main() -> int:
     directory = default_dir()
-    keeper = Keeper(directory, max_services=int(os.environ.get("SERVICES_MAX") or 10))
+    keeper = Keeper(directory, max_services=int(os.environ.get("SERVICES_MAX") or MAX_DEFAULT))
     keeper.clean_leftovers()
     server = make_server(default_bind(),
                          int(os.environ.get("SERVICES_PORT", "9876")), keeper)

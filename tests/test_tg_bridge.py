@@ -2385,7 +2385,8 @@ def test_list_without_an_archive_does_not_point_to_it(world):
 
 def test_bot_commands_list_the_archive_in_menu_order_and_are_english():
     assert [c.command for c in tb.BOT_COMMANDS] == [
-        "use", "list", "archive", "new", "read", "esc", "enter", "compact", "restart"]
+        "use", "list", "archive", "new", "read", "esc", "enter", "compact", "restart",
+        "services"]
     got = {c.command: c.description for c in tb.BOT_COMMANDS}
     assert "archive" in got["archive"].lower()
     for d in got.values():
@@ -2903,3 +2904,55 @@ def test_live_edit_without_retries_still_gives_up_at_once(monkeypatch):
 def test_bot_waits_longer_than_five_seconds_for_telegram():
     t = tb.build_app().bot.request._client_kwargs["timeout"]
     assert t.read >= 15 and t.write >= 15
+
+
+# ── /services: what runs without a terminal, with buttons (2.0) ──────────────
+class _FakeServices:
+    def __init__(self, state=None):
+        self.state = {"tunnel": {"state": "running", "since": None, "restarts": 0}} \
+            if state is None else state
+        self.acts = []
+
+    def status(self):
+        return self.state
+
+    def act(self, action, name):
+        self.acts.append((action, name))
+        return name in (self.state or {})
+
+
+def test_services_is_in_the_bot_menu():
+    assert "services" in [c.command for c in tb.BOT_COMMANDS]
+
+
+def test_services_lists_them_with_buttons(world, monkeypatch):
+    monkeypatch.setattr(tb, "services_client", lambda: _FakeServices())
+    text, markup = run_cmd(tb.cmd_services, [])[-1]
+    assert "tunnel" in text and "running" in text
+    data = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "svc:restart:tunnel" in data and "svc:stop:tunnel" in data
+
+
+def test_services_says_when_the_keeper_is_down(world, monkeypatch):
+    fake = _FakeServices()
+    fake.state = None
+    monkeypatch.setattr(tb, "services_client", lambda: fake)
+    assert "isn't running" in run_cmd(tb.cmd_services, [])[-1][0]
+
+
+def test_a_services_button_acts_and_redraws(world, monkeypatch):
+    fake = _FakeServices()
+    monkeypatch.setattr(tb, "services_client", lambda: fake)
+    monkeypatch.setattr(tb, "SERVICES_SETTLE", 0)
+    sink = run_cb(tb.on_services_cb, "svc:restart:tunnel")
+    assert fake.acts == [("restart", "tunnel")]
+    assert "tunnel" in sink[-1][0]
+
+
+@pytest.mark.parametrize("data", ["svc:rm:tunnel", "svc:stop:../x", "svc:stop:Bad Name"])
+def test_a_bad_services_button_does_nothing(world, monkeypatch, data):
+    fake = _FakeServices()
+    monkeypatch.setattr(tb, "services_client", lambda: fake)
+    monkeypatch.setattr(tb, "SERVICES_SETTLE", 0)
+    run_cb(tb.on_services_cb, data)
+    assert fake.acts == []

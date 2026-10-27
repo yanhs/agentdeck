@@ -62,6 +62,7 @@ import urllib.request
 import uuid as _uuid
 
 import status_server as ss  # same dir: SESSIONS, strip_ansi, is_junk
+import services_keeper as sk  # noqa: E402
 import library              # topic registry (.sessions/library.json)
 import library_cli          # tmux socket choice, transcript path of a topic
 import convo_sync           # a terminal takes the number of its live conversation
@@ -2129,6 +2130,53 @@ async def on_restart_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _do_restart(send, sid, force=True)
 
 
+# ── /services: programs that run without a terminal (2.0) ─────────────────────
+SERVICES_SETTLE = 3.5        # the keeper acts on its next tick (every 3 s)
+
+
+def services_client():
+    return sk.Client()
+
+
+def _services_markup(rows):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=data)
+                                  for label, data in row] for row in rows])
+
+
+async def cmd_services(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/services — what the services keeper runs (.services/<name>.sh), with buttons."""
+    text, rows = sk.telegram_view(await asyncio.to_thread(services_client().status))
+    await update.message.reply_text(text, reply_markup=_services_markup(rows))
+
+
+async def on_services_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    user = getattr(update, "effective_user", None)
+    if user is not None and getattr(user, "id", OWNER_ID) != OWNER_ID:
+        await q.answer()
+        return
+    _, _, rest = (q.data or "").partition(":")
+    action, _, name = rest.partition(":")
+    client = services_client()
+    note = ""
+    if action in sk.ACTIONS and sk.NAME_RE.match(name):
+        ok = await asyncio.to_thread(client.act, action, name)
+        log.info("SERVICE %s %s ok=%s", action, name, ok)
+        note = f"{action}: {name}" if ok else "didn't work"
+        if ok and SERVICES_SETTLE:
+            await asyncio.sleep(SERVICES_SETTLE)     # no thread held: other updates go on
+    elif action != "refresh":
+        await q.answer("unknown button")
+        return
+    await q.answer(note)
+    text, rows = sk.telegram_view(await asyncio.to_thread(client.status))
+    try:
+        await q.edit_message_text(text, reply_markup=_services_markup(rows))
+    except Exception as e:  # noqa: BLE001 — "message is not modified" is fine
+        if "not modified" not in str(e).lower():
+            log.warning("services redraw failed: %s", e)
+
+
 async def cmd_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = _require_session(update)
     if not s:
@@ -2394,6 +2442,7 @@ BOT_COMMANDS = [
     BotCommand("enter", "send Enter"),
     BotCommand("compact", "compact Claude's conversation (/compact)"),
     BotCommand("restart", "restart the current terminal (same conversation, Claude starts anew)"),
+    BotCommand("services", "programs that run without a terminal: list, restart, stop"),
 ]
 
 
@@ -2435,6 +2484,8 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("compact", cmd_compact, filters=owner))
     app.add_handler(CommandHandler("restart", cmd_restart, filters=owner))
     app.add_handler(CallbackQueryHandler(on_restart_cb, pattern=r"^rst:"))
+    app.add_handler(CommandHandler("services", cmd_services, filters=owner))
+    app.add_handler(CallbackQueryHandler(on_services_cb, pattern=r"^svc:"))
     app.add_handler(CallbackQueryHandler(on_use_cb, pattern=r"^use:"))
     app.add_handler(CallbackQueryHandler(on_archive_cb, pattern=r"^arch:"))
     app.add_handler(CallbackQueryHandler(on_menu_select_cb, pattern=r"^msel:"))
