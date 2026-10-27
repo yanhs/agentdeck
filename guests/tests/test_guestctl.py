@@ -111,18 +111,22 @@ def test_an_init_process_reaps_orphans():
     assert "--init" in args()
 
 
+def rules_text():
+    return "\n".join(m + "\n" + r for m, r in gc.seed_rules("https://u", "example.test"))
+
+
 def test_the_agent_is_told_how_to_run_services():
-    assert "<!-- sbx-services -->" in gc.SEED
-    assert "/work/.services/" in gc.SEED
-    assert "/services" in gc.SEED                 # where the human sees them
-    assert "скажи" in gc.SEED                     # the agent must tell the human
+    assert "<!-- sbx-services -->" in rules_text()
+    assert "/work/.services/" in rules_text()
+    assert "/services" in rules_text()            # where the human sees them
+    assert "скажи" in rules_text()                # the agent must tell the human
 
 
 def test_services_limit_is_one_number_everywhere():
     env = dict(e.split("=", 1) for e in pairs(args(), "-e"))
     assert gc.SERVICES_MAX == 10
     assert env["SERVICES_MAX"] == str(gc.SERVICES_MAX)      # the keeper reads it
-    assert "SERVICES_MAX" in gc.SEED and "5 служб" not in gc.SEED   # the agent's rule too
+    assert f"Не больше {gc.SERVICES_MAX} служб" in rules_text()     # the agent's rule too
 
 
 def test_the_tmux_placeholder_is_not_a_terminal(monkeypatch):
@@ -210,17 +214,21 @@ def test_without_a_domain_a_sandbox_is_not_made(monkeypatch, tmp_path):
     assert "GUESTS_DOMAIN" in str(exc.value)
 
 
-def test_the_seed_gets_the_domain_for_the_agents_site_rule():
-    argv = gc.seed_argv("anna", "sbx-PASS", 42)
+def test_the_seed_gets_the_agents_rules_with_the_domain_and_link():
+    argv = gc.seed_argv("anna", "sbx-PASS", 42, "anna-k3y")
     assert argv[:6] == ["docker", "exec", "sbx-anna", "python3", "-c", gc.SEED]
-    assert argv[6:] == ["sbx-PASS", "42", "example.test"]
+    assert argv[6:8] == ["sbx-PASS", "42"]
+    rules = json.loads(argv[8])
+    assert [m for m, _ in rules] == ["<!-- sbx-public-files -->", "<!-- sbx-sites -->",
+                                     "<!-- sbx-services -->"]
+    assert "https://sbx.example.test/f/anna-k3y/<имя файла>" in rules[0][1]
+    assert "<сайт>-<гость>.example.test" in rules[1][1]
     assert "sys.argv[3]" in gc.SEED
 
 
 def test_the_wall_check_names_only_the_module_s_own_walls():
     """turnstiles, the host's ssh and nginx, the internet — nothing of another setup."""
-    import re
-    labels = re.findall(r'\("([^"]+)", "[^"]+", \d+\)', gc.CHECK)
+    labels = [label for label, _, _ in gc.check_targets()]
     assert labels == ["турникет Claude", "турникет Телеграм", "ssh сервера", "nginx сервера",
                       "интернет (example.com:443)"]
 
@@ -459,3 +467,18 @@ def test_doctor_json_cli(monkeypatch, capsys):
     assert gc.main(["doctor", "--json"]) == 0
     assert json.loads(capsys.readouterr().out) == {"checks": fake}
     assert gc.main(["doctor"]) == 1          # human form: failure is the exit code
+
+
+def test_the_seed_program_writes_each_rule_once(tmp_path):
+    """SEED itself, run against a temporary folder instead of the sandbox's /app and /root."""
+    import subprocess
+    code = gc.SEED.replace("/app/", f"{tmp_path}/app/").replace("/root/", f"{tmp_path}/root/")
+    argv = gc.seed_argv("anna", "sbx-PASS", 42, "anna-k3y")
+    for _ in range(2):                                     # a recreate seeds again
+        r = subprocess.run(["python3", "-c", code, *argv[6:]], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    md = (tmp_path / "root" / ".claude" / "CLAUDE.md").read_text()
+    expected = "".join("\n" + m + "\n" + rule for m, rule in json.loads(argv[8]))
+    assert md == expected
+    bridge = json.loads((tmp_path / "app" / ".sessions" / "telegram.json").read_text())
+    assert bridge == {"enabled": True, "token": "sbx-PASS", "owner": 42}

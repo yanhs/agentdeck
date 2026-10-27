@@ -37,6 +37,8 @@ from zoneinfo import ZoneInfo
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import guestenv  # noqa: E402
+import texts  # noqa: E402
+from texts import t as _t  # noqa: E402
 OAUTH_BETA = "oauth-2025-04-20"
 DAY_TZ = ZoneInfo(os.environ.get("TURNSTILE_DAY_TZ", "America/Los_Angeles"))
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}$")
@@ -341,10 +343,8 @@ class SpendWatch:
                 return
             self._last[guest] = now
         today = self.ledger.spent_today(guest)
-        text = (f"⚠️ Песочница {guest}: за последний час потрачено ≈{spent / WEEK_PERCENT:.1f}% "
-                f"недели подписки ({spent / 1e6:.1f} млн). Сегодня всего ≈{today / WEEK_PERCENT:.1f}%.\n"
-                f"Если это не ожидалось — посмотреть, что крутится: службы гостя (/services) "
-                f"или `turnstile.py disable {guest}`.")
+        text = _t("spend_alert", guest=guest, hour_pct=spent / WEEK_PERCENT, hour_m=spent / 1e6,
+                  today_pct=today / WEEK_PERCENT)
         self.log(f"ALERT guest={guest} hour={spent} today={today}")
         if self.background:
             threading.Thread(target=self._send, args=(text,), daemon=True).start()
@@ -426,23 +426,20 @@ def make_server(
             guest = book.lookup(self._pass())
             if guest is None:
                 log(f"DENY unknown-pass {self.command} {self.path}")
-                return self._reply(401, _error("authentication_error", "Неверный пропуск."))
+                return self._reply(401, _error("authentication_error", _t("gate_bad_pass")))
             if not guest.enabled:
                 log(f"DENY disabled guest={guest.name}")
-                return self._reply(403, _error("permission_error", "Доступ гостя выключен."))
+                return self._reply(403, _error("permission_error", _t("gate_disabled")))
             if not _allowed_path(self.path):
                 log(f"DENY path guest={guest.name} {self.command} {self.path}")
-                return self._reply(403, _error("permission_error", "Этот адрес закрыт."))
+                return self._reply(403, _error("permission_error", _t("gate_path")))
             spent = ledger.spent_today(guest.name)
             if spent >= guest.daily_limit and not guest.limit_lifted():
                 log(f"LIMIT guest={guest.name} spent={spent} limit={guest.daily_limit}")
                 return self._reply(
                     429,
-                    _error(
-                        "rate_limit_error",
-                        f"Дневной лимит исчерпан ({spent} из {guest.daily_limit}). "
-                        "Сбросится в полночь по Лос-Анджелесу.",
-                    ),
+                    _error("rate_limit_error",
+                           _t("gate_limit", spent=spent, limit=guest.daily_limit)),
                 )
 
             length = int(self.headers.get("content-length") or 0)
@@ -456,7 +453,7 @@ def make_server(
                 resp = conn.getresponse()
             except OSError as exc:
                 log(f"UPSTREAM-ERROR guest={guest.name} {exc!r}")
-                return self._reply(502, _error("api_error", "Сервер Claude недоступен."))
+                return self._reply(502, _error("api_error", _t("gate_upstream")))
 
             self.send_response(resp.status)
             for key, value in resp.getheaders():
@@ -556,13 +553,13 @@ def main(argv=None) -> int:
         ledger = Ledger(data / "usage.db")
         for name in book.names():
             g = book.get(name)
-            state = "вкл" if g.enabled else "ВЫКЛ"
+            state = _t("ts_on") if g.enabled else _t("ts_off")
             spent = ledger.spent_today(name)
-            lifted = (f" БЕЗ ЛИМИТА до {datetime.fromtimestamp(g.unlimited_until, DAY_TZ).strftime('%d.%m %H:%M')}"
-                      if g.limit_lifted() else "")
-            print(f"{name}\t{state}\tсегодня {spent} из {g.daily_limit} "
-                  f"(≈{spent / WEEK_PERCENT:.2f}% недели, лимит ≈{g.daily_limit / WEEK_PERCENT:.1f}%){lifted}"
-                  f"\ttg={g.telegram_id or '-'}")
+            until = datetime.fromtimestamp(g.unlimited_until, DAY_TZ).strftime('%d.%m %H:%M')
+            lifted = _t("ts_unlimited_until", until=until) if g.limit_lifted() else ""
+            print(_t("ts_list_line", name=name, state=state, spent=spent, limit=g.daily_limit,
+                     spent_pct=spent / WEEK_PERCENT, limit_pct=g.daily_limit / WEEK_PERCENT,
+                     lifted=lifted, tg=g.telegram_id or "-"))
     elif args.cmd in ("enable", "disable"):
         book.set_enabled(args.name, args.cmd == "enable")
     elif args.cmd == "remove":
@@ -572,8 +569,8 @@ def main(argv=None) -> int:
     elif args.cmd == "unlimited":
         until = time.time() + args.hours * 3600
         book.set_unlimited_until(args.name, until)
-        print(f"{args.name}: без лимита до "
-              f"{datetime.fromtimestamp(until, DAY_TZ).strftime('%d.%m %H:%M')} (Лос-Анджелес)")
+        print(_t("ts_unlimited_set", name=args.name,
+                 until=datetime.fromtimestamp(until, DAY_TZ).strftime('%d.%m %H:%M')))
     return 0
 
 

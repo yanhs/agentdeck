@@ -37,6 +37,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "turnstile"))
 import guestenv  # noqa: E402
+from texts import t as _t  # noqa: E402
 import turnstile as ts  # noqa: E402
 
 GW = "172.31.250.1"
@@ -108,7 +109,7 @@ def cmd_web(a) -> int:
     ops.cert_issue(host)
     ops.write_vhost(host, dashboard_vhost(a.name, info["port"]))
     ops.reload()
-    print(f"https://{host}  (пароль: {DATA / (a.name + '.dashboard-password')})")
+    print(_t("ctl_web_done", host=host, pw_file=DATA / (a.name + ".dashboard-password")))
     return 0
 
 
@@ -223,7 +224,7 @@ def _exec_py(name: str, code: str) -> str:
 
 SEED = r"""
 import json, os, sys
-secret, owner, domain = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+secret, owner, rules = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 os.makedirs("/app/.sessions", exist_ok=True)
 old = os.umask(0o077)
 json.dump({"enabled": True, "token": secret, "owner": owner},
@@ -236,48 +237,28 @@ cfg.setdefault("projects", {}).setdefault("/work", {})["hasTrustDialogAccepted"]
 os.makedirs("/root/.claude", exist_ok=True)
 json.dump(cfg, open(p, "w"), indent=2)
 md = "/root/.claude/CLAUDE.md"
-mark = "<!-- sbx-public-files -->"
 text = open(md).read() if os.path.exists(md) else ""
-if mark not in text:
-    url = os.environ.get("PUBLIC_URL", "")
-    text += ("\n" + mark + "\n## Файлы для пользователя — интернет-ссылкой\n"
-             "Чтобы отдать файл пользователю, положи его в `/work/public/` и пришли ссылку\n"
-             f"`{url}/<имя файла>` последней строкой сообщения. Имена — латиницей, без пробелов.\n"
-             "Всё в `/work/public/` доступно по ссылке любому, у кого она есть; секретов туда не клади.\n")
-    open(md, "w").write(text)
-mark2 = "<!-- sbx-sites -->"
-if mark2 not in text:
-    text += ("\n" + mark2 + f"\n## Сайт в интернет: <сайт>-<гость>.{domain}\n"
-             "Подними сервер в песочнице на 0.0.0.0:<порт> (1024–65535), затем:\n"
-             "`curl -s -X POST http://172.31.250.1:8794/publish -H \"Authorization: Bearer $ANTHROPIC_AUTH_TOKEN\" "
-             "-d '{\"site\":\"test\",\"port\":3000}'` — ответ даст адрес "
-             f"https://test-<гость>.{domain}\n"
-             "(DNS и сертификат создаются ~1 минуту). Список: `GET /sites`, снять: `DELETE /publish/<сайт>`.\n"
-             "Не больше 3 сайтов. Владелец сервера получает уведомление о каждом сайте.\n")
-    open(md, "w").write(text)
-mark3 = "<!-- sbx-services -->"
-if mark3 not in text:
-    text += ("\n" + mark3 + "\n## Службы: то, что должно работать без терминала\n"
-             "Терминал выгружается после 2 часов простоя, и всё запущенное из него (`&`, nohup,\n"
-             "tmux) умирает вместе с ним. Программу, которая должна работать постоянно (Tailscale,\n"
-             "сервер опубликованного сайта, бот), сделай службой:\n"
-             "1. Файл `/work/.services/<имя>.sh` (имя: строчная латиница, цифры, `-`, `_`). Внутри —\n"
-             "   команда, которая работает на переднем плане, без `&` и без режима демона,\n"
-             "   например `exec python3 /work/site/server.py`.\n"
-             "2. Сторож запустит её за несколько секунд, перезапустит после падения; вывод —\n"
-             "   `/work/.services/<имя>.log`; состояние — `curl -s localhost:9876/status`.\n"
-             "3. `curl -X POST localhost:9876/stop/<имя>` — остановить (файл станет `<имя>.sh.off`),\n"
-             "   `/start/<имя>` — запустить, `/restart/<имя>` — перезапустить. Удалить файл — убрать службу.\n"
-             f"Не больше {os.environ.get('SERVICES_MAX', '10')} служб. Заведя, остановив или удалив службу, скажи об этом человеку одной\n"
-             "строкой: что за служба и зачем. Свои службы человек видит командой /services в Телеграме.\n")
-    open(md, "w").write(text)
+for mark, rule in json.loads(rules):          # [[mark, text], ...] rendered by guestctl
+    if mark not in text:
+        text += "\n" + mark + "\n" + rule
+        open(md, "w").write(text)
 print("seeded")
 """
 
 
-def seed_argv(name: str, secret: str, tg: int) -> list:
+def seed_rules(public_url: str, domain_: str, services_max: int = SERVICES_MAX) -> list:
+    """The agent's rules for the sandbox's CLAUDE.md, each under its own mark (added once),
+    in GUESTS_LANG."""
+    return [["<!-- sbx-public-files -->", _t("rule_files", url=public_url)],
+            ["<!-- sbx-sites -->", _t("rule_sites", domain=domain_)],
+            ["<!-- sbx-services -->", _t("rule_services", max=services_max)]]
+
+
+def seed_argv(name: str, secret: str, tg: int, public_key: str) -> list:
     """docker exec that writes the sandbox's Telegram bridge config and the agent's rules."""
-    return ["docker", "exec", f"sbx-{name}", "python3", "-c", SEED, secret, str(tg), domain()]
+    rules = seed_rules(f"{public_base_url()}/{public_key}", domain())
+    return ["docker", "exec", f"sbx-{name}", "python3", "-c", SEED, secret, str(tg),
+            json.dumps(rules, ensure_ascii=False)]
 
 
 def _wait_running(name: str, seconds: int = 60) -> None:
@@ -309,7 +290,7 @@ def cmd_add(a) -> int:
         _wait_running(a.name)
         # entrypoint symlinks /root/.claude.json into the volume; give it a moment
         time.sleep(3)
-        subprocess.run(seed_argv(a.name, secret, a.tg), check=True, capture_output=True,
+        subprocess.run(seed_argv(a.name, secret, a.tg, public_key), check=True, capture_output=True,
                        text=True)
         _docker("restart", f"sbx-{a.name}")  # status_server starts the bridge on boot
         _wait_running(a.name)
@@ -359,8 +340,7 @@ def cmd_recreate(a) -> int:
         raise SystemExit(f"no guest {a.name}")
     open_now = live_terminals(a.name)
     if open_now and not getattr(a, "force", False):
-        raise SystemExit(f"у {a.name} открыты терминалы ({len(open_now)}): пересоздание их оборвёт. "
-                         "Подождите или --force.")
+        raise SystemExit(_t("ctl_recreate_busy", name=a.name, n=len(open_now)))
     env = _container_env(a.name)
     secret, password = env["ANTHROPIC_AUTH_TOKEN"], env["AGENTDECK_PASSWORD"]
     public_key = info.get("public_key") or new_public_key(a.name)
@@ -372,7 +352,7 @@ def cmd_recreate(a) -> int:
                             ip=ip)[1:])
     _wait_running(a.name)
     time.sleep(3)
-    subprocess.run(seed_argv(a.name, secret, info["telegram_id"]), check=True,
+    subprocess.run(seed_argv(a.name, secret, info["telegram_id"], public_key), check=True,
                    capture_output=True)
     _docker("restart", f"sbx-{a.name}")
     _wait_running(a.name)
@@ -420,9 +400,10 @@ def cmd_list(a) -> int:
         print(json.dumps({"guests": rows}, ensure_ascii=False))
         return 0
     for r in rows:
-        print(f"{r['name']}\ttg={r['telegram_id']}\t:{r['port']}\t"
-              f"{r['state'] if r['state'] != 'missing' else 'нет контейнера'}\t"
-              f"{'вкл' if r['enabled'] else 'ВЫКЛ'}\tсегодня {r['spent_today']} из {r['limit']}")
+        print(_t("ctl_list_line", name=r["name"], tg=r["telegram_id"], port=r["port"],
+                 state=r["state"] if r["state"] != "missing" else _t("ctl_no_container"),
+                 on=_t("ts_on") if r["enabled"] else _t("ts_off"), spent=r["spent_today"],
+                 limit=r["limit"]))
     return 0
 
 
@@ -439,26 +420,31 @@ def cmd_limit(a) -> int:
 
 
 CHECK = r"""
-import socket
+import json, socket, sys
+opened, closed, targets = json.loads(sys.argv[1])
 def tcp(host, port):
     s = socket.socket(); s.settimeout(3)
     try:
-        s.connect((host, port)); return "ОТКРЫТ"
+        s.connect((host, port)); return opened
     except OSError:
-        return "закрыт"
+        return closed
     finally:
         s.close()
-for label, host, port in [("турникет Claude", "172.31.250.1", 8790),
-                          ("турникет Телеграм", "172.31.250.1", 8792),
-                          ("ssh сервера", "172.31.250.1", 22),
-                          ("nginx сервера", "172.31.250.1", 443),
-                          ("интернет (example.com:443)", "example.com", 443)]:
+for label, host, port in targets:
     print(f"{label:28} {tcp(host, port)}")
 """
 
 
+def check_targets() -> list:
+    """What `check` probes from inside a sandbox: [label, host, port] (labels in GUESTS_LANG)."""
+    return [[_t("ctl_wall_claude"), GW, 8790], [_t("ctl_wall_telegram"), GW, 8792],
+            [_t("ctl_wall_ssh"), GW, 22], [_t("ctl_wall_nginx"), GW, 443],
+            [_t("ctl_wall_internet"), "example.com", 443]]
+
+
 def cmd_check(a) -> int:
-    print(_docker("exec", f"sbx-{a.name}", "python3", "-c", CHECK).stdout, end="")
+    spec = json.dumps([_t("ctl_open"), _t("ctl_closed"), check_targets()], ensure_ascii=False)
+    print(_docker("exec", f"sbx-{a.name}", "python3", "-c", CHECK, spec).stdout, end="")
     return 0
 
 

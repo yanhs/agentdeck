@@ -177,4 +177,4 @@ def test_without_an_owner_strangers_are_just_told_no(book, tg, prov, tmp_path):
     relay = tr.Relay(book, tg)                            # invitations off
     relay.route(hello(MASHA))
     assert tg.to(OWNER) == []
-    assert tg.to(MASHA)[0]["text"] == tr.STRANGER_TEXT
+    assert tg.to(MASHA)[0]["text"] == "Это закрытый бот. Доступ выдаёт владелец."

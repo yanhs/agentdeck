@@ -37,6 +37,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "turnstile"))
 import guestenv  # noqa: E402
+from texts import t as _t  # noqa: E402
 import turnstile as ts  # noqa: E402
 
 MAX_SITES = 3
@@ -51,16 +52,16 @@ class GateError(Exception):
 
 def validate_site(name) -> str:
     if not isinstance(name, str) or not SITE_RE.match(name):
-        raise ValueError("имя сайта: латиница a-z, цифры и дефис, 1–20 знаков")
+        raise ValueError(_t("site_bad_name"))
     return name
 
 
 def validate_port(port) -> int:
     if isinstance(port, bool) or not isinstance(port, (int, str)) or not str(port).isdigit():
-        raise ValueError("порт — число от 1024 до 65535")
+        raise ValueError(_t("site_bad_port"))
     value = int(port)
     if not 1024 <= value <= 65535:
-        raise ValueError("порт — число от 1024 до 65535")
+        raise ValueError(_t("site_bad_port"))
     return value
 
 
@@ -112,10 +113,10 @@ def cloudflare_api(method: str, path: str, data: Optional[Dict] = None,
 def host_for(site: str, guest: str) -> str:
     domain = guestenv.domain()
     if not domain:
-        raise GateError("сайты выключены: владелец не задал домен (GUESTS_DOMAIN)")
+        raise GateError(_t("site_no_domain"))
     host = f"{site}-{guest}.{domain}"
     if len(host.split(".")[0]) > 63:
-        raise ValueError("слишком длинное имя")
+        raise ValueError(_t("site_too_long"))
     return host
 
 
@@ -198,23 +199,23 @@ class Gate:
         site, port = validate_site(site), validate_port(port)
         g = self.book.get(guest)
         if g is None or not g.enabled:
-            raise GateError("гость выключен")
+            raise GateError(_t("site_guest_off"))
         ip = self.ip_of(guest)
         if not ip:
-            raise GateError("у песочницы нет постоянного адреса — нужен guestctl recreate")
+            raise GateError(_t("site_no_ip"))
         host = host_for(site, guest)
         with self._lock:
             reg = self._load()
             if host in reg:
                 if reg[host]["guest"] != guest:
-                    raise GateError("этот адрес занят")
+                    raise GateError(_t("site_taken"))
                 self.ops.write_vhost(host, render_vhost(host, ip, port, tls=True))
                 self.ops.reload()
                 reg[host]["port"] = port
                 self._save(reg)
                 return {"url": f"https://{host}", "host": host, "port": port}
             if sum(1 for v in reg.values() if v["guest"] == guest) >= MAX_SITES:
-                raise GateError(f"не больше {MAX_SITES} сайтов на гостя — сначала снимите старый")
+                raise GateError(_t("site_too_many", max=MAX_SITES))
             try:
                 self.ops.dns_create(host)
                 self.ops.write_vhost(host, render_vhost(host, ip, port, tls=False))
@@ -229,12 +230,11 @@ class Gate:
                         undo()
                     except Exception:
                         pass
-                raise GateError(f"не получилось опубликовать: {exc}")
+                raise GateError(_t("site_failed", err=exc))
             reg[host] = {"guest": guest, "site": site, "port": port,
                          "created": time.strftime("%Y-%m-%d %H:%M:%S")}
             self._save(reg)
-        self.ops.notify(f"🌐 Гость {guest} опубликовал сайт https://{host} "
-                        f"(порт {port} в его песочнице). Снять: sitegate.py remove {host}")
+        self.ops.notify(_t("site_published", guest=guest, host=host, port=port))
         return {"url": f"https://{host}", "host": host, "port": port}
 
     def unpublish(self, guest: str, site) -> Dict:
@@ -243,11 +243,11 @@ class Gate:
         with self._lock:
             reg = self._load()
             if host not in reg or reg[host]["guest"] != guest:
-                raise GateError("такого вашего сайта нет")
+                raise GateError(_t("site_not_yours"))
             self._remove(host)
             del reg[host]
             self._save(reg)
-        self.ops.notify(f"🌐 Гость {guest} снял сайт https://{host}")
+        self.ops.notify(_t("site_removed", guest=guest, host=host))
         return {"removed": f"https://{host}"}
 
     def _remove(self, host: str) -> None:
@@ -386,7 +386,7 @@ def make_server(bind: str, port: int, gate: Gate) -> ThreadingHTTPServer:
         def _route(self, method: str) -> None:
             guest = self._guest()
             if guest is None:
-                return self._json(401, {"error": "нужен пропуск: Authorization: Bearer <пропуск>"})
+                return self._json(401, {"error": _t("site_need_pass")})
             try:
                 if method == "GET" and self.path == "/sites":
                     return self._json(200, {"sites": gate.sites(guest)})
@@ -395,7 +395,7 @@ def make_server(bind: str, port: int, gate: Gate) -> ThreadingHTTPServer:
                     return self._json(200, gate.publish(guest, body.get("site"), body.get("port")))
                 if method == "DELETE" and self.path.startswith("/publish/"):
                     return self._json(200, gate.unpublish(guest, self.path[len("/publish/"):]))
-                return self._json(404, {"error": "есть: GET /sites, POST /publish, DELETE /publish/<site>"})
+                return self._json(404, {"error": _t("site_routes")})
             except (ValueError, GateError) as exc:
                 return self._json(400, {"error": str(exc)})
 

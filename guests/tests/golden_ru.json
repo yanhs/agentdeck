@@ -1,0 +1,478 @@
+{
+ "stranger": "Это закрытый бот. Доступ выдаёт владелец.",
+ "invite": [
+  "Запрос на доступ отправлен владельцу. Как только он одобрит, я пришлю сюда адрес и пароль.",
+  "Запрос уже у владельца — ждём его ответа.",
+  "Владелец не дал доступ.",
+  "Не получилось создать песочницу — владелец уже знает и разберётся."
+ ],
+ "commands": [
+  {
+   "command": "web",
+   "description": "адрес в браузере и пароль"
+  },
+  {
+   "command": "services",
+   "description": "что работает без терминала"
+  }
+ ],
+ "ago": [
+  "0 мин",
+  "10 мин",
+  "1 ч 1 мин",
+  "2 ч",
+  "2 дн"
+ ],
+ "services_none": [
+  "Список служб сейчас недоступен: песочница перезапускается или ещё на старой версии. Попробуйте через минуту.",
+  {
+   "inline_keyboard": [
+    [
+     {
+      "text": "🔄 Обновить",
+      "callback_data": "svc:refresh:"
+     }
+    ]
+   ]
+  }
+ ],
+ "services_empty": [
+  "Служб пока нет.\n\nСлужба — программа, которая работает без открытого терминала: Tailscale, сервер сайта, бот. Попросите агента: «сделай это службой».",
+  {
+   "inline_keyboard": [
+    [
+     {
+      "text": "🔄 Обновить",
+      "callback_data": "svc:refresh:"
+     }
+    ]
+   ]
+  }
+ ],
+ "services_full": [
+  "Службы песочницы (работают 2 из 7):\n\n🟠 boot — запускается\n🟢 bot — работает\n🟠 crash — упала (код 3), скоро перезапуск, перезапусков: 5\n⚪ many — не запущена: разрешено не больше 10 служб\n⚪ many2 — не запущена: слишком много служб\n⚪ off — остановлена\n🟢 web — работает 3 ч 2 мин, перезапусков: 2\n\nЛоги: /work/.services/<имя>.log",
+  {
+   "inline_keyboard": [
+    [
+     {
+      "text": "🔁 boot",
+      "callback_data": "svc:restart:boot"
+     },
+     {
+      "text": "⏹ boot",
+      "callback_data": "svc:stop:boot"
+     }
+    ],
+    [
+     {
+      "text": "🔁 bot",
+      "callback_data": "svc:restart:bot"
+     },
+     {
+      "text": "⏹ bot",
+      "callback_data": "svc:stop:bot"
+     }
+    ],
+    [
+     {
+      "text": "🔁 crash",
+      "callback_data": "svc:restart:crash"
+     },
+     {
+      "text": "⏹ crash",
+      "callback_data": "svc:stop:crash"
+     }
+    ],
+    [
+     {
+      "text": "▶ off",
+      "callback_data": "svc:start:off"
+     }
+    ],
+    [
+     {
+      "text": "🔁 web",
+      "callback_data": "svc:restart:web"
+     },
+     {
+      "text": "⏹ web",
+      "callback_data": "svc:stop:web"
+     }
+    ],
+    [
+     {
+      "text": "🔄 Обновить",
+      "callback_data": "svc:refresh:"
+     }
+    ]
+   ]
+  }
+ ],
+ "web_none": "Адрес в браузере для вас ещё не готов — спросите владельца.",
+ "web_welcome": "Здравствуйте! Это ваша песочница с Claude.\n\nПишите задачи прямо сюда. Команды:\n/new — новый терминал, /list — ваши терминалы, /use — переключиться,\n/restart — перезапустить зависший терминал, /esc — прервать Claude,\n/services — что работает без терминала (Tailscale, сайт, бот),\n/web — адрес и пароль ещё раз.\n\nВ браузере: https://sb-anna.example.test\nПароль: pw-1\nПосле первого входа смените его на свой: https://sb-anna.example.test/change-password\n(если вы его уже сменили — действует ваш)\n\nФайлы агент присылает интернет-ссылками; сайт можно опубликовать как <сайт>-<ваше имя>.example.test.",
+ "web_again": "В браузере: https://sb-anna.example.test\nПароль: pw-1\nПосле первого входа смените его на свой: https://sb-anna.example.test/change-password\n(если вы его уже сменили — действует ваш)",
+ "web_no_password": "В браузере: https://sb-anna.example.test",
+ "buttons": {
+  "inline_keyboard": [
+   [
+    {
+     "text": "✅ Пустить",
+     "callback_data": "inv:ok:5"
+    },
+    {
+     "text": "✖ Отказать",
+     "callback_data": "inv:no:5"
+    }
+   ]
+  ]
+ },
+ "invite_ok": [
+  [
+   "sendMessage",
+   {
+    "chat_id": 4242,
+    "text": "🔔 Запрос на доступ: Маша (@masha), Telegram ID 5550001.\nПустить? Будет создана песочница «masha» с дневным лимитом по умолчанию.",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:5550001\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:5550001\"}]]}"
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 5550001,
+    "text": "Запрос на доступ отправлен владельцу. Как только он одобрит, я пришлю сюда адрес и пароль."
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 5550001,
+    "text": "Запрос уже у владельца — ждём его ответа."
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": "Это не ваша кнопка."
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": ""
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 4242,
+    "message_id": 77,
+    "text": "⏳ Создаю песочницу для Маша (@masha)…",
+    "reply_markup": "{\"inline_keyboard\": []}"
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 4242,
+    "message_id": 77,
+    "text": "✅ Маша (@masha) — песочница «masha» создана, адрес и пароль отправлены.",
+    "reply_markup": "{\"inline_keyboard\": []}"
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 5550001,
+    "text": "Здравствуйте! Это ваша песочница с Claude.\n\nПишите задачи прямо сюда. Команды:\n/new — новый терминал, /list — ваши терминалы, /use — переключиться,\n/restart — перезапустить зависший терминал, /esc — прервать Claude,\n/services — что работает без терминала (Tailscale, сайт, бот),\n/web — адрес и пароль ещё раз.\n\nВ браузере: https://sb-masha.example.test\nПароль: pw-M\nПосле первого входа смените его на свой: https://sb-masha.example.test/change-password\n(если вы его уже сменили — действует ваш)\n\nФайлы агент присылает интернет-ссылками; сайт можно опубликовать как <сайт>-<ваше имя>.example.test."
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": "Уже решено или в работе."
+   }
+  ]
+ ],
+ "invite_fail": [
+  [
+   "sendMessage",
+   {
+    "chat_id": 4242,
+    "text": "🔔 Запрос на доступ: Маша (@masha), Telegram ID 5550001.\nПустить? Будет создана песочница «masha» с дневным лимитом по умолчанию.",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:5550001\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:5550001\"}]]}"
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 5550001,
+    "text": "Запрос на доступ отправлен владельцу. Как только он одобрит, я пришлю сюда адрес и пароль."
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 5550001,
+    "text": "Запрос уже у владельца — ждём его ответа."
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": "Это не ваша кнопка."
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": ""
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 4242,
+    "message_id": 77,
+    "text": "⏳ Создаю песочницу для Маша (@masha)…",
+    "reply_markup": "{\"inline_keyboard\": []}"
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 4242,
+    "message_id": 77,
+    "text": "🚨 Не вышло создать песочницу «masha» для Маша (@masha): docker: no space left\nМожно нажать ещё раз.",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:5550001\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:5550001\"}]]}"
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 5550001,
+    "text": "Не получилось создать песочницу — владелец уже знает и разберётся."
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": ""
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 4242,
+    "message_id": 77,
+    "text": "⏳ Создаю песочницу для Маша (@masha)…",
+    "reply_markup": "{\"inline_keyboard\": []}"
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 4242,
+    "message_id": 77,
+    "text": "🚨 Не вышло создать песочницу «masha» для Маша (@masha): docker: no space left\nМожно нажать ещё раз.",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:5550001\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:5550001\"}]]}"
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 5550001,
+    "text": "Не получилось создать песочницу — владелец уже знает и разберётся."
+   }
+  ]
+ ],
+ "invite_no": [
+  [
+   "sendMessage",
+   {
+    "chat_id": 4242,
+    "text": "🔔 Запрос на доступ: без имени, Telegram ID 7.\nПустить? Будет создана песочница «g7» с дневным лимитом по умолчанию.",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"✅ Пустить\", \"callback_data\": \"inv:ok:7\"}, {\"text\": \"✖ Отказать\", \"callback_data\": \"inv:no:7\"}]]}"
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 7,
+    "text": "Запрос на доступ отправлен владельцу. Как только он одобрит, я пришлю сюда адрес и пароль."
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": ""
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 4242,
+    "message_id": 77,
+    "text": "✖ Отказано: без имени.",
+    "reply_markup": "{\"inline_keyboard\": []}"
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 7,
+    "text": "Владелец не дал доступ."
+   }
+  ]
+ ],
+ "services_flow": [
+  [
+   "sendMessage",
+   {
+    "chat_id": 1001,
+    "text": "Службы песочницы (работают 1 из 1):\n\n🟢 web — работает\n\nЛоги: /work/.services/<имя>.log",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"🔁 web\", \"callback_data\": \"svc:restart:web\"}, {\"text\": \"⏹ web\", \"callback_data\": \"svc:stop:web\"}], [{\"text\": \"🔄 Обновить\", \"callback_data\": \"svc:refresh:\"}]]}"
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": "Перезапускаю web"
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 1001,
+    "message_id": 5,
+    "text": "Службы песочницы (работают 1 из 1):\n\n🟢 web — работает\n\nЛоги: /work/.services/<имя>.log",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"🔁 web\", \"callback_data\": \"svc:restart:web\"}, {\"text\": \"⏹ web\", \"callback_data\": \"svc:stop:web\"}], [{\"text\": \"🔄 Обновить\", \"callback_data\": \"svc:refresh:\"}]]}"
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": "Останавливаю web"
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 1001,
+    "message_id": 5,
+    "text": "Службы песочницы (работают 1 из 1):\n\n🟢 web — работает\n\nЛоги: /work/.services/<имя>.log",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"🔁 web\", \"callback_data\": \"svc:restart:web\"}, {\"text\": \"⏹ web\", \"callback_data\": \"svc:stop:web\"}], [{\"text\": \"🔄 Обновить\", \"callback_data\": \"svc:refresh:\"}]]}"
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": "Запускаю web"
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 1001,
+    "message_id": 5,
+    "text": "Службы песочницы (работают 1 из 1):\n\n🟢 web — работает\n\nЛоги: /work/.services/<имя>.log",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"🔁 web\", \"callback_data\": \"svc:restart:web\"}, {\"text\": \"⏹ web\", \"callback_data\": \"svc:stop:web\"}], [{\"text\": \"🔄 Обновить\", \"callback_data\": \"svc:refresh:\"}]]}"
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": "Не вышло"
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 1001,
+    "message_id": 5,
+    "text": "Службы песочницы (работают 1 из 1):\n\n🟢 web — работает\n\nЛоги: /work/.services/<имя>.log",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"🔁 web\", \"callback_data\": \"svc:restart:web\"}, {\"text\": \"⏹ web\", \"callback_data\": \"svc:stop:web\"}], [{\"text\": \"🔄 Обновить\", \"callback_data\": \"svc:refresh:\"}]]}"
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": "Неизвестная кнопка"
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 1001,
+    "message_id": 5,
+    "text": "Службы песочницы (работают 1 из 1):\n\n🟢 web — работает\n\nЛоги: /work/.services/<имя>.log",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"🔁 web\", \"callback_data\": \"svc:restart:web\"}, {\"text\": \"⏹ web\", \"callback_data\": \"svc:stop:web\"}], [{\"text\": \"🔄 Обновить\", \"callback_data\": \"svc:refresh:\"}]]}"
+   }
+  ],
+  [
+   "answerCallbackQuery",
+   {
+    "callback_query_id": "c",
+    "text": ""
+   }
+  ],
+  [
+   "editMessageText",
+   {
+    "chat_id": 1001,
+    "message_id": 5,
+    "text": "Службы песочницы (работают 1 из 1):\n\n🟢 web — работает\n\nЛоги: /work/.services/<имя>.log",
+    "reply_markup": "{\"inline_keyboard\": [[{\"text\": \"🔁 web\", \"callback_data\": \"svc:restart:web\"}, {\"text\": \"⏹ web\", \"callback_data\": \"svc:stop:web\"}], [{\"text\": \"🔄 Обновить\", \"callback_data\": \"svc:refresh:\"}]]}"
+   }
+  ],
+  [
+   "sendMessage",
+   {
+    "chat_id": 99,
+    "text": "Это закрытый бот. Доступ выдаёт владелец."
+   }
+  ],
+  [
+   "setMyCommands",
+   {
+    "commands": "[{\"command\": \"list\", \"description\": \"x\"}, {\"command\": \"web\", \"description\": \"адрес в браузере и пароль\"}, {\"command\": \"services\", \"description\": \"что работает без терминала\"}]",
+    "scope": "{\"type\": \"chat\", \"chat_id\": 1001}"
+   }
+  ]
+ ],
+ "gate": {
+  "bad_site": "имя сайта: латиница a-z, цифры и дефис, 1–20 знаков",
+  "bad_port": "порт — число от 1024 до 65535",
+  "low_port": "порт — число от 1024 до 65535",
+  "long_host": "слишком длинное имя",
+  "disabled": "гость выключен",
+  "no_ip": "у песочницы нет постоянного адреса — нужен guestctl recreate",
+  "failed": "не получилось опубликовать: certbot failed",
+  "not_yours": "такого вашего сайта нет",
+  "too_many": "не больше 3 сайтов на гостя — сначала снимите старый",
+  "taken": "этот адрес занят",
+  "notes": [
+   "🌐 Гость anna снял сайт https://s0-anna.example.test",
+   "🌐 Гость anna опубликовал сайт https://new-anna.example.test (порт 4000 в его песочнице). Снять: sitegate.py remove new-anna.example.test"
+  ]
+ },
+ "spend_alert": [
+  "⚠️ Песочница anna: за последний час потрачено ≈1.4% недели подписки (12.3 млн). Сегодня всего ≈3.4%.\nЕсли это не ожидалось — посмотреть, что крутится: службы гостя (/services) или `turnstile.py disable anna`."
+ ],
+ "seed_blocks": [
+  "\n<!-- sbx-public-files -->\n## Файлы для пользователя — интернет-ссылкой\nЧтобы отдать файл пользователю, положи его в `/work/public/` и пришли ссылку\n`https://sbx.example.test/f/anna-k3y/<имя файла>` последней строкой сообщения. Имена — латиницей, без пробелов.\nВсё в `/work/public/` доступно по ссылке любому, у кого она есть; секретов туда не клади.\n",
+  "\n<!-- sbx-sites -->\n## Сайт в интернет: <сайт>-<гость>.example.test\nПодними сервер в песочнице на 0.0.0.0:<порт> (1024–65535), затем:\n`curl -s -X POST http://172.31.250.1:8794/publish -H \"Authorization: Bearer $ANTHROPIC_AUTH_TOKEN\" -d '{\"site\":\"test\",\"port\":3000}'` — ответ даст адрес https://test-<гость>.example.test\n(DNS и сертификат создаются ~1 минуту). Список: `GET /sites`, снять: `DELETE /publish/<сайт>`.\nНе больше 3 сайтов. Владелец сервера получает уведомление о каждом сайте.\n",
+  "\n<!-- sbx-services -->\n## Службы: то, что должно работать без терминала\nТерминал выгружается после 2 часов простоя, и всё запущенное из него (`&`, nohup,\ntmux) умирает вместе с ним. Программу, которая должна работать постоянно (Tailscale,\nсервер опубликованного сайта, бот), сделай службой:\n1. Файл `/work/.services/<имя>.sh` (имя: строчная латиница, цифры, `-`, `_`). Внутри —\n   команда, которая работает на переднем плане, без `&` и без режима демона,\n   например `exec python3 /work/site/server.py`.\n2. Сторож запустит её за несколько секунд, перезапустит после падения; вывод —\n   `/work/.services/<имя>.log`; состояние — `curl -s localhost:9876/status`.\n3. `curl -X POST localhost:9876/stop/<имя>` — остановить (файл станет `<имя>.sh.off`),\n   `/start/<имя>` — запустить, `/restart/<имя>` — перезапустить. Удалить файл — убрать службу.\nНе больше 10 служб. Заведя, остановив или удалив службу, скажи об этом человеку одной\nстрокой: что за служба и зачем. Свои службы человек видит командой /services в Телеграме.\n"
+ ]
+}

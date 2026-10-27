@@ -39,7 +39,7 @@ echo "guest $G at $IP, image $(docker inspect -f '{{.Config.Image}}' "$C")"
 # 1. the keeper comes up with the sandbox, the limit and the agent's rule are in place
 waitfor 30 st && ok "keeper answers on :9876" || bad "keeper does not answer"
 [ "$(x printenv SERVICES_MAX)" = 10 ] && ok "SERVICES_MAX=10 in the sandbox" || bad "SERVICES_MAX"
-x grep -q "Не больше 10 служб" /root/.claude/CLAUDE.md && ok "services rule in CLAUDE.md" || bad "services rule missing"
+x grep -q "<!-- sbx-services -->" /root/.claude/CLAUDE.md && ok "services rule in CLAUDE.md" || bad "services rule missing"
 [ "$(x cat /proc/1/comm)" = docker-init ] && ok "init process is PID 1" || bad "no init: $(x cat /proc/1/comm)"
 
 # 2. a service starts, writes its log, serves
@@ -51,8 +51,8 @@ x grep -q "web starting" /work/.services/web.log && ok "service log written" || 
 # 3. the host sees it the way the Telegram relay does, and the buttons work
 python3 -I - "$G" "$IP" <<'PY' && ok "relay: /services text + restart button" || bad "relay view/button"
 import sys, time
-sys.path[:0] = ["tgrelay", "turnstile"]
-import tgrelay as tr, turnstile as ts
+sys.path[:0] = [".", "tgrelay", "turnstile"]
+import tgrelay as tr, turnstile as ts, texts
 guest, ip = sys.argv[1], sys.argv[2]
 client = tr.KeeperClient(lambda g: f"http://{ip}:9876")
 before = client.status(guest)["web"]["pid"]
@@ -68,7 +68,7 @@ relay.route({"update_id": 1, "message": {"message_id": 1, "from": {"id": g.teleg
              "chat": {"id": g.telegram_id}, "text": "/services"}})
 text = [p["text"] for m, p in tg.calls if m == "sendMessage"][0]
 print("   ", text.replace("\n", "\n    "))
-assert "🟢 web — работает" in text, text
+assert texts.t("svc_running", name="web") in text, text
 relay.route({"update_id": 2, "callback_query": {"id": "c1", "from": {"id": g.telegram_id},
              "data": "svc:restart:web", "message": {"message_id": 1, "chat": {"id": g.telegram_id}}}})
 after = client.status(guest)["web"]["pid"]

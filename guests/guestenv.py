@@ -14,6 +14,7 @@ call, so a changed .env is picked up without a restart of the command that reads
     GUESTS_NOTIFY_CMD  how to tell the owner something: a bash command, the text is "$1"
                        (default: a message from the guest bot to OWNER_TG_ID)
     GUEST_IMAGE        the sandbox image (default agentdeck-guest:<AgentDeck version>)
+    GUESTS_LANG        language of everything guests and the owner read: en (default) | ru
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from typing import Callable, Dict, Mapping, Optional
 
 HERE = Path(__file__).resolve().parent
 KEYS = ("GUESTS_DOMAIN", "GUEST_BOT_TOKEN", "OWNER_TG_ID", "SERVER_IP", "CF_TOKEN_FILE",
-        "CF_ZONE", "GUESTS_NOTIFY_CMD", "GUEST_IMAGE")
+        "CF_ZONE", "GUESTS_NOTIFY_CMD", "GUEST_IMAGE", "GUESTS_LANG")
 # Cloudflare answers "error 1010" to Python-urllib's own User-Agent
 USER_AGENT = "AgentDeck-guests/2.0 (+https://github.com/yanhs/agentdeck)"
 

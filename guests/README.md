@@ -31,6 +31,8 @@ your user may use, systemd, and — for web addresses — nginx and certbot.
    - `GUESTS_DOMAIN` — guests' addresses live under it;
    - `GUEST_BOT_TOKEN` — a new bot from @BotFather, used only for guests;
    - `OWNER_TG_ID` — your Telegram id (a number);
+   - `GUESTS_LANG` — `en` (default) or `ru`: the bot, invitations, alerts and the rules
+     written for the guests' agents;
    - DNS: a Cloudflare API token in `~/.cf_token` (names are created per guest), or a
      wildcard A record `*.<domain>` pointing at this server;
    - optional: `SERVER_IP`, `CF_TOKEN_FILE`, `CF_ZONE`, `GUESTS_NOTIFY_CMD`, `GUEST_IMAGE`.

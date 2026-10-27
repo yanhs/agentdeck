@@ -37,7 +37,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parent / "turnstile"))
 import guestenv  # noqa: E402
+import texts  # noqa: E402
 import turnstile as ts  # noqa: E402
+from texts import t as _t  # noqa: E402
 
 CHAT_METHODS = {
     "sendMessage", "editMessageText", "editMessageReplyMarkup", "editMessageCaption",
@@ -50,7 +52,6 @@ CHAT_METHODS = {
 NO_OPS = {"deleteWebhook", "setWebhook", "logOut", "close"}
 PASS_THROUGH = {"getMe"}
 COMMAND_METHODS = {"setMyCommands", "deleteMyCommands", "getMyCommands"}
-STRANGER_TEXT = "Это закрытый бот. Доступ выдаёт владелец."
 QUEUE_MAX = 1000
 _UPDATE_KINDS = ("message", "edited_message", "callback_query", "my_chat_member",
                  "message_reaction", "chat_member", "poll_answer", "inline_query",
@@ -85,8 +86,14 @@ def _file_ids(obj) -> set:
     return found
 
 
-WEB_COMMAND = {"command": "web", "description": "адрес в браузере и пароль"}
-SERVICES_COMMAND = {"command": "services", "description": "что работает без терминала"}
+def web_command() -> Dict:
+    return {"command": "web", "description": _t("cmd_web")}
+
+
+def services_command() -> Dict:
+    return {"command": "services", "description": _t("cmd_services")}
+
+
 SERVICE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")   # the keeper's names
 SERVICE_ACTIONS = ("restart", "stop", "start")
 
@@ -98,7 +105,8 @@ def _command(update: Dict) -> str:
     return text.split()[0].split("@")[0].lower()
 
 
-def _with_extras(commands, extras=(WEB_COMMAND,)) -> list:
+def _with_extras(commands, extras=None) -> list:
+    extras = (web_command(),) if extras is None else extras
     try:
         items = json.loads(commands) if isinstance(commands, str) else list(commands or [])
     except ValueError:
@@ -112,50 +120,48 @@ def _with_extras(commands, extras=(WEB_COMMAND,)) -> list:
 def _ago(seconds: float) -> str:
     minutes = int(max(0, seconds) // 60)
     if minutes < 60:
-        return f"{minutes} мин"
+        return _t("ago_min", m=minutes)
     hours, minutes = divmod(minutes, 60)
     if hours < 48:
-        return f"{hours} ч {minutes} мин" if minutes else f"{hours} ч"
-    return f"{hours // 24} дн"
+        return _t("ago_h_min", h=hours, m=minutes) if minutes else _t("ago_h", h=hours)
+    return _t("ago_d", d=hours // 24)
 
 
 def services_view(services: Optional[Dict], now: Optional[float] = None) -> Tuple[str, Dict]:
-    """The /services message: one line per service + its buttons (Russian: the guests are)."""
+    """The /services message: one line per service + its buttons (GUESTS_LANG)."""
     now = time.time() if now is None else now
-    refresh = [{"text": "🔄 Обновить", "callback_data": "svc:refresh:"}]
+    refresh = [{"text": _t("svc_refresh"), "callback_data": "svc:refresh:"}]
     if services is None:
-        return ("Список служб сейчас недоступен: песочница перезапускается или ещё на "
-                "старой версии. Попробуйте через минуту.", {"inline_keyboard": [refresh]})
+        return _t("svc_unavailable"), {"inline_keyboard": [refresh]}
     if not services:
-        return ("Служб пока нет.\n\nСлужба — программа, которая работает без открытого "
-                "терминала: Tailscale, сервер сайта, бот. Попросите агента: "
-                "«сделай это службой».", {"inline_keyboard": [refresh]})
+        return _t("svc_none"), {"inline_keyboard": [refresh]}
     running = sum(1 for s in services.values() if s.get("state") == "running")
-    lines = [f"Службы песочницы (работают {running} из {len(services)}):", ""]
+    lines = [_t("svc_header", running=running, total=len(services)), ""]
     rows = []
     for name, st in sorted(services.items()):
         state = st.get("state")
         restarts = st.get("restarts") or 0
-        tail = f", перезапусков: {restarts}" if restarts else ""
+        tail = _t("svc_restarts", n=restarts) if restarts else ""
         if state == "running":
             since = st.get("since")
-            lines.append(f"🟢 {name} — работает" + (f" {_ago(now - since)}" if since else "") + tail)
+            lines.append(_t("svc_running", name=name)
+                         + (f" {_ago(now - since)}" if since else "") + tail)
         elif state == "waiting":
             code = st.get("last_exit")
-            why = f"упала (код {code}), скоро перезапуск" if code is not None else "запускается"
-            lines.append(f"🟠 {name} — {why}{tail}")
+            why = _t("svc_crashed", code=code) if code is not None else _t("svc_starting")
+            lines.append(_t("svc_waiting", name=name, why=why, tail=tail))
         elif state == "skipped":
             limit = st.get("limit")
-            lines.append(f"⚪ {name} — не запущена: разрешено не больше {limit} служб"
-                         if limit else f"⚪ {name} — не запущена: слишком много служб")
+            lines.append(_t("svc_skipped_limit", name=name, limit=limit)
+                         if limit else _t("svc_skipped", name=name))
         else:
-            lines.append(f"⚪ {name} — остановлена")
+            lines.append(_t("svc_stopped", name=name))
         if state == "stopped":
             rows.append([{"text": f"▶ {name}", "callback_data": f"svc:start:{name}"}])
         elif state != "skipped":
             rows.append([{"text": f"🔁 {name}", "callback_data": f"svc:restart:{name}"},
                          {"text": f"⏹ {name}", "callback_data": f"svc:stop:{name}"}])
-    lines += ["", "Логи: /work/.services/<имя>.log"]
+    lines += ["", _t("svc_logs")]
     rows.append(refresh)
     return "\n".join(lines), {"inline_keyboard": rows}
 
@@ -195,42 +201,28 @@ class KeeperClient:
 
 
 def web_text(info: Optional[Dict], welcome: bool, domain: Optional[str] = None) -> str:
-    """What /start and /web tell a guest (Russian: the guests are)."""
+    """What /start and /web tell a guest (GUESTS_LANG)."""
     if not info:
-        return "Адрес в браузере для вас ещё не готов — спросите владельца."
+        return _t("web_not_ready")
     url, password = info["url"], info.get("password")
     lines = []
     if welcome:
-        lines += ["Здравствуйте! Это ваша песочница с Claude.", "",
-                  "Пишите задачи прямо сюда. Команды:",
-                  "/new — новый терминал, /list — ваши терминалы, /use — переключиться,",
-                  "/restart — перезапустить зависший терминал, /esc — прервать Claude,",
-                  "/services — что работает без терминала (Tailscale, сайт, бот),",
-                  "/web — адрес и пароль ещё раз.", ""]
-    lines.append(f"В браузере: {url}")
+        lines += _t("web_intro").split("\n")
+    lines.append(_t("web_url", url=url))
     if password:
-        lines += [f"Пароль: {password}",
-                  f"После первого входа смените его на свой: {url}/change-password",
-                  "(если вы его уже сменили — действует ваш)"]
+        lines += [_t("web_password", password=password), _t("web_change", url=url),
+                  _t("web_kept")]
     if welcome:
-        domain = domain or guestenv.domain() or "<домен>"
-        lines += ["", "Файлы агент присылает интернет-ссылками; сайт можно опубликовать "
-                      f"как <сайт>-<ваше имя>.{domain}."]
+        domain = domain or guestenv.domain() or _t("domain_placeholder")
+        lines += ["", _t("web_sites", domain=domain)]
     return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
 # invitations: a stranger asks, the owner lets in with a button, the sandbox is made
 # --------------------------------------------------------------------------- #
-INVITE_SENT = ("Запрос на доступ отправлен владельцу. Как только он одобрит, "
-               "я пришлю сюда адрес и пароль.")
-INVITE_WAITING = "Запрос уже у владельца — ждём его ответа."
-INVITE_REFUSED = "Владелец не дал доступ."
-INVITE_FAILED = "Не получилось создать песочницу — владелец уже знает и разберётся."
-
-
 def _who(rec: Dict, tid: str) -> str:
-    name = rec.get("first_name") or "без имени"
+    name = rec.get("first_name") or _t("who_noname")
     return f"{name} (@{rec['username']})" if rec.get("username") else name
 
 
@@ -298,13 +290,12 @@ class Invitations:
         if new:
             self.log(f"INVITE-REQUEST tg={uid}")
             name = self.choose_name(rec, tid)
-            self._send(relay, self.owner, (
-                f"🔔 Запрос на доступ: {_who(rec, tid)}, Telegram ID {uid}.\n"
-                f"Пустить? Будет создана песочница «{name}» с дневным лимитом по умолчанию."),
-                markup=self._buttons(tid))
-            self._send(relay, uid, INVITE_SENT)
+            self._send(relay, self.owner,
+                       _t("invite_request", who=_who(rec, tid), uid=uid, name=name),
+                       markup=self._buttons(tid))
+            self._send(relay, uid, _t("invite_sent"))
         else:
-            self._send(relay, uid, INVITE_WAITING)
+            self._send(relay, uid, _t("invite_waiting"))
 
     # -- the owner presses -------------------------------------------------- #
     def on_press(self, relay: "Relay", cb: Dict, uid: Optional[int]) -> None:
@@ -312,7 +303,7 @@ class Invitations:
         action, tid = (parts[1], parts[2]) if len(parts) == 3 else ("", "")
         if uid != self.owner:
             self.log(f"INVITE-DENY presser={uid} data={cb.get('data')!r}")
-            self._answer(relay, cb, "Это не ваша кнопка.")
+            self._answer(relay, cb, _t("invite_not_yours"))
             return
         msg_id = (cb.get("message") or {}).get("message_id")
         with self._lock:
@@ -320,7 +311,7 @@ class Invitations:
             rec = data.get(tid)
             if (action not in ("ok", "no") or not tid.isdigit() or rec is None
                     or rec.get("state") in ("approved", "rejected") or tid in self._busy):
-                self._answer(relay, cb, "Уже решено или в работе.")
+                self._answer(relay, cb, _t("invite_decided"))
                 return
             if action == "no":
                 rec["state"] = "rejected"
@@ -330,10 +321,10 @@ class Invitations:
         self._answer(relay, cb, "")
         if action == "no":
             self.log(f"INVITE-REJECTED tg={tid}")
-            self._edit(relay, msg_id, f"✖ Отказано: {_who(rec, tid)}.")
-            self._send(relay, int(tid), INVITE_REFUSED)
+            self._edit(relay, msg_id, _t("invite_rejected", who=_who(rec, tid)))
+            self._send(relay, int(tid), _t("invite_refused"))
             return
-        self._edit(relay, msg_id, f"⏳ Создаю песочницу для {_who(rec, tid)}…")
+        self._edit(relay, msg_id, _t("invite_creating", who=_who(rec, tid)))
         if self.background:
             threading.Thread(target=self._provision, args=(relay, tid, rec, msg_id),
                              daemon=True).start()
@@ -356,20 +347,19 @@ class Invitations:
             self._busy.discard(tid)
         self.log(f"INVITE-{'APPROVED' if ok else 'FAILED'} tg={tid} name={name} {err[-200:]}")
         if ok:
-            self._edit(relay, msg_id, f"✅ {_who(rec, tid)} — песочница «{name}» создана, "
-                                      "адрес и пароль отправлены.")
+            self._edit(relay, msg_id, _t("invite_created", who=_who(rec, tid), name=name))
             self._send(relay, int(tid), web_text(relay.info_for(name), welcome=True))
         else:
-            self._edit(relay, msg_id, f"🚨 Не вышло создать песочницу «{name}» для "
-                                      f"{_who(rec, tid)}: {err[-300:]}\nМожно нажать ещё раз.",
+            self._edit(relay, msg_id, _t("invite_create_failed", name=name,
+                                         who=_who(rec, tid), err=err[-300:]),
                        markup=self._buttons(tid))
-            self._send(relay, int(tid), INVITE_FAILED)
+            self._send(relay, int(tid), _t("invite_failed"))
 
     # -- Telegram ----------------------------------------------------------- #
     @staticmethod
     def _buttons(tid: str) -> Dict:
-        return {"inline_keyboard": [[{"text": "✅ Пустить", "callback_data": f"inv:ok:{tid}"},
-                                     {"text": "✖ Отказать", "callback_data": f"inv:no:{tid}"}]]}
+        return {"inline_keyboard": [[{"text": _t("btn_allow"), "callback_data": f"inv:ok:{tid}"},
+                                     {"text": _t("btn_deny"), "callback_data": f"inv:no:{tid}"}]]}
 
     def _send(self, relay: "Relay", chat: int, text: str, markup: Optional[Dict] = None) -> None:
         params = {"chat_id": chat, "text": text}
@@ -520,12 +510,11 @@ class Relay:
         if action in SERVICE_ACTIONS and SERVICE_NAME_RE.match(svc):
             ok = self.services.act(guest.name, action, svc)
             self.log(f"SERVICE guest={guest.name} {action} {svc} ok={ok}")
-            note = {"restart": "Перезапускаю", "stop": "Останавливаю",
-                    "start": "Запускаю"}[action] + f" {svc}" if ok else "Не вышло"
+            note = _t(f"svc_note_{action}", svc=svc) if ok else _t("svc_note_failed")
             if ok and self._settle:
                 time.sleep(self._settle)
         elif action != "refresh":
-            note = "Неизвестная кнопка"
+            note = _t("svc_note_unknown")
         try:
             self.tg.call("answerCallbackQuery", {"callback_query_id": cb.get("id"),
                                                  "text": note})
@@ -545,7 +534,7 @@ class Relay:
         self._strangers[uid] = now
         self.log(f"STRANGER tg={uid}")
         try:
-            self.tg.call("sendMessage", {"chat_id": uid, "text": STRANGER_TEXT})
+            self.tg.call("sendMessage", {"chat_id": uid, "text": _t("stranger")})
         except Exception as exc:  # never let a notice break polling
             self.log(f"STRANGER-NOTICE-FAILED tg={uid} {exc!r}")
 
@@ -584,7 +573,7 @@ class Relay:
             scoped = dict(params)
             scoped["scope"] = json.dumps({"type": "chat", "chat_id": tid})
             if method == "setMyCommands":
-                extras = (WEB_COMMAND,) + ((SERVICES_COMMAND,) if self.services else ())
+                extras = (web_command(),) + ((services_command(),) if self.services else ())
                 scoped["commands"] = json.dumps(_with_extras(params.get("commands"), extras),
                                                 ensure_ascii=False)
             return self.tg.call(method, scoped)
