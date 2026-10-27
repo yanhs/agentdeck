@@ -1,0 +1,34 @@
+# AgentDeck guests — sbx.@DOMAIN@: files guests hand out by link.
+# Template: `guestctl.py files-web` fills in @DOMAIN@ / @PUBLIC_ROOT@, gets the certificate
+# and enables it (guests/nginx/sites/, symlinked into /etc/nginx/sites-enabled).
+server {
+    listen 80;
+    listen [::]:80;
+    server_name sbx.@DOMAIN@;
+    location ^~ /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name sbx.@DOMAIN@;
+    ssl_certificate /etc/letsencrypt/live/sbx.@DOMAIN@/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/sbx.@DOMAIN@/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # /f/<guest>-<random key>/<file> -> guests/public/<guest>-<key>/<file>
+    # (each guest's /work/public). No listing; a symlink a guest plants can't reach
+    # host files; guest HTML/JS runs sandboxed (no access to the domain's cookies).
+    location /f/ {
+        alias @PUBLIC_ROOT@/;
+        autoindex off;
+        disable_symlinks on;
+        add_header Content-Security-Policy "sandbox" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Robots-Tag "noindex, nofollow" always;
+        add_header Cache-Control "no-cache" always;
+    }
+    location / { return 404; }
+}

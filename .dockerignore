@@ -16,6 +16,10 @@ __pycache__
 node_modules
 pre-public-backup
 
+# the guests module runs on the host; its .env (bot token), guest book, usage and the
+# guests' public files must never be baked into an image (a guest sandbox is one)
+guests
+
 # author-specific OpenOrchestra launchers (token-bearing, not part of AgentDeck)
 launch-claude-9.sh
 launch-claude-10.sh
