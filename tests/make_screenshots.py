@@ -410,6 +410,7 @@ def guests_payload(configured=True, checks=None) -> dict:
     return {"installed": True, "configured": configured, "dir": "/home/deck/agentdeck/guests",
             "env": ({"bot_token_set": True, "owner_id": "4412", "domain": "example.com"} if configured
                     else {"bot_token_set": True, "owner_id": "4412", "domain": ""}),
+            "admin": {"bot_set": True, "owner_id": "4412"},
             "guests": guests if configured else None, "list_error": None,
             "checks": checks, "checking": False, "jobs": {}}
 

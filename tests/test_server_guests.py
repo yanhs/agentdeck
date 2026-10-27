@@ -35,8 +35,9 @@ CHECKS_OK = {"bot": "@my_guests_bot answers", "owner": "Telegram ID 42",
 
 
 class FakeGuests:
-    def __init__(self, configured=True):
+    def __init__(self, configured=True, admin=True):
         self.configured = configured
+        self.admin = {"bot_set": admin, "owner_id": "42" if admin else ""}
         self.guests = copy.deepcopy(GUESTS)
         self.checks = None
         self.jobs = {}
@@ -74,7 +75,7 @@ class FakeGuests:
                 self.jobs[body["name"]] = {"action": what, "done": True, "ok": True, "output": ""}
             return route.fulfill(status=200, content_type="application/json", body='{"ok": true}')
         state = {"installed": True, "configured": self.configured, "dir": "/home/me/agentdeck/guests",
-                 "env": self.env, "guests": self.guests if self.configured else None,
+                 "env": self.env, "admin": self.admin, "guests": self.guests if self.configured else None,
                  "list_error": None, "checks": self.checks, "checking": False, "jobs": self.jobs}
         route.fulfill(status=200, content_type="application/json", body=json.dumps(state))
 
@@ -188,16 +189,19 @@ def test_off_offers_the_wizard(browser, site):  # noqa: F811
     assert fake.posts[0][0] == "/api/guests/check"
     assert pg.get_attribute('#gWizard .gstep[data-step="bot"]', "data-ok") == "0"
     assert "@BotFather" in pg.inner_text('#gWizard .gstep[data-step="bot"]')
+    assert "Paste your numeric ID" not in pg.inner_text('#gWizard .gstep[data-step="bot"]')
     shot(pg, "server-guests-wizard.png")
-    # step 2 + 3: the token, the owner and the domain go in one save
+    # no id to type: requests go to your own bot, whose owner is named
+    assert pg.query_selector("#gOwner") is None
+    assert "42" in pg.inner_text('#gWizard .gstep[data-step="bot"] .gadmin')
+    # step 2 + 3: the token and the domain go in one save
     pg.fill("#gToken", "123456789:AAH" + "x" * 32)
-    pg.fill("#gOwner", "42")
     pg.fill("#gDomain", "example.com")
     pg.click("#gSave")
     pg.wait_for_selector('#gWizard .gstep[data-step="domain"][data-ok="1"]')
     path, body, _ = fake.posts[-1]
     assert path == "/api/guests/setup"
-    assert body == {"bot_token": "123456789:AAH" + "x" * 32, "owner_id": "42", "domain": "example.com"}
+    assert body == {"bot_token": "123456789:AAH" + "x" * 32, "domain": "example.com"}
     assert pg.input_value("#gToken") == ""             # never kept on the page
     # step 4: the one command to run, with the module's real folder
     assert "sudo /home/me/agentdeck/guests/install.sh" in pg.inner_text('#gWizard .gstep[data-step="services"]')
@@ -214,6 +218,20 @@ def test_wizard_shows_a_refused_value(browser, site):  # noqa: F811
     pg.click("#gSave")
     pg.wait_for_selector("#gWizErr:not([hidden])")
     assert "bot token" in pg.inner_text("#gWizErr")
+    assert pg.errors == []
+    ctx.close()
+
+
+def test_no_bot_of_your_own_sends_you_there_first(browser, site):  # noqa: F811
+    fake = FakeGuests(configured=False, admin=False)
+    ctx, pg = open_page(browser, site, fake)
+    pg.click("#gSetup")
+    step = pg.wait_for_selector('#gWizard .gstep[data-step="bot"] .gadmin a')
+    assert step.get_attribute("href") == "/telegram"
+    assert "your own" in pg.inner_text('#gWizard .gstep[data-step="bot"] .gadmin').lower()
+    assert pg.get_attribute('#gWizard .gstep[data-step="bot"]', "data-ok") == "0"
+    assert pg.is_disabled("#gSave")
+    shot(pg, "server-guests-no-admin-bot.png")
     assert pg.errors == []
     ctx.close()
 

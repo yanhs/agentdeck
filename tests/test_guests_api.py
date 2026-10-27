@@ -74,11 +74,16 @@ def g(tmp_path, monkeypatch):
     monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
     sys.modules.pop("status_server", None)
     ss = importlib.import_module("status_server")
+    # "Your bot" (the dashboard's Telegram page): its owner is the guests' admin
+    tg = tmp_path / "telegram.json"
+    tg.write_text(json.dumps({"enabled": True, "token": "999:" + "y" * 35, "owner": 42}))
+    monkeypatch.setattr(ss, "TG_CONF", str(tg))
     srv = HTTPServer(("127.0.0.1", 0), ss.Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
     class G:
         dir = gd
+        tg_conf = tg
         base = f"http://127.0.0.1:{srv.server_address[1]}"
         mod = ss
 
@@ -157,6 +162,7 @@ def test_installed_but_not_configured_lists_nothing(g):
     assert code == 200
     assert d["installed"] is True and d["configured"] is False
     assert d["env"] == {"bot_token_set": False, "owner_id": "", "domain": ""}
+    assert d["admin"] == {"bot_set": True, "owner_id": "42"}
     assert d["guests"] is None
     time.sleep(0.3)
     assert ["list", "--json"] not in g.calls()
@@ -190,8 +196,7 @@ def test_check_runs_the_doctor(g):
 
 def test_setup_writes_env_and_checks_again(g):
     (g.dir / ".env").write_text("# keep me\nSERVER_IP=1.2.3.4\nOWNER_TG_ID=1\n")
-    code, d = post(g.base, "/api/guests/setup",
-                   {"bot_token": TOKEN, "owner_id": "42", "domain": "Example.COM"})
+    code, d = post(g.base, "/api/guests/setup", {"bot_token": TOKEN, "domain": "Example.COM"})
     assert (code, d) == (200, {"ok": True})
     env = (g.dir / ".env").read_text()
     assert f"GUEST_BOT_TOKEN={TOKEN}\n" in env and "OWNER_TG_ID=42\n" in env
@@ -208,12 +213,34 @@ def test_setup_keeps_the_token_when_it_is_left_empty(g):
     assert f"GUEST_BOT_TOKEN={TOKEN}" in env and "GUESTS_DOMAIN=other.org" in env
 
 
-@pytest.mark.parametrize("body", [{"bot_token": "nope"}, {"owner_id": "12a"},
+@pytest.mark.parametrize("body", [{"bot_token": "nope"},
                                   {"domain": "http://x.com"}, {"domain": "a b.com"},
                                   {"bot_token": TOKEN + "\nEVIL=1"}])
 def test_setup_refuses_bad_values(g, body):
     code, d = post(g.base, "/api/guests/setup", body)
     assert code == 400 and d["error"]
+    assert not (g.dir / ".env").exists()
+
+
+def test_the_admin_is_the_owner_of_your_bot(g):
+    """Decision 27.10: "Let in?" goes to the admin's own bot — the wizard doesn't ask for
+    an id; a different one in the request is ignored, the .env one follows your bot."""
+    (g.dir / ".env").write_text("OWNER_TG_ID=7\n")
+    assert post(g.base, "/api/guests/setup", {"owner_id": "555", "domain": "example.com"})[0] == 200
+    env = (g.dir / ".env").read_text()
+    assert "OWNER_TG_ID=42\n" in env and "555" not in env and "OWNER_TG_ID=7" not in env
+
+
+@pytest.mark.parametrize("conf", [None, {"enabled": True, "token": "", "owner": 42},
+                                  {"enabled": True, "token": "999:" + "y" * 35, "owner": ""}])
+def test_no_bot_of_your_own_no_guests_setup(g, conf):
+    if conf is None:
+        g.tg_conf.unlink()
+    else:
+        g.tg_conf.write_text(json.dumps(conf))
+    assert get(g.base)[1]["admin"]["bot_set"] is False
+    code, d = post(g.base, "/api/guests/setup", {"bot_token": TOKEN, "domain": "example.com"})
+    assert code == 409 and "your own" in d["error"].lower()
     assert not (g.dir / ".env").exists()
 
 

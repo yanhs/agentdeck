@@ -1225,11 +1225,12 @@ GUESTS_ROUTE = "/api/guests"
 GUESTS_LIST_TTL = 10
 GUEST_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
 GUESTS_ACTIONS = ("stop", "start", "remove", "limit")
-_GUESTS_ENV_KEYS = {"bot_token": "GUEST_BOT_TOKEN", "owner_id": "OWNER_TG_ID",
-                    "domain": "GUESTS_DOMAIN"}
+# what the wizard sets; OWNER_TG_ID is not asked: the guests' admin is the owner of
+# "Your bot" (the dashboard's Telegram page) — "Let in?" goes there (decision 27.10.2026)
+_GUESTS_ENV_KEYS = {"bot_token": "GUEST_BOT_TOKEN", "domain": "GUESTS_DOMAIN"}
+_GUESTS_NEEDED = ("GUEST_BOT_TOKEN", "OWNER_TG_ID", "GUESTS_DOMAIN")
 _GUESTS_VALID = {
     "bot_token": re.compile(r"^[0-9]{5,15}:[A-Za-z0-9_-]{30,60}$"),
-    "owner_id": re.compile(r"^[1-9][0-9]{0,14}$"),
     "domain": re.compile(r"^(?=.{4,200}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"),
 }
 
@@ -1282,6 +1283,15 @@ def guests_write_env(values):
         f.write("\n".join(lines) + "\n")
     os.chmod(tmp, 0o600)
     os.replace(tmp, path)
+
+
+def guests_admin():
+    """The owner of "Your bot": {"bot_set", "owner_id"} — no token, no owner = not set."""
+    cfg = tg_load()
+    owner = str(cfg.get("owner") or "").strip() if isinstance(cfg, dict) else ""
+    token = str(cfg.get("token") or "").strip() if isinstance(cfg, dict) else ""
+    ok = bool(token) and bool(re.fullmatch(r"[1-9][0-9]{0,14}", owner))
+    return {"bot_set": ok, "owner_id": owner if ok else ""}
 
 
 class GuestsPanel:
@@ -1344,7 +1354,7 @@ class GuestsPanel:
     def state(self):
         installed = guests_installed()
         env = guests_env() if installed else {}
-        configured = installed and all(env.get(k) for k in _GUESTS_ENV_KEYS.values())
+        configured = installed and all(env.get(k) for k in _GUESTS_NEEDED)
         with self.lock:
             if configured and not self.listing and time.time() - self.list_at > GUESTS_LIST_TTL:
                 self.listing = True
@@ -1353,6 +1363,7 @@ class GuestsPanel:
                     "env": {"bot_token_set": bool(env.get("GUEST_BOT_TOKEN")),
                             "owner_id": env.get("OWNER_TG_ID", ""),
                             "domain": env.get("GUESTS_DOMAIN", "")},
+                    "admin": guests_admin(),
                     "guests": self.guests if configured else None,
                     "list_error": self.list_error if configured else None,
                     "checks": self.checks, "checking": self.checking,
@@ -1361,7 +1372,11 @@ class GuestsPanel:
     def setup(self, body):
         if not guests_installed():
             raise LibError(409, "the guests module is not in this AgentDeck")
-        values = {}
+        admin = guests_admin()
+        if not admin["bot_set"]:
+            raise LibError(409, "Set up your own Telegram bot first (the dashboard's Telegram "
+                                "page): guests' requests to join go there")
+        values = {"OWNER_TG_ID": admin["owner_id"]}
         for field, key in _GUESTS_ENV_KEYS.items():
             v = body.get(field)
             if v is None or v == "":
@@ -1369,11 +1384,9 @@ class GuestsPanel:
             v = str(v).strip().lower() if field == "domain" else str(v).strip()
             if not _GUESTS_VALID[field].fullmatch(v):
                 raise LibError(400, {"bot_token": "That doesn't look like a bot token (digits:letters, from @BotFather)",
-                                     "owner_id": "Your Telegram ID is a number",
                                      "domain": "A domain like example.com — no http://, no path"}[field])
             values[key] = v
-        if values:
-            guests_write_env(values)
+        guests_write_env(values)
         self.check()
         return {"ok": True}
 

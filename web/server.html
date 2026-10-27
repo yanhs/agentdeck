@@ -280,6 +280,9 @@
     .gdetail { font-size: 11.5px; color: var(--dim); }
     .gfix { font-size: 11.5px; color: var(--faint); line-height: 1.5; }
     .gstep[data-ok="1"] .gfix { display: none; }
+    .gadmin { font-size: 11.5px; color: var(--faint); line-height: 1.5; margin-top: 2px; }
+    .gadmin a { color: var(--accent); }
+    .gadmin.need { color: var(--amber); }
     .gfields { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 6px; }
     .gfields label { display: grid; gap: 3px; font-size: 11px; color: var(--faint); min-width: 0; flex: 1 1 220px; max-width: 380px; }
     .gfields input, .glimit input {
@@ -425,9 +428,9 @@
         <div class="gdetail"></div>
         <div>
           <div class="gfix"></div>
+          <div class="gadmin"></div>
           <div class="gfields">
-            <label>Bot token (from @BotFather)<input id="gToken" type="password" autocomplete="off" spellcheck="false" placeholder="123456789:AA…"></label>
-            <label>Your Telegram ID (a number; @userinfobot tells it)<input id="gOwner" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="123456789"></label>
+            <label>Token of a new bot, just for guests (from @BotFather)<input id="gToken" type="password" autocomplete="off" spellcheck="false" placeholder="123456789:AA…"></label>
           </div>
         </div>
       </div>
@@ -1122,7 +1125,8 @@
       const ok = checks.every(c => c.ok);
       box.dataset.ok = ok ? '1' : '0';
       box.querySelector('.gdetail').textContent = (ok ? '✓ ' : '') + checks.map(c => c.detail).filter(Boolean).join(' · ');
-      const fix = checks.filter(c => !c.ok).map(c => c.fix).filter(Boolean).join(' ');
+      // the admin's id comes from "Your bot" (.gadmin says how), never typed here
+      const fix = checks.filter(c => !c.ok && c.id !== 'owner').map(c => c.fix).filter(Boolean).join(' ');
       if (step !== 'services') box.querySelector('.gfix').textContent = fix;
     }
     box.querySelector('.gmark').textContent = box.dataset.ok === '1' ? '✓' : String(Object.keys(STEP_CHECKS).indexOf(step) + 1);
@@ -1163,7 +1167,19 @@
     if (gWizardOpen) {
       for (const s of Object.keys(STEP_CHECKS)) gStep(s, d);
       $('#gToken').placeholder = d.env && d.env.bot_token_set ? 'set — leave empty to keep it' : '123456789:AA…';
-      if (document.activeElement !== $('#gOwner') && !$('#gOwner').value) $('#gOwner').value = (d.env && d.env.owner_id) || '';
+      const admin = d.admin || {}, ga = $('#gWizard .gadmin');
+      ga.classList.toggle('need', !admin.bot_set);
+      if (admin.bot_set) {
+        ga.textContent = `Requests to join (“Let in?”) and limit warnings go to your own bot — the one on the Telegram page — to you, Telegram ID ${admin.owner_id}. Guests never get into it.`;
+      } else {
+        ga.replaceChildren(document.createTextNode('First set up your own bot on the '),
+          Object.assign(el('a', null, 'Telegram page'), { href: '/telegram' }),
+          document.createTextNode(': requests to join (“Let in?”) arrive there, so without it nobody can let guests in.'));
+        const box = $('#gWizard .gstep[data-step="bot"]');
+        box.dataset.ok = '0';
+        box.querySelector('.gmark').textContent = '2';
+      }
+      $('#gSave').disabled = !admin.bot_set;
       if (document.activeElement !== $('#gDomain') && !$('#gDomain').value) $('#gDomain').value = (d.env && d.env.domain) || '';
       $('#gCmd').textContent = `sudo ${d.dir}/install.sh`;
       $('#gChecking').hidden = !d.checking;
@@ -1226,7 +1242,7 @@
   });
   $('#gSave').addEventListener('click', async () => {
     const err = $('#gWizErr');
-    const body = { bot_token: $('#gToken').value.trim(), owner_id: $('#gOwner').value.trim(), domain: $('#gDomain').value.trim() };
+    const body = { bot_token: $('#gToken').value.trim(), domain: $('#gDomain').value.trim() };
     $('#gSave').disabled = true;
     try {
       await gPost('setup', body);
@@ -1236,7 +1252,7 @@
       err.textContent = e.message;
       err.hidden = false;
     } finally {
-      $('#gSave').disabled = false;
+      $('#gSave').disabled = !(gLast && gLast.admin && gLast.admin.bot_set);
     }
     await pollGuests();
     setTimeout(pollGuests, 1500);
