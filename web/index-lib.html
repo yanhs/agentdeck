@@ -845,9 +845,11 @@
 
   <script>
     /* ── Session library ──
-       The left column is the list of topics (sessions) from GET /api/library:
-       loaded ones (in RAM, status dot) first, then unloaded ones (greyed); each
-       group most recently used first — the same order as library.display_order.
+       The left column is the list of topics (sessions) from GET /api/library,
+       in a fixed order — the same as library.display_order: the manual order
+       (a new topic on top, dragging changes it). Loaded ones show a status dot,
+       unloaded ones are greyed; opening, using, loading or unloading a topic
+       never moves it (owner 27.10.2026: the list must not jump).
        A topic is addressed ONLY by its 8-hex code; there are no slot numbers.
        Opening one = iframe /sess/?arg=<code> (the server loads it if needed). */
     const ID_RE = /^[0-9a-f]{8}$/;
@@ -1016,13 +1018,13 @@
     // fetches them (?archived=1), so both switch instantly from the last fetch.
     function wantArch() { return showArch || !!norm(search.value); }
 
-    // Same rule as library.display_order: loaded first, then the rest; inside
-    // each group the manual order (pos) first, then most recently used.
+    // Same rule as library.display_order: the manual order (pos) first, then
+    // entries from before that rule newest-created first. Never by activity —
+    // the list must not jump when a topic is opened, loaded or unloaded.
     function hasPos(s) { return typeof s.pos === 'number' && isFinite(s.pos); }
     function byOrder(a, b) {
-      return (!!b.active - !!a.active)
-          || (hasPos(b) - hasPos(a))
-          || (hasPos(a) ? a.pos - b.pos : (b.last_used || 0) - (a.last_used || 0));
+      return (hasPos(b) - hasPos(a))
+          || (hasPos(a) ? a.pos - b.pos : (b.created || 0) - (a.created || 0));
     }
 
     function ordered() {
