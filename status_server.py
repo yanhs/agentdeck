@@ -9,6 +9,7 @@ import json
 import signal
 import subprocess
 import sys
+import threading
 import time
 import os
 import re
@@ -16,6 +17,7 @@ import hmac
 import hashlib
 import unicodedata
 from urllib.parse import urlparse, parse_qs
+from pathlib import Path
 
 import library   # session registry (library.py next to this file)
 import convo_sync   # a terminal takes the number of the conversation live in it
@@ -1213,6 +1215,205 @@ def svc_post(route):
     return {"ok": True}
 
 
+# ── Server page, Guests block: /api/guests (2.0) ────────────────────────────
+# The optional guests module (<repo>/guests, GUESTS_DIR overrides) does the work; the
+# panel drives its command guests/guestctl.py. Every call runs in a background thread
+# (this server answers one request at a time; `remove` alone takes ~90 s): GET returns
+# the last list / checks / job results, refreshing the list when it is older than
+# GUESTS_LIST_TTL. Its .env holds the bot token: the page only learns whether one is set.
+GUESTS_ROUTE = "/api/guests"
+GUESTS_LIST_TTL = 10
+GUEST_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
+GUESTS_ACTIONS = ("stop", "start", "remove", "limit")
+_GUESTS_ENV_KEYS = {"bot_token": "GUEST_BOT_TOKEN", "owner_id": "OWNER_TG_ID",
+                    "domain": "GUESTS_DOMAIN"}
+_GUESTS_VALID = {
+    "bot_token": re.compile(r"^[0-9]{5,15}:[A-Za-z0-9_-]{30,60}$"),
+    "owner_id": re.compile(r"^[1-9][0-9]{0,14}$"),
+    "domain": re.compile(r"^(?=.{4,200}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"),
+}
+
+
+GUESTS_DEFAULT_DIR = Path(__file__).resolve().parent / "guests"
+DOCKERENV = Path("/.dockerenv")
+
+
+def guests_dir():
+    return Path(os.environ.get("GUESTS_DIR") or GUESTS_DEFAULT_DIR)
+
+
+def guests_installed():
+    """The module is here, and this is a server: inside Docker (a guest's own sandbox
+    included) sandboxes can't be run, so no Guests block unless GUESTS_DIR says so."""
+    if DOCKERENV.exists() and not os.environ.get("GUESTS_DIR"):
+        return False
+    return (guests_dir() / "guestctl.py").is_file()
+
+
+def guests_env():
+    """KEY=value lines of guests/.env (comments and order kept by guests_write_env)."""
+    out = {}
+    try:
+        text = (guests_dir() / ".env").read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def guests_write_env(values):
+    path = guests_dir() / ".env"
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        lines = ["# AgentDeck guests module (written by the dashboard's Guests setup)"]
+    left = dict(values)
+    for i, line in enumerate(lines):
+        key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
+        if key in left:
+            lines[i] = f"{key}={left.pop(key)}"
+    lines += [f"{k}={v}" for k, v in left.items()]
+    tmp = path.with_name(".env.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+class GuestsPanel:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.guests = None            # last `list --json` result
+        self.list_at = 0.0
+        self.list_error = None
+        self.listing = False
+        self.checks = None            # last `doctor --json` result
+        self.checking = False
+        self.jobs = {}                # name -> {action, started, done, ok, output}
+
+    @staticmethod
+    def run(*args, timeout=180):
+        r = subprocess.run([sys.executable, str(guests_dir() / "guestctl.py"), *args],
+                           capture_output=True, text=True, timeout=timeout,
+                           cwd=str(guests_dir()))
+        return r.returncode, r.stdout, r.stderr
+
+    def _spawn(self, fn):
+        threading.Thread(target=fn, daemon=True).start()
+
+    def _list(self):
+        try:
+            code, out, err = self.run("list", "--json", timeout=60)
+            if code != 0:
+                raise RuntimeError((err or out).strip()[-300:] or f"exit {code}")
+            guests = json.loads(out).get("guests")
+            if not isinstance(guests, list):
+                raise RuntimeError("guestctl list: no guests list")
+            with self.lock:
+                self.guests, self.list_error = guests, None
+        except Exception as e:
+            with self.lock:
+                self.list_error = str(e)[:300]
+        finally:
+            with self.lock:
+                self.list_at, self.listing = time.time(), False
+
+    def _doctor(self):
+        try:
+            code, out, err = self.run("doctor", "--json", timeout=60)
+            checks = json.loads(out).get("checks")
+            if not isinstance(checks, list):
+                raise ValueError
+        except Exception:
+            checks = [{"id": "module", "title": "Guests module", "ok": False,
+                       "detail": "guestctl doctor did not answer", "fix": ""}]
+        with self.lock:
+            self.checks, self.checking = checks, False
+
+    def check(self):
+        with self.lock:
+            if self.checking:
+                return
+            self.checking = True
+        self._spawn(self._doctor)
+
+    def state(self):
+        installed = guests_installed()
+        env = guests_env() if installed else {}
+        configured = installed and all(env.get(k) for k in _GUESTS_ENV_KEYS.values())
+        with self.lock:
+            if configured and not self.listing and time.time() - self.list_at > GUESTS_LIST_TTL:
+                self.listing = True
+                self._spawn(self._list)
+            return {"installed": installed, "configured": configured, "dir": str(guests_dir()),
+                    "env": {"bot_token_set": bool(env.get("GUEST_BOT_TOKEN")),
+                            "owner_id": env.get("OWNER_TG_ID", ""),
+                            "domain": env.get("GUESTS_DOMAIN", "")},
+                    "guests": self.guests if configured else None,
+                    "list_error": self.list_error if configured else None,
+                    "checks": self.checks, "checking": self.checking,
+                    "jobs": {n: dict(j) for n, j in self.jobs.items()}}
+
+    def setup(self, body):
+        if not guests_installed():
+            raise LibError(409, "the guests module is not in this AgentDeck")
+        values = {}
+        for field, key in _GUESTS_ENV_KEYS.items():
+            v = body.get(field)
+            if v is None or v == "":
+                continue                          # empty = keep what is there
+            v = str(v).strip().lower() if field == "domain" else str(v).strip()
+            if not _GUESTS_VALID[field].fullmatch(v):
+                raise LibError(400, {"bot_token": "That doesn't look like a bot token (digits:letters, from @BotFather)",
+                                     "owner_id": "Your Telegram ID is a number",
+                                     "domain": "A domain like example.com — no http://, no path"}[field])
+            values[key] = v
+        if values:
+            guests_write_env(values)
+        self.check()
+        return {"ok": True}
+
+    def act(self, action, body):
+        if action not in GUESTS_ACTIONS:
+            raise LibError(404, "not found")
+        name = body.get("name")
+        if not isinstance(name, str) or not GUEST_NAME_RE.match(name):
+            raise LibError(400, "bad guest name")
+        args = [action, name]
+        if action == "limit":
+            limit = body.get("limit")
+            if not isinstance(limit, int) or isinstance(limit, bool) or not 0 < limit <= 10**10:
+                raise LibError(400, "the limit is a positive number of tokens per day")
+            args.append(str(limit))
+        if not self.state()["configured"]:
+            raise LibError(409, "the guests module is not set up")
+        with self.lock:
+            job = self.jobs.get(name)
+            if job and not job["done"]:
+                raise LibError(409, f"{name}: {job['action']} is still running")
+            self.jobs[name] = job = {"action": action, "started": time.time(), "done": False,
+                                     "ok": None, "output": ""}
+
+        def work():
+            try:
+                code, out, err = self.run(*args)
+                ok, output = code == 0, (out + err).strip()[-500:]
+            except Exception as e:
+                ok, output = False, str(e)[:500]
+            with self.lock:
+                job.update(done=True, ok=ok, output=output)
+            self._list()                          # the list shows the result at once
+        self._spawn(work)
+        return {"ok": True}
+
+
+GUESTS = GuestsPanel()
+
+
 class Handler(BaseHTTPRequestHandler):
     def _server_get(self):
         try:
@@ -1287,6 +1488,33 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._lib_json(500, {"error": str(e)[:200]})
 
+    def _is_guests(self):
+        r = self._route()
+        return r == GUESTS_ROUTE or r.startswith(GUESTS_ROUTE + "/")
+
+    def _guests(self, method):
+        route = self._route()
+        try:
+            if method == "GET" and route == GUESTS_ROUTE:
+                data = GUESTS.state()
+            elif method == "POST" and route.startswith(GUESTS_ROUTE + "/"):
+                body = self._write_body()
+                what = route[len(GUESTS_ROUTE) + 1:]
+                if what == "check":
+                    GUESTS.check()
+                    data = {"ok": True}
+                elif what == "setup":
+                    data = GUESTS.setup(body)
+                else:
+                    data = GUESTS.act(what, body)
+            else:
+                raise LibError(404, "not found")
+            self._lib_json(200, data)
+        except LibError as e:
+            self._lib_json(e.code, {"error": str(e)})
+        except Exception as e:
+            self._lib_json(500, {"error": str(e)[:200]})
+
     def _library_post(self):
         route = self._route()
         if not route.startswith(LIB_ROUTE + "/"):
@@ -1310,6 +1538,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._server_get()
         if self._is_services():
             return self._services("GET")
+        if self._is_guests():
+            return self._guests("GET")
         if (urlparse(getattr(self, "path", "/")).path.rstrip("/") or "/") == "/telegram":
             body = tg_render().encode("utf-8")
             self.send_response(200)
@@ -1438,6 +1668,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._library_post()
         if self._is_services():
             return self._services("POST")
+        if self._is_guests():
+            return self._guests("POST")
         if (urlparse(getattr(self, "path", "/")).path.rstrip("/") or "/") == "/telegram":
             return self._telegram_post()
         length = int(self.headers.get("Content-Length", 0))
@@ -1543,7 +1775,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        if self._is_library() or self._is_services() or self._route() == SERVER_ROUTE:   # no CORS preflight
+        if (self._is_library() or self._is_services() or self._is_guests()
+                or self._route() == SERVER_ROUTE):   # no CORS preflight
             self.end_headers()
             return
         self.send_header("Access-Control-Allow-Origin", "*")

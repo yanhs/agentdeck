@@ -56,6 +56,11 @@
 			reverse_proxy 127.0.0.1:3011
 		}
 
+		# Server tab, Guests block: the optional guests module (guests/guestctl.py) — status_server
+		handle /api/guests* {
+			reverse_proxy 127.0.0.1:3011
+		}
+
 		# Telegram-bot setup page (status_server, behind the login gate)
 		handle /telegram* {
 			reverse_proxy 127.0.0.1:3011

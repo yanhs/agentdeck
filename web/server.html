@@ -233,6 +233,70 @@
     #svcEmpty code { font-family: var(--mono); font-size: 11px; color: var(--dim); }
     #svcErr { color: var(--red); font-size: 11.5px; margin-top: 6px; }
 
+    /* ── guests: the optional guests module (guests/guestctl.py) and its setup wizard ── */
+    #gSum { font-size: 11px; color: var(--faint); }
+    #gSum b { color: var(--dim); font-weight: 500; font-family: var(--mono); font-size: 10.5px; }
+    .card-h .gbtn, .gbtn {
+      background: none; border: 1px solid var(--line); color: var(--dim); font: inherit;
+      font-size: 11.5px; padding: 3px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+    }
+    .gbtn:hover:not(:disabled) { color: var(--text); border-color: var(--hi-line); }
+    .gbtn:disabled { opacity: .5; cursor: progress; }
+    .gbtn.primary { color: var(--text); border-color: var(--accent); background: rgba(129,140,248,.12); }
+    #gSetup { margin-left: auto; }
+    #gOff { color: var(--faint); font-size: 12px; line-height: 1.55; padding: 2px 2px 4px; max-width: 760px; }
+    .guest + .guest { border-top: 1px solid var(--row-line); }
+    .guest-main {
+      display: grid; grid-template-columns: 10px minmax(0, 1fr) 190px auto; align-items: center;
+      gap: 12px; padding: 6px 2px;
+    }
+    .guest-id { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+    .guest-name { font-family: var(--mono); font-size: 12px; font-weight: 500; white-space: nowrap; }
+    .guest-id a, .guest-id .gnote { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .guest-id a { color: var(--dim); text-decoration: none; }
+    .guest-id a:hover { color: var(--text); text-decoration: underline; }
+    .guest[data-on="0"] .guest-name { color: var(--ghost); }
+    .gspend { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; }
+    .gspend .v { font-family: var(--mono); font-size: 10.5px; color: var(--dim); white-space: nowrap; }
+    .gspend .bar { height: 5px; border-radius: 3px; background: var(--s2); overflow: hidden; }
+    .gspend .bar i { display: block; height: 100%; border-radius: 3px; transition: width .6s ease; }
+    .gjob { font-size: 11.5px; color: var(--faint); padding: 0 0 6px 22px; }
+    .gjob.err { color: var(--red); }
+    .glimit { display: flex; align-items: center; gap: 6px; padding: 0 0 8px 22px; font-size: 11.5px; color: var(--dim); }
+    .glimit input { width: 70px; }
+    #gEmpty { padding: 4px 2px 2px; }
+    #gWizard { margin-top: 6px; border-top: 1px solid var(--line2); padding-top: 10px; }
+    .gw-intro { font-size: 12px; color: var(--faint); margin-bottom: 8px; line-height: 1.5; max-width: 760px; }
+    .gstep { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 2px 10px; padding: 8px 2px; }
+    .gstep + .gstep { border-top: 1px solid var(--row-line); }
+    .gmark {
+      width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--line); grid-row: span 3;
+      display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;
+      font-family: var(--mono); color: var(--faint);
+    }
+    .gstep[data-ok="1"] .gmark { border-color: rgba(74,222,128,.5); color: var(--green); background: rgba(74,222,128,.08); }
+    .gstep[data-ok="0"] .gmark { border-color: rgba(251,191,36,.45); color: var(--amber); }
+    .gstep h4 { font-size: 12.5px; font-weight: 600; }
+    .gdetail { font-size: 11.5px; color: var(--dim); }
+    .gfix { font-size: 11.5px; color: var(--faint); line-height: 1.5; }
+    .gstep[data-ok="1"] .gfix { display: none; }
+    .gfields { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 6px; }
+    .gfields label { display: grid; gap: 3px; font-size: 11px; color: var(--faint); min-width: 0; flex: 1 1 220px; max-width: 380px; }
+    .gfields input, .glimit input {
+      background: var(--bg); border: 1px solid var(--line); border-radius: 6px; color: var(--text);
+      font: inherit; font-family: var(--mono); font-size: 11.5px; padding: 5px 8px; min-width: 0;
+    }
+    .gfields input:focus, .glimit input:focus { outline: none; border-color: var(--accent); }
+    .gcmd { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-width: 0; }
+    .gcmd code {
+      font-family: var(--mono); font-size: 11.5px; color: var(--text); background: var(--bg);
+      border: 1px solid var(--line2); border-radius: 6px; padding: 5px 8px; min-width: 0;
+      overflow-x: auto; white-space: nowrap;
+    }
+    .gw-actions { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+    #gWizErr { color: var(--red); font-size: 11.5px; }
+    #gChecking { font-size: 11.5px; color: var(--faint); }
+
     @media (max-width: 860px) {
       .gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .main { grid-template-columns: 10px minmax(0, 1fr) 110px 100px 12px; gap: 10px; }
@@ -270,6 +334,12 @@
       .svc-what { white-space: normal; }
       .svc-btns { grid-area: btns; }
       .svc-log { margin-left: 0; }
+      .guest-main { grid-template-columns: 10px minmax(0, 1fr); grid-template-areas: "dot id" ". spend" ". btns"; gap: 4px 10px; }
+      .guest-main .dot { grid-area: dot; }
+      .guest-id { grid-area: id; flex-direction: column; gap: 1px; }
+      .gspend { grid-area: spend; }
+      .guest-main .svc-btns { grid-area: btns; }
+      .gjob, .glimit { padding-left: 20px; }
     }
     @media (prefers-reduced-motion: reduce) {
       * { animation: none !important; transition: none !important; }
@@ -332,6 +402,61 @@
     <div id="svcList"></div>
     <div class="empty" id="svcEmpty" hidden></div>
     <div id="svcErr" hidden></div>
+  </section>
+
+  <section class="card" id="guests" hidden>
+    <div class="card-h">
+      <h3 title="Other people working on this server, each in their own sandbox, on your subscription with a daily limit">Guests</h3>
+      <span id="gSum"></span>
+      <button type="button" class="gbtn" id="gSetup">Set up guests</button>
+    </div>
+    <div id="gOff" hidden>Off. Let other people work on this server: each gets their own sandbox (an AgentDeck of their own, in Docker), works on your Claude subscription with a daily limit, and talks to it through one shared Telegram bot. Someone writes to the bot, you get “Let in?” with a button.</div>
+    <div id="gList"></div>
+    <div class="empty" id="gEmpty" hidden></div>
+    <div id="gErr" class="gjob err" hidden></div>
+    <div id="gWizard" hidden>
+      <div class="gw-intro">Four steps; each is checked on this server. Nothing changes for anyone until step 4.</div>
+      <div class="gstep" data-step="docker">
+        <span class="gmark">1</span><h4>Docker</h4>
+        <div class="gdetail"></div><div class="gfix"></div>
+      </div>
+      <div class="gstep" data-step="bot">
+        <span class="gmark">2</span><h4>A Telegram bot for guests</h4>
+        <div class="gdetail"></div>
+        <div>
+          <div class="gfix"></div>
+          <div class="gfields">
+            <label>Bot token (from @BotFather)<input id="gToken" type="password" autocomplete="off" spellcheck="false" placeholder="123456789:AA…"></label>
+            <label>Your Telegram ID (a number; @userinfobot tells it)<input id="gOwner" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="123456789"></label>
+          </div>
+        </div>
+      </div>
+      <div class="gstep" data-step="domain">
+        <span class="gmark">3</span><h4>A domain for the guests' pages</h4>
+        <div class="gdetail"></div>
+        <div>
+          <div class="gfix"></div>
+          <div class="gfields">
+            <label>Domain (each guest gets sb-&lt;name&gt;.&lt;domain&gt;)<input id="gDomain" autocomplete="off" spellcheck="false" placeholder="example.com"></label>
+          </div>
+        </div>
+      </div>
+      <div class="gstep" data-step="services">
+        <span class="gmark">4</span><h4>Turn it on</h4>
+        <div class="gdetail"></div>
+        <div>
+          <div class="gfix">Run this once in the Command line (it needs sudo): it starts the guest bot, the limits and the sandbox network.</div>
+          <div class="gcmd"><code id="gCmd"></code><button type="button" class="gbtn" id="gCopy">Copy</button></div>
+        </div>
+      </div>
+      <div class="gw-actions">
+        <button type="button" class="gbtn primary" id="gSave">Save and check</button>
+        <button type="button" class="gbtn" id="gRecheck">Check again</button>
+        <button type="button" class="gbtn" id="gClose">Close</button>
+        <span id="gChecking" hidden>Checking…</span>
+        <span id="gWizErr" hidden></span>
+      </div>
+    </div>
   </section>
 
   <main id="groups"></main>
@@ -890,6 +1015,233 @@
     }
   }
 
+  // ── guests (GET /api/guests, POST /api/guests/{check,setup,stop,start,remove,limit}) ──
+  const G_API = '/api/guests';
+  const gRows = new Map();                // name -> row element
+  const gLimitOpen = new Set();           // names with the limit editor open
+  let gLast = null, gWizardOpen = false, gChecksAsked = false;
+  const STEP_CHECKS = { docker: ['docker'], bot: ['bot', 'owner'], domain: ['domain'], services: ['services'] };
+  function fmtTok(n) {
+    if (!isFinite(n) || n <= 0) return '0';
+    if (n >= 1e6) { const m = n / 1e6; return (m >= 10 || Number.isInteger(m) ? Math.round(m) : m.toFixed(1)) + 'M'; }
+    if (n >= 1e3) return Math.round(n / 1e3) + 'K';
+    return String(Math.round(n));
+  }
+  async function gPost(what, body) {
+    const r = await fetch(`${G_API}/${what}`, { method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    let d = {};
+    try { d = await r.json(); } catch (e) { /* not JSON: the status says enough */ }
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    return d;
+  }
+  function gButtons(g) {
+    return [['limit', 'Limit'], g.enabled && g.state === 'running' ? ['stop', 'Stop'] : ['start', 'Start'], ['remove', 'Remove']];
+  }
+  function gRow(name) {
+    let r = gRows.get(name);
+    if (r) return r;
+    r = el('div', 'guest');
+    r.dataset.name = name;
+    const main = el('div', 'guest-main');
+    const id = el('div', 'guest-id');
+    id.append(el('span', 'guest-name', name), el('span', 'gnote'));
+    const spend = el('div', 'gspend');
+    const bar = el('div', 'bar'); bar.append(el('i'));
+    spend.append(el('span', 'v'), bar);
+    main.append(el('span', 'dot'), id, spend, el('div', 'svc-btns'));
+    r.append(main, el('div', 'gjob'));
+    r.addEventListener('click', e => {
+      const b = e.target.closest('button[data-act]');
+      if (b && !b.disabled) gAct(name, b.dataset.act);
+      if (e.target.closest('.glimit-save')) gSaveLimit(name);
+      if (e.target.closest('.glimit-cancel')) { gLimitOpen.delete(name); gRender(); }
+    });
+    r.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && e.target.matches('input.glimit-in')) gSaveLimit(name);
+    });
+    gRows.set(name, r);
+    return r;
+  }
+  function gFillRow(r, g, job) {
+    const on = g.enabled && g.state === 'running';
+    r.dataset.on = on ? '1' : '0';
+    r.dataset.state = g.state;
+    r.querySelector('.dot').className = 'dot ' + (on ? 'running' : 'stopped');
+    const id = r.querySelector('.guest-id');
+    let link = id.querySelector('a');
+    const note = id.querySelector('.gnote');
+    if (g.url) {
+      if (!link) { link = el('a'); link.target = '_blank'; link.rel = 'noopener'; id.insertBefore(link, note); }
+      link.href = g.url;
+      link.textContent = g.url.replace(/^https?:\/\//, '');
+    } else if (link) link.remove();
+    note.textContent = on ? '' : g.state === 'missing' ? 'off · no container' : 'off';
+    const pct = g.limit > 0 ? Math.min(100, g.spent_today / g.limit * 100) : 0;
+    r.querySelector('.gspend .v').textContent = `today ${fmtTok(g.spent_today)} of ${fmtTok(g.limit)} tokens`;
+    const bar = r.querySelector('.gspend .bar i');
+    bar.style.width = pct.toFixed(1) + '%';
+    bar.style.background = level(pct);
+    const want = gButtons(g), box = r.querySelector('.svc-btns');
+    if (box.dataset.acts !== want.map(a => a[0]).join()) {
+      box.replaceChildren(...want.map(([act, label]) => {
+        const b = el('button', null, label);
+        b.type = 'button';
+        b.dataset.act = act;
+        b.title = { limit: `Change ${g.name}'s daily token limit`, stop: `Stop ${g.name}'s sandbox (files stay)`,
+                    start: `Start ${g.name}'s sandbox`, remove: `Remove ${g.name}'s sandbox (files stay on disk)` }[act];
+        return b;
+      }));
+      box.dataset.acts = want.map(a => a[0]).join();
+    }
+    const busy = job && !job.done;
+    box.querySelectorAll('button').forEach(b => { b.disabled = busy; });
+    const jl = r.querySelector('.gjob');
+    jl.className = 'gjob' + (job && job.done && !job.ok ? ' err' : '');
+    jl.textContent = !job ? '' : busy ? { stop: 'Stopping…', start: 'Starting…', remove: 'Removing… (takes about a minute and a half)', limit: 'Saving the limit…' }[job.action] || '…'
+      : job.ok ? '' : `${job.action} failed: ${job.output || 'no details'}`;
+    jl.hidden = !jl.textContent;
+    let lim = r.querySelector('.glimit');
+    if (gLimitOpen.has(g.name) && !lim) {
+      lim = el('div', 'glimit');
+      const inp = el('input', 'glimit-in');
+      inp.type = 'number'; inp.min = '1'; inp.step = '1';
+      inp.value = String(Math.round(g.limit / 1e6));
+      const save = el('button', 'gbtn glimit-save', 'Save'); save.type = 'button';
+      const cancel = el('button', 'gbtn glimit-cancel', 'Cancel'); cancel.type = 'button';
+      lim.append(document.createTextNode('Daily limit:'), inp, document.createTextNode('million tokens'), save, cancel);
+      r.append(lim);
+      inp.focus();
+    } else if (!gLimitOpen.has(g.name) && lim) lim.remove();
+  }
+  function gStep(step, d) {
+    const box = $(`#gWizard .gstep[data-step="${step}"]`);
+    const checks = (d.checks || []).filter(c => STEP_CHECKS[step].includes(c.id));
+    if (!checks.length) { delete box.dataset.ok; box.querySelector('.gdetail').textContent = d.checking ? 'Checking…' : ''; }
+    else {
+      const ok = checks.every(c => c.ok);
+      box.dataset.ok = ok ? '1' : '0';
+      box.querySelector('.gdetail').textContent = (ok ? '✓ ' : '') + checks.map(c => c.detail).filter(Boolean).join(' · ');
+      const fix = checks.filter(c => !c.ok).map(c => c.fix).filter(Boolean).join(' ');
+      if (step !== 'services') box.querySelector('.gfix').textContent = fix;
+    }
+    box.querySelector('.gmark').textContent = box.dataset.ok === '1' ? '✓' : String(Object.keys(STEP_CHECKS).indexOf(step) + 1);
+  }
+  function gRender() {
+    const d = gLast;
+    const card = $('#guests');
+    if (!d || !d.installed) { card.hidden = true; return; }
+    card.hidden = false;
+    const guests = d.configured && Array.isArray(d.guests) ? d.guests : [];
+    $('#gOff').hidden = d.configured || gWizardOpen;
+    $('#gSetup').textContent = d.configured ? 'Settings' : 'Set up guests';
+    $('#gSetup').hidden = gWizardOpen;
+    const sum = $('#gSum');
+    if (d.configured && guests.length) {
+      const spent = guests.reduce((a, g) => a + (g.spent_today || 0), 0);
+      const on = guests.filter(g => g.enabled && g.state === 'running').length;
+      sum.replaceChildren(el('b', null, String(guests.length)), document.createTextNode(guests.length === 1 ? ' guest' : ' guests'),
+        document.createTextNode(' · on '), el('b', null, String(on)), document.createTextNode(' · today '), el('b', null, fmtTok(spent)), document.createTextNode(' tokens'));
+    } else sum.textContent = d.configured ? 'on' : '';
+    const empty = $('#gEmpty');
+    empty.textContent = d.configured && Array.isArray(d.guests) && !guests.length
+      ? 'No guests yet. Someone writes /start to the guest bot; you get “Let in?” in Telegram, and their sandbox appears here.' : '';
+    empty.hidden = !empty.textContent;
+    const err = $('#gErr');
+    err.textContent = d.configured && d.list_error ? `Could not list the guests: ${d.list_error}` : '';
+    err.hidden = !err.textContent;
+    const list = $('#gList'), seen = new Set();
+    guests.forEach((g, i) => {
+      const r = gRow(g.name);
+      seen.add(g.name);
+      gFillRow(r, g, (d.jobs || {})[g.name]);
+      if (list.children[i] !== r) list.insertBefore(r, list.children[i] || null);
+    });
+    for (const [n, r] of gRows) if (!seen.has(n)) { r.remove(); gRows.delete(n); gLimitOpen.delete(n); }
+    const wiz = $('#gWizard');
+    wiz.hidden = !gWizardOpen;
+    if (gWizardOpen) {
+      for (const s of Object.keys(STEP_CHECKS)) gStep(s, d);
+      $('#gToken').placeholder = d.env && d.env.bot_token_set ? 'set — leave empty to keep it' : '123456789:AA…';
+      if (document.activeElement !== $('#gOwner') && !$('#gOwner').value) $('#gOwner').value = (d.env && d.env.owner_id) || '';
+      if (document.activeElement !== $('#gDomain') && !$('#gDomain').value) $('#gDomain').value = (d.env && d.env.domain) || '';
+      $('#gCmd').textContent = `sudo ${d.dir}/install.sh`;
+      $('#gChecking').hidden = !d.checking;
+    }
+  }
+  async function pollGuests() {
+    try {
+      const r = await fetch(G_API, { cache: 'no-store', credentials: 'same-origin' });
+      if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) throw new Error('HTTP ' + r.status);
+      gLast = await r.json();
+      gRender();
+    } catch (e) { /* the page's own stale banner covers an unreachable server */ }
+  }
+  async function gAct(name, act) {
+    const g = ((gLast && gLast.guests) || []).find(x => x.name === name);
+    if (!g) return;
+    if (act === 'limit') {
+      if (gLimitOpen.has(name)) gLimitOpen.delete(name); else gLimitOpen.add(name);
+      return gRender();
+    }
+    if (act === 'remove' && !confirm(`Remove ${name}'s sandbox? Their terminals close and their page goes away; their files stay on this server's disk.`)) return;
+    try {
+      await gPost(act, { name });
+    } catch (e) {
+      $('#gErr').textContent = `Could not ${act} ${name}: ${e.message}`;
+      $('#gErr').hidden = false;
+      return;
+    }
+    await pollGuests();
+  }
+  async function gSaveLimit(name) {
+    const inp = gRows.get(name) && gRows.get(name).querySelector('input.glimit-in');
+    const m = inp ? parseFloat(inp.value) : NaN;
+    if (!(m > 0)) { if (inp) inp.focus(); return; }
+    gLimitOpen.delete(name);
+    try {
+      await gPost('limit', { name, limit: Math.round(m * 1e6) });
+    } catch (e) {
+      $('#gErr').textContent = `Could not change ${name}'s limit: ${e.message}`;
+      $('#gErr').hidden = false;
+    }
+    await pollGuests();
+  }
+  async function gCheck() {
+    try { await gPost('check'); } catch (e) { /* shown by the next poll */ }
+    await pollGuests();
+    setTimeout(pollGuests, 1500);
+  }
+  $('#gSetup').addEventListener('click', () => {
+    gWizardOpen = true;
+    gRender();
+    if (!gChecksAsked) { gChecksAsked = true; gCheck(); }
+  });
+  $('#gClose').addEventListener('click', () => { gWizardOpen = false; gRender(); });
+  $('#gRecheck').addEventListener('click', gCheck);
+  $('#gCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('#gCmd').textContent); $('#gCopy').textContent = 'Copied'; }
+    catch (e) { getSelection().selectAllChildren($('#gCmd')); }
+    setTimeout(() => { $('#gCopy').textContent = 'Copy'; }, 1500);
+  });
+  $('#gSave').addEventListener('click', async () => {
+    const err = $('#gWizErr');
+    const body = { bot_token: $('#gToken').value.trim(), owner_id: $('#gOwner').value.trim(), domain: $('#gDomain').value.trim() };
+    $('#gSave').disabled = true;
+    try {
+      await gPost('setup', body);
+      err.hidden = true;
+      $('#gToken').value = '';
+    } catch (e) {
+      err.textContent = e.message;
+      err.hidden = false;
+    } finally {
+      $('#gSave').disabled = false;
+    }
+    await pollGuests();
+    setTimeout(pollGuests, 1500);
+  });
+
   // ── polling ──
   function showStale(kind) {
     const s = $('#stale');
@@ -925,6 +1277,7 @@
       showStale('offline');
     } finally {
       await pollServices();
+      await pollGuests();
       timer = setTimeout(loop, POLL);
     }
   }
