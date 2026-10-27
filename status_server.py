@@ -22,6 +22,7 @@ import convo_sync   # a terminal takes the number of the conversation live in it
 import idle_reaper   # background-task detection (tree_has_task_output), pure /proc walk
 import library_cli   # claude_processes: which claudes run a conversation (Restart)
 import server_status   # the Server page's collector (GET /api/server)
+import services_keeper   # the Server page's Services block (GET/POST /api/services)
 
 SESSIONS = [
     {"id": "1",  "session": "claude-terminal",    "path": "terminal"},
@@ -1173,6 +1174,45 @@ SERVER_ROUTE = "/api/server"
 SERVER_COLLECTOR = server_status.Collector()
 
 
+# ── Server page, Services block: /api/services (2.0) ────────────────────────
+# The services keeper (services_keeper.py, its own unit / the Docker entrypoint) owns the
+# services; this only relays its /status and actions and reads the log tail from the
+# same folder it uses. Same-origin only, like the library.
+SVC_ROUTE = "/api/services"
+SVC_LOG_LINES = 200
+
+
+def svc_listing():
+    services = services_keeper.Client().status()
+    return {"available": services is not None, "services": services or {},
+            "dir": str(services_keeper.default_dir()), "now": time.time()}
+
+
+def svc_log(name):
+    if not services_keeper.NAME_RE.match(name):
+        raise LibError(400, "bad service name")
+    path = services_keeper.default_dir() / f"{name}.log"
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 256 * 1024))
+            text = f.read().decode("utf-8", "replace")
+    except FileNotFoundError:
+        return {"name": name, "lines": []}
+    return {"name": name, "lines": text.splitlines()[-SVC_LOG_LINES:]}
+
+
+def svc_post(route):
+    parts = route.split("/")
+    if len(parts) != 2 or parts[0] not in services_keeper.ACTIONS:
+        raise LibError(404, "not found")
+    if not services_keeper.NAME_RE.match(parts[1]):
+        raise LibError(400, "bad service name")
+    if not services_keeper.Client().act(parts[0], parts[1]):
+        raise LibError(404, "no such service (or the keeper isn't running)")
+    return {"ok": True}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _server_get(self):
         try:
@@ -1205,27 +1245,54 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._lib_json(500, {"error": str(e)[:200]})
 
+    def _write_body(self):
+        """The JSON object of a same-origin write (the library's CSRF rule), or LibError."""
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            raise LibError(415, "Content-Type must be application/json")
+        origin = self.headers.get("Origin")
+        if origin is not None and not lib_origin_ok(origin, self.headers):
+            raise LibError(403, "cross-origin request refused")
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length > LIB_BODY_MAX:
+            raise LibError(413, "body too large")
+        raw = self.rfile.read(length) if length > 0 else b""
+        try:
+            body = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            raise LibError(400, "body is not JSON")
+        if not isinstance(body, dict):
+            raise LibError(400, "body must be a JSON object")
+        return body
+
+    def _is_services(self):
+        r = self._route()
+        return r == SVC_ROUTE or r.startswith(SVC_ROUTE + "/")
+
+    def _services(self, method):
+        route = self._route()
+        try:
+            if method == "GET" and route == SVC_ROUTE:
+                data = svc_listing()
+            elif method == "GET" and route.startswith(SVC_ROUTE + "/log/"):
+                data = svc_log(route[len(SVC_ROUTE) + 5:])
+            elif method == "POST" and route.startswith(SVC_ROUTE + "/"):
+                self._write_body()
+                data = svc_post(route[len(SVC_ROUTE) + 1:])
+            else:
+                raise LibError(404, "not found")
+            self._lib_json(200, data)
+        except LibError as e:
+            self._lib_json(e.code, {"error": str(e)})
+        except Exception as e:
+            self._lib_json(500, {"error": str(e)[:200]})
+
     def _library_post(self):
         route = self._route()
         if not route.startswith(LIB_ROUTE + "/"):
             return self._lib_json(404, {"error": "not found"})
         try:
-            ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
-            if ctype != "application/json":
-                raise LibError(415, "Content-Type must be application/json")
-            origin = self.headers.get("Origin")
-            if origin is not None and not lib_origin_ok(origin, self.headers):
-                raise LibError(403, "cross-origin request refused")
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            if length > LIB_BODY_MAX:
-                raise LibError(413, "body too large")
-            raw = self.rfile.read(length) if length > 0 else b""
-            try:
-                body = json.loads(raw) if raw.strip() else {}
-            except ValueError:
-                raise LibError(400, "body is not JSON")
-            if not isinstance(body, dict):
-                raise LibError(400, "body must be a JSON object")
+            body = self._write_body()
             self._lib_json(200, lib_post(route[len(LIB_ROUTE) + 1:], body))
         except LibError as e:
             self._lib_json(e.code, {"error": str(e), **e.extra})
@@ -1241,6 +1308,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._library_get()
         if self._route() == SERVER_ROUTE:
             return self._server_get()
+        if self._is_services():
+            return self._services("GET")
         if (urlparse(getattr(self, "path", "/")).path.rstrip("/") or "/") == "/telegram":
             body = tg_render().encode("utf-8")
             self.send_response(200)
@@ -1367,6 +1436,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self._is_library():
             return self._library_post()
+        if self._is_services():
+            return self._services("POST")
         if (urlparse(getattr(self, "path", "/")).path.rstrip("/") or "/") == "/telegram":
             return self._telegram_post()
         length = int(self.headers.get("Content-Length", 0))
@@ -1472,7 +1543,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        if self._is_library() or self._route() == SERVER_ROUTE:   # no CORS preflight
+        if self._is_library() or self._is_services() or self._route() == SERVER_ROUTE:   # no CORS preflight
             self.end_headers()
             return
         self.send_header("Access-Control-Allow-Origin", "*")

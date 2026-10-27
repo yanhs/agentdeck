@@ -201,6 +201,38 @@
     .more:hover { color: var(--text); border-color: var(--hi-line); }
     footer { margin-top: 22px; font-size: 11px; color: var(--ghost); text-align: center; }
 
+    /* ── services: programs the services keeper runs (.services/<name>.sh) ── */
+    #svcSum { margin-left: auto; font-size: 11px; color: var(--faint); }
+    #svcSum b { color: var(--dim); font-weight: 500; font-family: var(--mono); font-size: 10.5px; }
+    .svc + .svc { border-top: 1px solid var(--row-line); }
+    .svc-main {
+      display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center;
+      gap: 12px; padding: 6px 2px;
+    }
+    .svc .dot.waiting { background: var(--amber); box-shadow: 0 0 6px rgba(251,191,36,.5); }
+    .svc-id { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+    .svc-name { font-family: var(--mono); font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; max-width: 45%; }
+    .svc-what { font-size: 11.5px; color: var(--faint); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .svc[data-state="waiting"] .svc-what { color: var(--amber); }
+    .svc[data-state="stopped"] .svc-name { color: var(--ghost); }
+    .svc-btns { display: flex; gap: 6px; }
+    .svc-btns button {
+      background: none; border: 1px solid var(--line); color: var(--dim); font: inherit;
+      font-size: 11.5px; padding: 3px 9px; border-radius: 6px; cursor: pointer; white-space: nowrap;
+    }
+    .svc-btns button:hover:not(:disabled) { color: var(--text); border-color: var(--hi-line); }
+    .svc-btns button:disabled { opacity: .5; cursor: progress; }
+    .svc-btns button.on { color: var(--text); border-color: var(--hi-line); background: var(--hover); }
+    .svc-log {
+      margin: 0 0 8px 22px; padding: 8px 10px; max-height: 260px; overflow: auto;
+      background: var(--bg); border: 1px solid var(--line2); border-radius: 6px;
+      font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--dim);
+      white-space: pre-wrap; word-break: break-word;
+    }
+    #svcEmpty { padding: 4px 2px 2px; line-height: 1.5; }
+    #svcEmpty code { font-family: var(--mono); font-size: 11px; color: var(--dim); }
+    #svcErr { color: var(--red); font-size: 11.5px; margin-top: 6px; }
+
     @media (max-width: 860px) {
       .gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .main { grid-template-columns: 10px minmax(0, 1fr) 110px 100px 12px; gap: 10px; }
@@ -231,6 +263,13 @@
       .kid { grid-template-columns: minmax(0, 1fr) 48px 60px 26px; gap: 6px; }
       h2 .spark { display: none; }
       .more { margin-left: 20px; }
+      .svc-main { grid-template-columns: 10px minmax(0, 1fr); grid-template-areas: "dot id" ". btns"; gap: 4px 10px; }
+      .svc-main .dot { grid-area: dot; }
+      .svc-id { grid-area: id; flex-direction: column; gap: 1px; }
+      .svc-name { max-width: 100%; }
+      .svc-what { white-space: normal; }
+      .svc-btns { grid-area: btns; }
+      .svc-log { margin-left: 0; }
     }
     @media (prefers-reduced-motion: reduce) {
       * { animation: none !important; transition: none !important; }
@@ -283,6 +322,16 @@
     <div class="card-h"><h3>Who uses the CPU right now</h3></div>
     <div id="now"></div>
     <div class="legend nowleg" id="nowLeg"></div>
+  </section>
+
+  <section class="card" id="services">
+    <div class="card-h">
+      <h3 title="Programs that keep running without an open terminal: .services/&lt;name&gt;.sh, started, restarted after a crash and stopped by the services keeper">Services</h3>
+      <span id="svcSum"></span>
+    </div>
+    <div id="svcList"></div>
+    <div class="empty" id="svcEmpty" hidden></div>
+    <div id="svcErr" hidden></div>
   </section>
 
   <main id="groups"></main>
@@ -697,6 +746,150 @@
     $('#foot').textContent = `${c.processes || 0} processes · this page's sampler uses ${fmtPct(c.cpu_pct || 0)} of one core · updates every ${data.interval || 5} s`;
   }
 
+  // ── services (GET /api/services, POST /api/services/<action>/<name>) ──
+  const SVC_API = '/api/services';
+  const svcRows = new Map();              // name -> row element
+  const svcLogs = new Set();              // names with the log open
+  let svcBusy = null;                     // name whose button is in flight
+  function fmtAgo(s) {
+    const m = Math.floor(Math.max(0, s) / 60);
+    if (m < 60) return `${m} min`;
+    const h = Math.floor(m / 60), mm = m % 60;
+    if (h < 48) return mm ? `${h} h ${mm} min` : `${h} h`;
+    return `${Math.floor(h / 24)} d`;
+  }
+  function svcWhat(st, now) {
+    const tail = st.restarts ? ` · restarts: ${st.restarts}` : '';
+    if (st.state === 'running') return 'running' + (st.since ? ' ' + fmtAgo(now - st.since) : '') + tail;
+    if (st.state === 'waiting') return (st.last_exit != null ? `crashed (exit ${st.last_exit}), restarting soon` : 'starting') + tail;
+    if (st.state === 'skipped') return `not started: at most ${st.limit || 10} services`;
+    return 'stopped';
+  }
+  function svcButtons(st) {
+    if (st.state === 'stopped') return [['log', 'Log'], ['start', 'Start']];
+    if (st.state === 'skipped') return [['log', 'Log']];
+    return [['log', 'Log'], ['restart', 'Restart'], ['stop', 'Stop']];
+  }
+  function svcRow(name) {
+    let r = svcRows.get(name);
+    if (r) return r;
+    r = el('div', 'svc');
+    r.dataset.name = name;
+    const main = el('div', 'svc-main');
+    const id = el('div', 'svc-id');
+    id.append(el('span', 'svc-name', name), el('span', 'svc-what'));
+    main.append(el('span', 'dot'), id, el('div', 'svc-btns'));
+    r.append(main);
+    r.addEventListener('click', e => {
+      const b = e.target.closest('button[data-act]');
+      if (b && !b.disabled) svcAct(name, b.dataset.act);
+    });
+    svcRows.set(name, r);
+    return r;
+  }
+  function renderServices(d) {
+    const list = $('#svcList'), empty = $('#svcEmpty');
+    const names = d.available ? Object.keys(d.services || {}).sort() : [];
+    if (!d.available) {
+      empty.textContent = "The services keeper isn't running, so the list is unavailable. It starts with AgentDeck: the agentdeck-services unit on a server, the entrypoint in Docker.";
+    } else if (!names.length) {
+      empty.replaceChildren(
+        document.createTextNode('No services yet. A service is a program that keeps running without an open terminal: a tunnel, a site\'s server, a bot. Ask an agent to "make this a service" — it puts a start script into '),
+        el('code', null, (d.dir || '.services') + '/<name>.sh'), document.createTextNode('.'));
+    }
+    empty.hidden = names.length > 0;
+    const running = names.filter(n => d.services[n].state === 'running').length;
+    const sum = $('#svcSum');
+    if (names.length) sum.replaceChildren(document.createTextNode('running '), el('b', null, String(running)), document.createTextNode(' of '), el('b', null, String(names.length)));
+    else sum.textContent = '';
+    const now = d.now || Date.now() / 1000;
+    const seen = new Set();
+    names.forEach((name, i) => {
+      const st = d.services[name], r = svcRow(name);
+      seen.add(name);
+      r.dataset.state = st.state;
+      r.querySelector('.dot').className = 'dot ' + (st.state === 'running' ? 'running' : st.state === 'waiting' ? 'waiting' : 'stopped');
+      const what = svcWhat(st, now);
+      r.querySelector('.svc-what').textContent = what;
+      r.querySelector('.svc-what').title = what;
+      const want = svcButtons(st);
+      const box = r.querySelector('.svc-btns');
+      if (box.dataset.acts !== want.map(a => a[0]).join()) {
+        box.replaceChildren(...want.map(([act, label]) => {
+          const b = el('button', null, label);
+          b.type = 'button';
+          b.dataset.act = act;
+          b.title = { log: `Last lines of ${name}.log`, restart: `Restart ${name}`, stop: `Stop ${name} (its file becomes ${name}.sh.off)`, start: `Start ${name}` }[act];
+          return b;
+        }));
+        box.dataset.acts = want.map(a => a[0]).join();
+      }
+      box.querySelectorAll('button').forEach(b => {
+        b.disabled = svcBusy === name && b.dataset.act !== 'log';
+        b.classList.toggle('on', b.dataset.act === 'log' && svcLogs.has(name));
+      });
+      if (list.children[i] !== r) list.insertBefore(r, list.children[i] || null);
+    });
+    for (const [name, r] of svcRows) if (!seen.has(name)) { r.remove(); svcRows.delete(name); svcLogs.delete(name); }
+  }
+  let svcLast = null;
+  async function pollServices() {
+    try {
+      const r = await fetch(SVC_API, { cache: 'no-store', credentials: 'same-origin' });
+      if (!r.ok || !(r.headers.get('content-type') || '').includes('json')) throw new Error('HTTP ' + r.status);
+      svcLast = await r.json();
+      renderServices(svcLast);
+      for (const name of svcLogs) loadLog(name);
+    } catch (e) { /* the page's own stale banner covers an unreachable server */ }
+  }
+  async function loadLog(name) {
+    const r = svcRows.get(name);
+    if (!r) return;
+    let pre = r.querySelector('pre.svc-log');
+    if (!pre) { pre = el('pre', 'svc-log', 'Loading…'); r.append(pre); }
+    try {
+      const res = await fetch(`${SVC_API}/log/${encodeURIComponent(name)}`, { cache: 'no-store', credentials: 'same-origin' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const d = await res.json();
+      if (!svcLogs.has(name)) return;
+      const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+      pre.textContent = d.lines && d.lines.length ? d.lines.join('\n') : `${name}.log is empty.`;
+      if (atEnd) pre.scrollTop = pre.scrollHeight;
+    } catch (e) {
+      pre.textContent = 'Could not load the log.';
+    }
+  }
+  async function svcAct(name, act) {
+    const err = $('#svcErr');
+    if (act === 'log') {
+      if (svcLogs.has(name)) {
+        svcLogs.delete(name);
+        const pre = svcRows.get(name).querySelector('pre.svc-log');
+        if (pre) pre.remove();
+      } else {
+        svcLogs.add(name);
+        loadLog(name);
+      }
+      if (svcLast) renderServices(svcLast);
+      return;
+    }
+    svcBusy = name;
+    if (svcLast) renderServices(svcLast);
+    try {
+      const r = await fetch(`${SVC_API}/${act}/${encodeURIComponent(name)}`, {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      if (!r.ok) throw new Error(r.status === 404 ? `${name}: no such service any more` : 'HTTP ' + r.status);
+      err.hidden = true;
+    } catch (e) {
+      err.textContent = `Could not ${act} ${name}: ${e.message}`;
+      err.hidden = false;
+    } finally {
+      svcBusy = null;
+      await pollServices();
+      setTimeout(pollServices, 3500);      // the keeper acts on its next tick (every 3 s)
+    }
+  }
+
   // ── polling ──
   function showStale(kind) {
     const s = $('#stale');
@@ -731,6 +924,7 @@
     } catch (e) {
       showStale('offline');
     } finally {
+      await pollServices();
       timer = setTimeout(loop, POLL);
     }
   }
