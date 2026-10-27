@@ -130,6 +130,47 @@ def is_junk(line):
     return False
 
 
+# Claude Code's own notices for the person at the keyboard — never the agent's
+# reply. A hook's output is a block: a head line ("● Ran 1 stop hook",
+# "⎿  Stop hook error: …") and its wrapped/indented text, up to the next
+# bullet, unindented line, spinner/timing line or tool summary.
+_HOOK_HEAD_RE = re.compile(
+    r"^(?:●\s*)?Ran \d+ [\w:-]+ hooks?$"
+    r"|^(?:⎿\s*)?[\w:-]+ hook (?:error|feedback|blocking error|output)\b",
+    re.IGNORECASE)
+_UPDATE_RE = re.compile(
+    r"^[✔✓✗✘]?\s*(?:Update installed\b|Auto-update failed\b)"
+    r"|^Updated to latest\. Got \d+"
+    r"|^code\.claude\.com/docs/\S*changelog for details$",
+    re.IGNORECASE)
+_BLOCK_END_RE = re.compile(
+    r"^(?:Ran|Read|Wrote|Edited|Updated|Searched|Listed|Did|Fetched|Called|Created|"
+    r"Running|Reading|Searching|Writing|Editing)\s+\d")
+_SPINNER_CHARS = "✻✶✳✽✺✷✸✹✼❋✢❂⊹∗*·"
+
+
+def drop_program_notices(lines):
+    """`lines` (ANSI-stripped, indentation kept) without hook output blocks and
+    the program's update notices. A dropped block leaves one blank line."""
+    out, in_hook = [], False
+    for line in lines:
+        s = line.strip()
+        if _HOOK_HEAD_RE.search(s):
+            in_hook = True
+            continue
+        if in_hook:
+            if not s or (line[:1] in (" ", "\t") and s[0] not in "●" + _SPINNER_CHARS
+                         and not _BLOCK_END_RE.match(s)):
+                continue
+            in_hook = False
+            if out and out[-1].strip():
+                out.append("")
+        if _UPDATE_RE.search(s):
+            continue
+        out.append(line)
+    return out
+
+
 def load_agents():
     try:
         with open(AGENTS_FILE) as f:

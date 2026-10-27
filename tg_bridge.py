@@ -845,8 +845,7 @@ def is_working(pane: str) -> bool:
 def clean_pane(pane: str) -> str:
     """Strip ANSI + TUI chrome, collapse blank runs → readable text (for /read)."""
     lines = []
-    for raw in pane.splitlines():
-        line = ss.strip_ansi(raw).rstrip()
+    for line in ss.drop_program_notices([ss.strip_ansi(l).rstrip() for l in pane.splitlines()]):
         if not line.strip():
             if lines and lines[-1].strip():
                 lines.append("")
@@ -1302,7 +1301,7 @@ def _screen_mirror(pane: str, user_text: str = "", n: int = 200) -> str:
     box borders, '⎿ Tip:', ctrl/background hints, boot banner, the ❯ input box,
     the bottom status bar, the session survey, and the echoed question."""
     ut = (user_text or "").replace("\n", " ").strip()
-    lines = [ss.strip_ansi(l).rstrip() for l in pane.splitlines()]
+    lines = ss.drop_program_notices([ss.strip_ansi(l).rstrip() for l in pane.splitlines()])
     # Anchor at the user's question (INCLUSIVE) so we show only THIS turn — never
     # prior turns from the scrollback. Use a short marker (~25 chars) so it fits on
     # one wrapped screen line. If the question isn't found, fall back to just the
