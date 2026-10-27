@@ -11,7 +11,7 @@
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
   <img alt="Docker" src="https://img.shields.io/badge/docker-compose%20up-2496ED.svg">
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue.svg">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-900%2B%20passing-brightgreen.svg">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1800%2B%20passing-brightgreen.svg">
 </p>
 
 ![AgentDeck: many Claude Code agents in one dashboard, a task board per terminal, what uses your server, from your phone and from Telegram](docs/demo.gif)
@@ -33,8 +33,7 @@ daily token limit, and talks to it through one shared Telegram bot. Someone writ
 their sandbox, address and password are made for them (the bot open to everyone only
 passes the request on — it can't create anything). Set it up on the Server page — a four-step wizard checks
 Docker, the bot, the domain — and manage guests there: today's spend, the limit, stop,
-remove. The installer asks once whether other people will work on the server (default
-no); you can turn guests on any time later. Details: [guests/README.md](guests/README.md).
+remove. Details: [guests/README.md](guests/README.md).
 
 <p align="center">
   <img src="docs/screenshots/telegram-invite.png" width="640" alt="Left: a stranger writes /start to the guest bot and later gets their sandbox's address and password. Right: the owner's own AgentDeck bot asks Let them in, with Let in and Refuse buttons">
@@ -43,6 +42,33 @@ no); you can turn guests on any time later. Details: [guests/README.md](guests/R
 | Services and guests on the Server page | Setting up guests | /services in Telegram |
 |---|---|---|
 | ![The Server page: four services with their state and one log open; three guests with today's tokens against their daily limit](docs/screenshots/services-guests.png) | ![The guests setup wizard: Docker and the bot checked, the domain still to do, then one command to turn it on](docs/screenshots/guests-wizard.png) | ![The /services command in Telegram: each service's state with restart, stop and start buttons](docs/screenshots/telegram-services.png) |
+
+**The installer asks once.** "Will other people work on this server too?" — only when a
+person is at the terminal, default no. Yes also installs Docker, and the last lines say
+where to finish the setup. You can turn guests on any time later on the Server page;
+`--guests` / `--no-guests` answer it for scripts.
+
+![install.sh asks whether other people will work on the server; after yes, its last lines point to the Server page to finish setting up guests](docs/screenshots/installer-guests.png)
+
+**Agents know where they run.** Asked "if I change the password, does my other terminal
+stop?", an agent used to answer that it couldn't tell how the platform works. AgentDeck now
+tells its agents, in its own `~/.claude/CLAUDE.md`: the dashboard and Telegram are two
+windows into the same terminals, closing them or changing the password stops nothing, a
+terminal is one conversation that a restart resumes, and a new terminal starts a new one.
+A `CLAUDE.md` of your own is never touched.
+
+![The block AgentDeck adds to its agents' CLAUDE.md: where you run, what stops and what doesn't](docs/screenshots/agents-environment.png)
+
+**A cleaner chat in Telegram.** Lines Claude Code prints for the person at the keyboard —
+a hook's message to the agent, "Update installed · Restart to apply" — no longer reach the
+chat; you get the agent's work and its answer.
+
+**Upgrading from 1.x:** run the install command again (or `git pull` and `./install.sh`) —
+it adds the services keeper (`agentdeck-services`) and restarts the dashboard; your
+terminals keep running. If you use the Telegram bot, stop and start it once on the
+dashboard's Telegram page so it runs the new version. Docker: `git pull && docker compose
+up -d --build`.
+Full list of changes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Why AgentDeck
 

@@ -724,6 +724,63 @@ body{width:420px;font:14.5px/1.38 -apple-system,'Segoe UI',Roboto,'Helvetica Neu
 </div></body></html>"""
 
 
+def installer_lines() -> list[tuple[str, str]]:
+    """The installer's question and its closing words, printed by install.sh's own
+    functions (sourced, nothing installed) for a demo server: (css class, text)."""
+    import subprocess
+    answer = Path(tempfile.mkdtemp()) / "answer"
+    answer.write_text("y\n")
+    script = r'''
+AGENTDECK_SOURCE_ONLY=1 source ./install.sh
+YES=0 CHECK=0 GUESTS_FLAG="" CONF_FILE=/nonexistent AGENTDECK_TTY="$1"
+ask_guests 2>&1; echo
+HOME=/home/deck DIR=/home/deck/agentdeck SITE=203-0-113-7.sslip.io HTTP_PORT=80 HTTPS_PORT=443
+PORT=443 WORKDIR=/home/deck/projects TELEGRAM=0 WHY=""
+id() { echo deck; }
+command() { [ "$2" = ufw ] && return 1; builtin command "$@"; }
+finish
+'''
+    out = subprocess.run(["bash", "-c", script, "bash", str(answer)], cwd=ROOT, env={
+        "PATH": os.environ["PATH"], "HOME": "/home/deck"}, capture_output=True, text=True,
+        check=True, timeout=30).stdout
+    ask, _, rest = out.partition("[y/N] ")
+    lines = [("cmd", "deck@vps:~$ curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash"),
+             ("dim", "…")]
+    lines += [("ask", l) for l in ask.strip("\n").split("\n")[:-1]]
+    lines.append(("ask", ask.strip("\n").split("\n")[-1] + "[y/N] " + "y"))
+    lines.append(("dim", "…"))
+    for l in rest.strip("\n").split("\n"):
+        lines.append(("hl" if "Guests:" in l or "a domain); it ends" in l else "", l))
+    return lines
+
+
+def agents_md_lines() -> list[tuple[str, str]]:
+    """What AgentDeck tells its agents about where they run: hooks/install_guards.py's
+    own block, as `cat` shows it in a terminal."""
+    sys.path.insert(0, str(ROOT / "hooks"))
+    import install_guards
+    text = install_guards.ENV_MD.format(mark=install_guards.ENV_MARK)
+    return ([("cmd", "deck@vps:~$ grep -A5 agentdeck-environment ~/.claude/CLAUDE.md")]
+            + [("hl" if l.startswith("##") else "", l) for l in text.rstrip("\n").split("\n")])
+
+
+def term_frame(lines, title) -> str:
+    body = "".join(f'<div class="l {c}">{html.escape(t) or "&nbsp;"}</div>' for c, t in lines)
+    return """<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;background:#fff}
+.win{width:980px;margin:0;background:#0f1419;border-radius:10px;overflow:hidden;
+ font:14px/1.5 'DejaVu Sans Mono',Menlo,Consolas,monospace;color:#d3dae3}
+.bar{display:flex;align-items:center;gap:8px;padding:10px 14px;background:#1b222b;color:#8b98a8;font:13px -apple-system,'Segoe UI',Roboto,Arial,sans-serif}
+.bar i{width:12px;height:12px;border-radius:50%;display:inline-block}
+.bar span{margin-left:10px}
+.scr{padding:14px 18px 18px}
+.l{white-space:pre-wrap}
+.cmd{color:#9fd88a}.dim{color:#5c6773}.ask{color:#ffd580}.hl{color:#7fc8ff}
+</style></head><body><div class="win"><div class="bar"><i style="background:#ff5f57"></i>
+<i style="background:#febc2e"></i><i style="background:#28c840"></i><span>""" + html.escape(title) + \
+        """</span></div><div class="scr">""" + body + "</div></div></body></html>"
+
+
 # ───────────────────────────────────────────────────────────────── main ──
 def main() -> int:
     from playwright.sync_api import sync_playwright
@@ -940,6 +997,19 @@ def main() -> int:
                 x += im.width + gap
             sheet.save(OUT / "telegram-invite.png", optimize=True)
             print(f"  wrote {OUT / 'telegram-invite.png'}")
+
+        # installer-guests.png / agents-environment.png — terminal text from the real code
+        for name, lines, title in (
+                ("installer-guests.png", installer_lines, "deck@vps: ~ — install.sh"),
+                ("agents-environment.png", agents_md_lines, "deck@vps: ~")):
+            if want(name):
+                print(name)
+                ctx = b.new_context(viewport={"width": 980, "height": 300}, device_scale_factor=SCALE)
+                pg = ctx.new_page()
+                pg.set_content(term_frame(lines(), title))
+                pg.wait_for_timeout(200)
+                save(pg, name, clip=clip_of(pg, ".win", pad=0), full_page=True)
+                ctx.close()
 
         # telegram.png — the bridge, with its real reply formats (in English)
         if want("telegram.png"):
