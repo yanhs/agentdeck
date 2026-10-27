@@ -2332,8 +2332,13 @@ async def _post_init(app: Application) -> None:
 
 def build_app() -> Application:
     """The bot: handlers for every BOT_COMMANDS entry and every button kind."""
-    app = (Application.builder().token(TOKEN).post_init(_post_init)
-           .concurrent_updates(True).build())
+    builder = Application.builder().token(TOKEN).post_init(_post_init)
+    # TG_BRIDGE_API_BASE: talk to Telegram through a relay (a guest sandbox holds only
+    # a pass; the relay on the host holds the real token). Unset = api.telegram.org.
+    api_base = os.environ.get("TG_BRIDGE_API_BASE", "").rstrip("/")
+    if api_base:
+        builder = builder.base_url(f"{api_base}/bot").base_file_url(f"{api_base}/file/bot")
+    app = builder.concurrent_updates(True).build()
     owner = filters.User(user_id=OWNER_ID)
     app.add_handler(CommandHandler("list", cmd_list, filters=owner))
     app.add_handler(CommandHandler("use", cmd_use, filters=owner))
