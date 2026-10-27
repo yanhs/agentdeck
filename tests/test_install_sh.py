@@ -1082,3 +1082,95 @@ def test_install_gives_the_agents_the_services_rule():
     body = src[src.index("install_guards() {"):]
     body = body[:body.index("\n}\n")]
     assert '--services-dir "$WORKDIR/.services"' in body
+
+
+# ── the guests question (2.0): "Will other people work on this server?" ──────────
+# Asked only when a person is at the terminal (not --yes, not --check); the default is
+# no; --guests / --no-guests / AGENTDECK_GUESTS answer it for automation; a re-run keeps
+# the recorded answer. Tests feed the answer through AGENTDECK_TTY (a file instead of
+# /dev/tty) — without it the sandbox has no terminal, exactly like a script.
+def ask(box, answer=None, pre="YES=0; CHECK=0", **extra):
+    if answer is not None:
+        tty = box.root / "tty"
+        tty.write_text(answer)
+        extra["AGENTDECK_TTY"] = str(tty)
+    return box.lib(f'{pre}; ask_guests; echo "GUESTS=$GUESTS"', **extra)
+
+
+@pytest.mark.parametrize("answer,want", [("y\n", "1"), ("yes\n", "1"), ("Y\n", "1"),
+                                         ("\n", "0"), ("n\n", "0"), ("", "0"), ("maybe\n", "0")])
+def test_guests_question_default_is_no(box, answer, want):
+    r = ask(box, answer)
+    assert r.returncode == 0, r.stderr
+    assert f"GUESTS={want}" in r.stdout
+    assert "other people" in r.stderr.lower() and "[y/N]" in r.stderr
+
+
+def test_guests_question_not_asked_without_a_person(box):
+    r = ask(box)                                       # no terminal at all
+    assert "GUESTS=0" in r.stdout and "other people" not in r.stderr.lower()
+
+
+@pytest.mark.parametrize("pre", ["YES=1; CHECK=0", "YES=0; CHECK=1"])
+def test_guests_question_not_asked_with_yes_or_check(box, pre):
+    r = ask(box, "y\n", pre=pre)
+    assert "GUESTS=0" in r.stdout and "other people" not in r.stderr.lower()
+
+
+@pytest.mark.parametrize("flag,want", [("--guests", "1"), ("--no-guests", "0")])
+def test_guests_flags_answer_without_asking(box, flag, want):
+    r = ask(box, "y\n" if want == "0" else "n\n", pre=f"parse_args {flag}")
+    assert f"GUESTS={want}" in r.stdout and "other people" not in r.stderr.lower()
+
+
+def test_guests_env_answers_without_asking(box):
+    r = ask(box, "n\n", AGENTDECK_GUESTS="1")
+    assert "GUESTS=1" in r.stdout and "other people" not in r.stderr.lower()
+
+
+def test_guests_rerun_keeps_the_recorded_answer(box):
+    write_conf(box, ":8765")
+    conf_path(box).write_text(conf_path(box).read_text() + "AGENTDECK_GUESTS=1\n")
+    r = ask(box, "n\n")
+    assert "GUESTS=1" in r.stdout and "other people" not in r.stderr.lower()
+
+
+def test_guests_answer_is_recorded(box):
+    r = box.lib(f'DIR="{box.repo}"; SITE=":8765"; GUESTS=1; prepare_data')
+    assert r.returncode == 0, r.stderr
+    assert "AGENTDECK_GUESTS=1\n" in conf_path(box).read_text()
+
+
+def test_guests_yes_installs_docker_and_lets_the_user_use_it(box):
+    r = box.lib('GUESTS=1; SUDO=sudo; install_guests_prereqs')
+    assert r.returncode == 0, r.stderr
+    calls = box.calls()
+    assert any("apt-get" in c and "install" in c and "docker.io" in c for c in calls), calls
+    assert any(c.startswith("sudo usermod -aG docker tester") for c in calls), calls
+
+
+def test_guests_no_installs_nothing_for_them(box):
+    r = box.lib('GUESTS=0; SUDO=sudo; install_guests_prereqs')
+    assert r.returncode == 0, r.stderr
+    assert not any("docker" in c for c in box.calls())
+
+
+def test_final_message_about_guests(box):
+    base = (f'DIR="{box.repo}"; SITE=":8765"; WHY=requested; SELF_IP={IP}; '
+            f'WORKDIR="$HOME/projects"; ')
+    on = box.lib(base + "GUESTS=1; finish").stdout
+    assert "Server" in on and "Guests" in on and f"sudo {box.repo}/guests/install.sh" in on
+    off = box.lib(base + "GUESTS=0; finish").stdout
+    assert "Guests" in off and "any time" in off and "guests/install.sh" not in off
+
+
+def test_help_mentions_the_guests_flags(box):
+    r = box.run("--help")
+    assert "--guests" in r.stdout and "--no-guests" in r.stdout
+
+
+def test_piped_install_asks_once():
+    """curl | bash re-runs itself from the fetched code: the answer goes along."""
+    src = SOURCE.read_text()
+    line = next(x for x in src.splitlines() if "AGENTDECK_REEXEC=1 exec bash" in x)
+    assert 'AGENTDECK_GUESTS="$GUESTS"' in line

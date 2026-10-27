@@ -22,6 +22,9 @@
 #   --http           plain http on :8765 — no encryption, the password travels in clear
 #   --check          only the preflight checks, change nothing
 #   --telegram       also print how to connect a Telegram bot (set up in the dashboard)
+#   --guests         other people will work here too (each in their own sandbox): also
+#                    installs Docker; --no-guests: they won't. Without either, a person at
+#                    the terminal is asked once (default: no); a script never is
 #   --uninstall      stop and remove the services (terminals, board, password stay)
 #   --purge          with --uninstall: also delete ~/agentdeck and its data
 #
@@ -438,6 +441,9 @@ HTTPS by default: a free Let's Encrypt certificate on https://<ip>.sslip.io when
   --http             plain http on :8765 — no encryption (the password travels in clear)
   --check            preflight checks only, change nothing
   --telegram         also print how to connect a Telegram bot
+  --guests           other people will work here too, each in their own sandbox
+                     (also installs Docker); --no-guests: they won't. Without either
+                     you're asked once (default: no) — a script never is
   --uninstall        stop + remove the services (keeps terminals, board, password)
   --purge            with --uninstall: also delete ~/agentdeck and its data
   -h, --help         this help
@@ -449,7 +455,7 @@ Supported: Ubuntu 22.04 / 24.04, Debian 12 (x86_64, aarch64).
 EOF
 }
 
-YES=0 CHECK=0 UNINSTALL=0 PURGE=0 TELEGRAM=0 HTTPS=0 HTTPS_OFF=0 DOMAIN=""
+YES=0 CHECK=0 UNINSTALL=0 PURGE=0 TELEGRAM=0 HTTPS=0 HTTPS_OFF=0 DOMAIN="" GUESTS_FLAG="" GUESTS=0
 ARGS=("$@")
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -459,6 +465,8 @@ parse_args() {
       --uninstall) UNINSTALL=1 ;;
       --purge) PURGE=1 ;;
       --telegram) TELEGRAM=1 ;;
+      --guests) GUESTS_FLAG=1 ;;
+      --no-guests) GUESTS_FLAG=0 ;;
       --http) HTTPS_OFF=1 ;;
       --https)
         HTTPS=1
@@ -552,6 +560,50 @@ EOF
   resolve_workdir
   choose_site
   plan_note
+  ask_guests
+}
+
+# Will other people work on this server? (the optional guests module, guests/README.md)
+# --guests / --no-guests / AGENTDECK_GUESTS answer it; a re-run keeps the recorded answer;
+# otherwise a person at the terminal is asked once — default no — and a script never is.
+human_here() {
+  [ "$YES" = 0 ] && [ "$CHECK" = 0 ] || return 1
+  [ -n "${AGENTDECK_TTY:-}" ] && return 0          # tests: the answer comes from this file
+  [ -t 2 ] && { : </dev/tty; } 2>/dev/null
+}
+
+ask_guests() {
+  local ans=""
+  GUESTS="${GUESTS_FLAG:-${AGENTDECK_GUESTS:-$(conf_get AGENTDECK_GUESTS)}}"
+  case "$GUESTS" in 0|1) return 0 ;; esac
+  GUESTS=0
+  human_here || return 0
+  printf '\nWill other people work on this server too? Each would get their own sandbox\n' >&2
+  printf '(an AgentDeck of their own, in Docker) on your Claude subscription, with a daily\n' >&2
+  printf 'limit. You can turn it on any time later in the dashboard. [y/N] ' >&2
+  read -r ans <"${AGENTDECK_TTY:-/dev/tty}" || ans=""
+  case "$ans" in [yY]|[yY][eE][sS]) GUESTS=1 ;; esac
+  return 0
+}
+
+# guests run in Docker sandboxes: Docker, and the right to use it without sudo
+install_guests_prereqs() {
+  [ "$GUESTS" = 1 ] || return 0
+  command -v docker >/dev/null 2>&1 || apt_install docker.io
+  case " $(id -nG 2>/dev/null) " in
+    *" docker "*) ;;
+    *) $SUDO usermod -aG docker "$(id -un)" ;;
+  esac
+}
+
+guests_note() {
+  if [ "$GUESTS" = 1 ]; then
+    say "  Guests: open the Server page → Guests → Set up guests (a Telegram bot for them,"
+    say "  a domain); it ends with one command: sudo $DIR/guests/install.sh"
+  else
+    say "  Other people can work here too, each in their own sandbox — turn it on any time:"
+    say "  the dashboard's Server page → Guests."
+  fi
 }
 
 # where new terminals start: AGENTDECK_WORKDIR now, else the last install's, else ~/projects
@@ -801,6 +853,7 @@ write_record() {  # what the install set up — --uninstall and the next run rea
     printf 'AGENTDECK_SITE=%s\n' "$SITE"
     printf 'AGENTDECK_WHY=%s\n' "$WHY"
     printf 'AGENTDECK_WORKDIR=%s\n' "$WORKDIR"
+    printf 'AGENTDECK_GUESTS=%s\n' "$GUESTS"
   } > "$CONF_FILE"
 }
 
@@ -980,6 +1033,7 @@ finish() {
     say "  Telegram: in the dashboard open Telegram (/telegram), paste your bot token from"
     say "  @BotFather there — the installer never handles the token."
   fi
+  guests_note
   echo
   say "Agents run as $(id -un) with full access to this machine (sudo included)."
   say "Status: systemctl status 'agentdeck-*' · logs: journalctl -u agentdeck-status -f"
@@ -1046,7 +1100,7 @@ main() {
   get_repo
   if [ "$was_piped" = 1 ] && [ -z "${AGENTDECK_REEXEC:-}" ]; then
     # continue with the installer from the code just fetched (always the matching version)
-    AGENTDECK_REEXEC=1 exec bash "$DIR/install.sh" "${ARGS[@]}" </dev/null
+    AGENTDECK_GUESTS="$GUESTS" AGENTDECK_REEXEC=1 exec bash "$DIR/install.sh" "${ARGS[@]}" </dev/null
   fi
   mkdir -p "$DIR/.sessions"
 
@@ -1058,6 +1112,10 @@ main() {
   install_node
   step "Claude Code"
   install_claude
+  if [ "$GUESTS" = 1 ]; then
+    step "Docker (for guests' sandboxes)"
+    install_guests_prereqs
+  fi
 
   step "Data folder + guard hooks"
   prepare_data
