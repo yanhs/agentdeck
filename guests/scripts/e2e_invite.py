@@ -2,7 +2,8 @@
 """End-to-end check of invitations on a THROWAWAY guest "probe" (Telegram id 1 = nobody):
 the real provisioner (guestctl add + web: container, pass, DNS, certificate), the real
 guest book and address — only Telegram itself is a recorder. Then removes the guest with
-its address and checks the address is gone. Prints PASS/FAIL; exit code = failures."""
+its address and checks the address is gone. Prints PASS/FAIL; exit code = failures.
+Needs guests/.env (GUESTS_DOMAIN; DNS as for any guest) and the image install.sh built."""
 
 import json
 import subprocess
@@ -14,13 +15,17 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(HERE / "tgrelay"), str(HERE / "turnstile")]
+sys.path[:0] = [str(HERE), str(HERE / "tgrelay"), str(HERE / "turnstile")]
+import guestenv  # noqa: E402
 import tgrelay as tr  # noqa: E402
 import turnstile as ts  # noqa: E402
 
 DATA = HERE / "turnstile" / "data"
-NAME, TID, OWNER = "probe", 1, 111111111
-HOST = f"https://sb-{NAME}.reimake.com"
+SITES = HERE / "nginx" / "sites"
+DOMAIN = guestenv.domain() or sys.exit("GUESTS_DOMAIN is not set in guests/.env")
+# Telegram is a recorder here: the owner id only has to look like one
+NAME, TID, OWNER = "probe", 1, int(guestenv.get("OWNER_TG_ID") or 1000)
+HOST = f"https://sb-{NAME}.{DOMAIN}"
 fails = 0
 
 
@@ -56,11 +61,7 @@ def http_status(url):
 
 
 def info_for(name):
-    if not (HERE / "nginx" / "sites" / f"sb-{name}.reimake.com.conf").exists():
-        return None
-    pw = DATA / f"{name}.dashboard-password"
-    return {"url": f"https://sb-{name}.reimake.com",
-            "password": pw.read_text().strip() if pw.exists() else None}
+    return tr.dashboard_info(name, DATA, SITES)
 
 
 book = ts.GuestBook(DATA / "guests.json")
@@ -89,7 +90,9 @@ with tempfile.TemporaryDirectory() as tmp:
     check(book.get(NAME) is not None and book.get(NAME).telegram_id == TID, "guest is in the book")
     image = subprocess.run(["docker", "inspect", "-f", "{{.Config.Image}}", f"sbx-{NAME}"],
                            capture_output=True, text=True).stdout.strip()
-    check(image.endswith("-svc"), f"sandbox runs the services image ({image})")
+    expected = subprocess.run([sys.executable, str(HERE / "guestctl.py"), "image-tag"],
+                              capture_output=True, text=True).stdout.strip()
+    check(image == expected, f"sandbox runs this version's image ({image})")
     keeper = subprocess.run(["docker", "exec", f"sbx-{NAME}", "curl", "-s", "--max-time", "3",
                              "localhost:9876/status"], capture_output=True, text=True).stdout
     check('"services"' in keeper, "services keeper answers")
@@ -114,7 +117,7 @@ if key:
     except OSError:
         pass
 pw_file.unlink(missing_ok=True)
-check(not (HERE / "nginx" / "sites" / f"sb-{NAME}.reimake.com.conf").exists(), "vhost removed")
+check(not (SITES / f"sb-{NAME}.{DOMAIN}.conf").exists(), "vhost removed")
 code = http_status(f"{HOST}/login")
 check(code != 200, f"address no longer serves a login page: {code}")
 print(f"== {fails} failed", flush=True)

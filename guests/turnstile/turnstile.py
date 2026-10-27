@@ -35,6 +35,8 @@ from typing import Callable, Dict, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+import guestenv  # noqa: E402
 OAUTH_BETA = "oauth-2025-04-20"
 DAY_TZ = ZoneInfo(os.environ.get("TURNSTILE_DAY_TZ", "America/Los_Angeles"))
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}$")
@@ -357,11 +359,8 @@ class SpendWatch:
 
 
 def tg_notify(text: str) -> None:
-    """The owner's Telegram — the same channel the other server alerts use."""
-    r = subprocess.run(["bash", "-c", 'source "$HOME/.immappeal-scheduled/lib_notify.sh"; tg "$1"',
-                        "_", text], timeout=30, capture_output=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"lib_notify tg exit {r.returncode}")
+    """The owner's Telegram: GUESTS_NOTIFY_CMD, else the guest bot (guests/.env)."""
+    guestenv.notify_owner(text)
 
 
 # --------------------------------------------------------------------------- #

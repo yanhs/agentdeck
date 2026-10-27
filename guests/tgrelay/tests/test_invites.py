@@ -14,7 +14,7 @@ import turnstile as ts  # noqa: E402
 
 import tgrelay as tr  # noqa: E402
 
-OWNER, MASHA, IVAN, ANNA = 111111111, 5550001, 5550002, 1001
+OWNER, MASHA, IVAN, ANNA = 4242, 5550001, 5550002, 1001
 
 
 class FakeTelegram:
@@ -58,7 +58,7 @@ def prov():
 def make(book, tg, prov, tmp_path, owner=OWNER):
     inv = tr.Invitations(tmp_path / "requests.json", owner_tid=owner, provisioner=prov,
                          taken=lambda: set(book.names()), background=False)
-    info = {"masha": {"url": "https://sb-masha.reimake.com", "password": "pw-M"}}
+    info = {"masha": {"url": "https://sb-masha.example.test", "password": "pw-M"}}
     return tr.Relay(book, tg, invites=inv, info_for=info.get), inv
 
 
@@ -110,7 +110,7 @@ def test_owner_lets_in_and_the_sandbox_is_made(relay, tg, prov, book):
     relay.route(press(OWNER, f"inv:ok:{MASHA}"))
     assert prov.made == [("masha", MASHA)]
     welcome = tg.to(MASHA)[-1]["text"]
-    assert "https://sb-masha.reimake.com" in welcome and "pw-M" in welcome
+    assert "https://sb-masha.example.test" in welcome and "pw-M" in welcome
     done = tg.to(OWNER, "editMessageText")[-1]["text"]
     assert "✅" in done and "masha" in done
 

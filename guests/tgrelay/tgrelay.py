@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Telegram turnstile — one real bot token on the host, one fake "Bot API" per guest.
 
-The guest bot's real token lives only here (``agentdeck-guests/.env``). This process
+The guest bot's real token lives only here (``guests/.env``, GUEST_BOT_TOKEN). This process
 long-polls Telegram, gives each update to the guest whose Telegram ID sent it, and
 serves every guest sandbox a Bot API of its own at ``http://<relay>/bot<pass>/<method>``
 (the sandbox's AgentDeck bridge points TG_BRIDGE_API_BASE here and uses its turnstile
@@ -34,7 +34,9 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parent / "turnstile"))
+import guestenv  # noqa: E402
 import turnstile as ts  # noqa: E402
 
 CHAT_METHODS = {
@@ -192,7 +194,7 @@ class KeeperClient:
             return False
 
 
-def web_text(info: Optional[Dict], welcome: bool) -> str:
+def web_text(info: Optional[Dict], welcome: bool, domain: Optional[str] = None) -> str:
     """What /start and /web tell a guest (Russian: the guests are)."""
     if not info:
         return "Адрес в браузере для вас ещё не готов — спросите владельца."
@@ -211,8 +213,9 @@ def web_text(info: Optional[Dict], welcome: bool) -> str:
                   f"После первого входа смените его на свой: {url}/change-password",
                   "(если вы его уже сменили — действует ваш)"]
     if welcome:
+        domain = domain or guestenv.domain() or "<домен>"
         lines += ["", "Файлы агент присылает интернет-ссылками; сайт можно опубликовать "
-                      "как <сайт>-<ваше имя>.reimake.com."]
+                      f"как <сайт>-<ваше имя>.{domain}."]
     return "\n".join(lines)
 
 
@@ -828,18 +831,24 @@ def poll_forever(relay: Relay, api: TelegramAPI) -> None:
 
 
 def _env_value(key: str) -> Optional[str]:
-    env = HERE.parent / ".env"
-    for line in env.read_text(encoding="utf-8").splitlines():
-        if line.startswith(f"{key}="):
-            return line.split("=", 1)[1].strip().strip("'\"")
-    return None
+    return guestenv.get(key)
 
 
 def _bot_token() -> str:
     token = _env_value("GUEST_BOT_TOKEN")
     if not token:
-        raise SystemExit(f"GUEST_BOT_TOKEN not found in {HERE.parent / '.env'}")
+        raise SystemExit(f"GUEST_BOT_TOKEN not found in {guestenv.env_file()}")
     return token
+
+
+def dashboard_info(name: str, data: Path, sites: Path) -> Optional[Dict]:
+    """sb-<name>.<domain> and its first password, once guestctl web has opened it."""
+    domain = guestenv.domain()
+    if not domain or not (Path(sites) / f"sb-{name}.{domain}.conf").exists():
+        return None
+    pw_file = Path(data) / f"{name}.dashboard-password"
+    return {"url": f"https://sb-{name}.{domain}",
+            "password": pw_file.read_text().strip() if pw_file.exists() else None}
 
 
 def main() -> int:
@@ -848,11 +857,7 @@ def main() -> int:
     api = TelegramAPI(_bot_token(), log=lambda line: print(line, file=sys.stderr, flush=True))
 
     def info_for(name: str) -> Optional[Dict]:
-        if not (HERE.parent / "nginx" / "sites" / f"sb-{name}.reimake.com.conf").exists():
-            return None
-        pw_file = data / f"{name}.dashboard-password"
-        return {"url": f"https://sb-{name}.reimake.com",
-                "password": pw_file.read_text().strip() if pw_file.exists() else None}
+        return dashboard_info(name, data, HERE.parent / "nginx" / "sites")
 
     def keeper_base(name: str) -> Optional[str]:
         try:

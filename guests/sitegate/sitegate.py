@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Site gate — a guest publishes a site from its sandbox as <site>-<guest>.reimake.com.
+"""Site gate — a guest publishes a site from its sandbox as <site>-<guest>.<domain>.
 
 The guest's agent calls (from inside its sandbox, with its turnstile pass):
 
@@ -12,6 +12,10 @@ The host then creates the DNS record (Cloudflare, proxied), an nginx vhost that 
 ONLY to that guest's sandbox address and port, a Let's Encrypt certificate, and tells
 the owner in Telegram. A guest can have MAX_SITES sites and remove only its own.
 Names and ports are validated before they reach a command line or a config file.
+
+Settings (guests/.env, see guestenv.py): GUESTS_DOMAIN, SERVER_IP (else detected),
+CF_TOKEN_FILE (default ~/.cf_token; without it DNS is left to a wildcard record),
+CF_ZONE (default GUESTS_DOMAIN).
 """
 
 from __future__ import annotations
@@ -23,19 +27,22 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "turnstile"))
+import guestenv  # noqa: E402
 import turnstile as ts  # noqa: E402
 
-DOMAIN = "reimake.com"
 MAX_SITES = 3
 SITE_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$")
-SERVER_IP = os.environ.get("SITEGATE_SERVER_IP", "203.0.113.10")
+IPV4_RE = re.compile(r"^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$")
+IP_LOOKUPS = ("https://api.ipify.org", "https://ifconfig.me", "https://icanhazip.com")
 
 
 class GateError(Exception):
@@ -57,8 +64,56 @@ def validate_port(port) -> int:
     return value
 
 
+def _fetch(url: str) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": guestenv.USER_AGENT})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return resp.read(100).decode("ascii", "replace")
+
+
+def server_ip(fetch=_fetch) -> str:
+    """This server's public IPv4: SERVER_IP (guests/.env), else asked on the internet;
+    "" when unknown."""
+    ip = (guestenv.get("SERVER_IP") or os.environ.get("SITEGATE_SERVER_IP") or "").strip()
+    if ip:
+        return ip
+    for url in IP_LOOKUPS:
+        try:
+            answer = fetch(url).strip()
+        except Exception:  # noqa: BLE001 — try the next one
+            continue
+        if IPV4_RE.match(answer):
+            return answer
+    return ""
+
+
+def cf_token_file() -> Path:
+    return Path(guestenv.get("CF_TOKEN_FILE") or Path.home() / ".cf_token").expanduser()
+
+
+def cf_zone() -> str:
+    return guestenv.get("CF_ZONE") or guestenv.domain()
+
+
+def cloudflare_api(method: str, path: str, data: Optional[Dict] = None,
+                   timeout: float = 60) -> Dict:
+    """One Cloudflare API call (curl -4: this server's IPv6 route to it is unreliable)."""
+    token = cf_token_file().read_text().strip()
+    argv = ["curl", "-4", "-s", "--max-time", str(int(timeout)), "-X", method,
+            "-H", f"Authorization: Bearer {token}", "-H", "Content-Type: application/json",
+            f"https://api.cloudflare.com/client/v4/{path}"]
+    if data is not None:
+        argv += ["--data", json.dumps(data)]
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout + 10)
+    if r.returncode != 0:
+        raise RuntimeError(f"curl cloudflare: exit {r.returncode}")
+    return json.loads(r.stdout or "{}")
+
+
 def host_for(site: str, guest: str) -> str:
-    host = f"{site}-{guest}.{DOMAIN}"
+    domain = guestenv.domain()
+    if not domain:
+        raise GateError("сайты выключены: владелец не задал домен (GUESTS_DOMAIN)")
+    host = f"{site}-{guest}.{domain}"
     if len(host.split(".")[0]) > 63:
         raise ValueError("слишком длинное имя")
     return host
@@ -227,6 +282,7 @@ class RealOps:
     def __init__(self) -> None:
         self.VHOSTS.mkdir(parents=True, exist_ok=True)
         self._zone: Optional[str] = None
+        self._ip: Optional[str] = None
 
     @staticmethod
     def _run(*argv: str) -> str:
@@ -237,31 +293,38 @@ class RealOps:
         return r.stdout
 
     def _cf(self, method: str, path: str, data: Optional[Dict] = None) -> Dict:
-        token = (Path.home() / ".cf_token").read_text().strip()
-        argv = ["curl", "-4", "-s", "-X", method, "-H", f"Authorization: Bearer {token}",
-                "-H", "Content-Type: application/json",
-                f"https://api.cloudflare.com/client/v4/{path}"]
-        if data is not None:
-            argv += ["--data", json.dumps(data)]
-        res = json.loads(self._run(*argv) or "{}")
+        res = cloudflare_api(method, path, data)
         if not res.get("success"):
             raise RuntimeError(f"cloudflare: {res.get('errors')}")
         return res
 
     def _zone_id(self) -> str:
         if not self._zone:
-            self._zone = self._cf("GET", f"zones?name={DOMAIN}")["result"][0]["id"]
+            self._zone = self._cf("GET", f"zones?name={cf_zone()}")["result"][0]["id"]
         return self._zone
 
+    @staticmethod
+    def _dns_by_cloudflare() -> bool:
+        """No token file: DNS is the owner's wildcard record (*.<domain> -> this server)."""
+        return cf_token_file().exists()
+
     def dns_create(self, host: str) -> None:
+        if not self._dns_by_cloudflare():
+            return
         z = self._zone_id()
         if self._cf("GET", f"zones/{z}/dns_records?name={host}")["result"]:
             return
+        if self._ip is None:
+            self._ip = server_ip()
+        if not self._ip:
+            raise RuntimeError("this server's IP is unknown: set SERVER_IP in guests/.env")
         self._cf("POST", f"zones/{z}/dns_records", {
-            "type": "A", "name": host, "content": SERVER_IP, "proxied": True, "ttl": 1,
+            "type": "A", "name": host, "content": self._ip, "proxied": True, "ttl": 1,
             "comment": "AgentDeck guest site (sitegate)"})
 
     def dns_delete(self, host: str) -> None:
+        if not self._dns_by_cloudflare():
+            return
         z = self._zone_id()
         for rec in self._cf("GET", f"zones/{z}/dns_records?name={host}")["result"]:
             self._cf("DELETE", f"zones/{z}/dns_records/{rec['id']}")
@@ -292,10 +355,9 @@ class RealOps:
 
     def notify(self, text: str) -> None:
         try:
-            subprocess.run(["bash", "-c", 'source "$HOME/.immappeal-scheduled/lib_notify.sh"; tg "$1"',
-                            "_", text], timeout=30, capture_output=True)
-        except Exception:
-            pass
+            guestenv.notify_owner(text)
+        except Exception as exc:  # noqa: BLE001 — a site is up even if the owner isn't told
+            print(f"NOTIFY-FAILED {exc!r}", file=sys.stderr, flush=True)
 
 
 # --------------------------------------------------------------------------- #

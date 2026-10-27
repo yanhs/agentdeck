@@ -1,5 +1,5 @@
 """Site gate: a guest's agent asks to publish a site from its sandbox; the host
-creates <site>-<guest>.reimake.com (DNS, nginx, certificate) pointing at that
+creates <site>-<guest>.example.test (DNS, nginx, certificate) pointing at that
 sandbox only, and tells the owner. Server operations are faked here."""
 
 import json
@@ -88,34 +88,34 @@ class TestNames:
         with pytest.raises(ValueError):
             sg.validate_port(port)
 
-    def test_host_is_site_dash_guest_on_reimake(self):
-        assert sg.host_for("test", "anna") == "test-anna.reimake.com"
+    def test_host_is_site_dash_guest_on_the_domain(self):
+        assert sg.host_for("test", "anna") == "test-anna.example.test"
 
 
 class TestVhost:
     def test_https_vhost_points_only_at_the_guest_sandbox(self):
-        text = sg.render_vhost("test-anna.reimake.com", "172.31.250.11", 3000, tls=True)
-        assert "server_name test-anna.reimake.com;" in text
+        text = sg.render_vhost("test-anna.example.test", "172.31.250.11", 3000, tls=True)
+        assert "server_name test-anna.example.test;" in text
         assert "proxy_pass http://172.31.250.11:3000;" in text
-        assert "/etc/letsencrypt/live/test-anna.reimake.com/fullchain.pem" in text
+        assert "/etc/letsencrypt/live/test-anna.example.test/fullchain.pem" in text
         assert "Upgrade" in text  # websockets for dev servers
         assert "alias" not in text and " root /home" not in text
 
     def test_http_only_vhost_for_the_first_certificate(self):
-        text = sg.render_vhost("test-anna.reimake.com", "172.31.250.11", 3000, tls=False)
+        text = sg.render_vhost("test-anna.example.test", "172.31.250.11", 3000, tls=False)
         assert "acme-challenge" in text and "443" not in text
 
 
 class TestPublish:
     def test_publish_creates_dns_cert_vhost_and_tells_the_owner(self, gate, ops):
         res = gate.publish("anna", "test", 3000)
-        assert res["url"] == "https://test-anna.reimake.com"
+        assert res["url"] == "https://test-anna.example.test"
         kinds = [entry[0] for entry in ops.log]
         assert kinds.index("dns+") < kinds.index("cert+") < kinds.index("notify")
         final = [e for e in ops.log if e[0] == "vhost"][-1][2]
         assert "listen 443" in final and "172.31.250.11:3000" in final
         note = [e for e in ops.log if e[0] == "notify"][0][1]
-        assert "anna" in note and "test-anna.reimake.com" in note
+        assert "anna" in note and "test-anna.example.test" in note
 
     def test_republish_same_site_only_changes_the_port(self, gate, ops):
         gate.publish("anna", "test", 3000)
@@ -196,9 +196,9 @@ class TestHttp:
     def test_publish_list_unpublish(self, server, passes):
         p = passes["anna"]
         status, body = req(server, "POST", "/publish", p, {"site": "test", "port": 3000})
-        assert status == 200 and body["url"] == "https://test-anna.reimake.com"
+        assert status == 200 and body["url"] == "https://test-anna.example.test"
         status, body = req(server, "GET", "/sites", p)
-        assert [s["url"] for s in body["sites"]] == ["https://test-anna.reimake.com"]
+        assert [s["url"] for s in body["sites"]] == ["https://test-anna.example.test"]
         status, _ = req(server, "DELETE", "/publish/test", p)
         assert status == 200
 
@@ -206,3 +206,64 @@ class TestHttp:
         status, body = req(server, "POST", "/publish", passes["anna"],
                            {"site": "Bad Name", "port": 3000})
         assert status == 400 and body["error"]
+
+
+# --------------------------------------------------------------------------- #
+# configuration: guests/.env instead of one server's names
+# --------------------------------------------------------------------------- #
+class TestConfig:
+    def test_domain_comes_from_the_settings(self, monkeypatch, tmp_path):
+        env = tmp_path / ".env"
+        env.write_text("GUESTS_DOMAIN=guests.example.org\n")
+        monkeypatch.setenv("GUESTS_ENV_FILE", str(env))
+        assert sg.host_for("test", "anna") == "test-anna.guests.example.org"
+
+    def test_without_a_domain_nothing_is_published(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("GUESTS_ENV_FILE", str(tmp_path / "none.env"))
+        with pytest.raises(sg.GateError):
+            sg.host_for("test", "anna")
+
+    def test_server_ip_from_the_settings(self, monkeypatch):
+        monkeypatch.setenv("SERVER_IP", "203.0.113.5")
+        assert sg.server_ip(fetch=lambda url: pytest.fail("no lookup when set")) == "203.0.113.5"
+
+    def test_server_ip_detected_when_not_set(self):
+        answers = {"https://api.ipify.org": "garbage", "https://ifconfig.me": "198.51.100.7\n"}
+
+        def fetch(url):
+            if url not in answers:
+                raise OSError("down")
+            return answers[url]
+        assert sg.server_ip(fetch=fetch) == "198.51.100.7"
+
+    def test_server_ip_unknown_is_empty(self):
+        def fetch(url):
+            raise OSError("offline")
+        assert sg.server_ip(fetch=fetch) == ""
+
+    def test_cloudflare_token_file_and_zone_are_configurable(self, monkeypatch, tmp_path):
+        token = tmp_path / "cf"
+        token.write_text("T\n")
+        monkeypatch.setenv("CF_TOKEN_FILE", str(token))
+        monkeypatch.setenv("CF_ZONE", "example.org")
+        assert sg.cf_token_file() == token
+        assert sg.cf_zone() == "example.org"
+        monkeypatch.delenv("CF_TOKEN_FILE")
+        monkeypatch.delenv("CF_ZONE")
+        assert sg.cf_token_file() == Path.home() / ".cf_token"
+        assert sg.cf_zone() == "example.test"            # = GUESTS_DOMAIN
+
+    def test_without_a_cloudflare_token_dns_is_left_to_a_wildcard(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CF_TOKEN_FILE", str(tmp_path / "no-token"))
+        monkeypatch.setattr(sg.RealOps, "VHOSTS", tmp_path / "sites")
+        ops = sg.RealOps()
+        monkeypatch.setattr(ops, "_run", lambda *a: pytest.fail(f"ran {a}"))
+        ops.dns_create("test-anna.example.test")       # no Cloudflare call, no error
+        ops.dns_delete("test-anna.example.test")
+
+    def test_owner_is_told_through_the_configured_channel(self, monkeypatch, tmp_path):
+        told = []
+        monkeypatch.setattr(sg.guestenv, "notify_owner", lambda text: told.append(text))
+        monkeypatch.setattr(sg.RealOps, "VHOSTS", tmp_path / "sites")
+        sg.RealOps().notify("hello")
+        assert told == ["hello"]

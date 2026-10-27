@@ -1,13 +1,18 @@
+# Template: guests/install.sh fills in @USER@ / @HOME@ / @GUESTS_DIR@ and writes it to
+# /etc/systemd/system. Settings come from @GUESTS_DIR@/.env (read by the program itself).
 [Unit]
-Description=AgentDeck guests: site gate (<site>-<guest>.reimake.com on request)
-After=network-online.target
+Description=AgentDeck guests: site gate (<site>-<guest>.<domain> on request)
+After=network-online.target docker.service sbx-firewall.service
+Wants=network-online.target
 
 [Service]
+User=@USER@
+Environment=HOME=@HOME@
 Environment=SITEGATE_BIND=172.31.250.1
 Environment=SITEGATE_PORT=8794
-ExecStart=/usr/bin/python3 -I /home/ubuntu/pr/agentdeck-guests/sitegate/sitegate.py
+ExecStart=/usr/bin/python3 -I "@GUESTS_DIR@/sitegate/sitegate.py"
 Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

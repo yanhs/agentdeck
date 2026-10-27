@@ -244,7 +244,7 @@ class TestHttp:
 # --------------------------------------------------------------------------- #
 # /start and /web: the guest learns its web address and password in Telegram
 # --------------------------------------------------------------------------- #
-INFO = {"anna": {"url": "https://sb-anna.reimake.com", "password": "pw-ANNA-1"}}
+INFO = {"anna": {"url": "https://sb-anna.example.test", "password": "pw-ANNA-1"}}
 
 
 @pytest.fixture
@@ -256,15 +256,15 @@ def _sent(tg):
     return [c for c in tg.calls if c[0] == "sendMessage"]
 
 
-@pytest.mark.parametrize("cmd", ["/start", "/web", "/web@Yanhs_guest_bot"])
+@pytest.mark.parametrize("cmd", ["/start", "/web", "/web@my_guest_bot"])
 def test_start_and_web_answer_with_address_and_password(info_relay, tg, cmd):
     info_relay.route(msg(ANNA, cmd, 30))
     assert info_relay.get_updates("anna", 0, 100, 0) == []   # handled here, not by the sandbox
     (method, params, _), = _sent(tg)
     assert params["chat_id"] == ANNA
-    assert "https://sb-anna.reimake.com" in params["text"]
+    assert "https://sb-anna.example.test" in params["text"]
     assert "pw-ANNA-1" in params["text"]
-    assert "https://sb-anna.reimake.com/change-password" in params["text"]
+    assert "https://sb-anna.example.test/change-password" in params["text"]
 
 
 def test_other_messages_still_go_to_the_sandbox(info_relay, tg):
@@ -504,3 +504,34 @@ def test_a_slow_keeper_does_not_hold_up_other_guests(book, tg, passes):
 def test_a_skipped_service_names_the_limit():
     text, _ = tr.services_view({"extra": {"state": "skipped", "limit": 20}})
     assert "extra" in text and "20" in text
+
+
+# --------------------------------------------------------------------------- #
+# configuration: guests/.env
+# --------------------------------------------------------------------------- #
+def test_welcome_names_the_configured_domain_for_sites():
+    text = tr.web_text({"url": "https://x"}, welcome=True)
+    assert "<сайт>-<ваше имя>.example.test" in text
+
+
+def test_dashboard_info_needs_the_web_address(tmp_path):
+    sites, data = tmp_path / "sites", tmp_path / "data"
+    sites.mkdir()
+    data.mkdir()
+    assert tr.dashboard_info("anna", data, sites) is None
+    (sites / "sb-anna.example.test.conf").write_text("x")
+    assert tr.dashboard_info("anna", data, sites) == {"url": "https://sb-anna.example.test",
+                                                       "password": None}
+    (data / "anna.dashboard-password").write_text("pw-1\n")
+    assert tr.dashboard_info("anna", data, sites)["password"] == "pw-1"
+
+
+def test_bot_token_comes_from_the_settings(monkeypatch, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("GUEST_BOT_TOKEN=1:T\n")
+    monkeypatch.setenv("GUESTS_ENV_FILE", str(env))
+    assert tr._bot_token() == "1:T"
+    monkeypatch.setenv("GUESTS_ENV_FILE", str(tmp_path / "none.env"))
+    with pytest.raises(SystemExit) as exc:
+        tr._bot_token()
+    assert "GUEST_BOT_TOKEN" in str(exc.value)

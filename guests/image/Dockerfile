@@ -1,10 +1,9 @@
-# Guest sandbox image = the AgentDeck sandbox image + the services keeper.
-# Build:  docker build -t agentdeck-guest:v1.9.0-svc --build-arg BASE=agentdeck-guest:v1.9.0 image/
-ARG BASE=agentdeck-guest:v1.9.0
+# Guest sandbox image = the AgentDeck image of the same version, nothing added: its
+# entrypoint already runs the services keeper (services_keeper.py, /work/.services) next
+# to the dashboard. A separate name keeps the guests' containers apart from your own
+# AgentDeck container and lets the guests module add to the image later.
+# guests/install.sh builds both:
+#   docker build -t agentdeck:<version> .
+#   docker build -t agentdeck-guest:<version> --build-arg BASE=agentdeck:<version> guests/image
+ARG BASE=agentdeck:latest
 FROM ${BASE}
-
-# keeper.py runs /work/.services/<name>.sh — programs that must outlive a terminal
-# (Tailscale, a site's server, a bot); HTTP :9876 serves their state to the host's bot.
-COPY keeper.py /opt/sbx/keeper.py
-COPY entrypoint.sh /opt/sbx/entrypoint.sh
-ENTRYPOINT ["bash", "/opt/sbx/entrypoint.sh"]

@@ -1,3 +1,4 @@
+# Template: guests/install.sh fills in @GUESTS_DIR@ and writes it to /etc/systemd/system.
 [Unit]
 Description=AgentDeck guests: sandbox network + firewall (re-applied by the timer)
 After=docker.service
@@ -5,4 +6,4 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash /home/ubuntu/pr/agentdeck-guests/net/sbx-firewall.sh
+ExecStart=/bin/bash "@GUESTS_DIR@/net/sbx-firewall.sh"

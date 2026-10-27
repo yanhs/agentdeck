@@ -383,3 +383,10 @@ class TestSpendWatch:
         finally:
             server.shutdown()
         assert seen == ["maria"]
+
+
+def test_owner_alerts_go_through_the_configured_channel(monkeypatch):
+    told = []
+    monkeypatch.setattr(ts.guestenv, "notify_owner", lambda text: told.append(text))
+    ts.tg_notify("⚠️ x")
+    assert told == ["⚠️ x"]

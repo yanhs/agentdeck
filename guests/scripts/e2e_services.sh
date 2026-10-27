@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # End-to-end check of sandbox services on a THROWAWAY guest (default "probe"):
 # a real container from the new image, the real sandbox network, the host's view.
-#   scripts/e2e_services.sh [name]        KEEP=1 — leave the guest for a look afterwards
-# Prints PASS/FAIL per check; exit code = number of failures.
+#   scripts/e2e_services.sh [probe-name]  KEEP=1 — leave the guest for a look afterwards
+# Prints PASS/FAIL per check; exit code = number of failures. The guest's name must start
+# with "probe" (a real guest is never touched). IMG=<image> — default: this version's.
 set -uo pipefail
-G="${1:-probe}"; C="sbx-$G"; IMG="${IMG:-agentdeck-guest:v1.9.0-svc}"
+G="${1:-probe}"; C="sbx-$G"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$HERE"
+IMG="${IMG:-$(python3 guestctl.py image-tag)}"
 PASS=0; FAIL=0
 ok()  { echo "PASS  $*"; PASS=$((PASS+1)); }
 bad() { echo "FAIL  $*"; FAIL=$((FAIL+1)); }
@@ -25,7 +27,7 @@ port_closed() { ! x curl -s -o /dev/null --max-time 1 "localhost:$1/"; }
 restarted() { local r; r="$(field "$1" restarts)"; [ "$r" != None ] && [ "$r" -ge 1 ] 2>/dev/null; }
 pid_changed() { local p; p="$(field "$1" pid)"; [ -n "$p" ] && [ "$p" != None ] && [ "$p" != "$2" ]; }
 
-case "$G" in yan|g222222222) echo "refusing: $G is a real guest"; exit 99 ;; esac
+case "$G" in probe*) ;; *) echo "refusing: $G is not a throwaway probe-* guest"; exit 99 ;; esac
 
 # 0. the throwaway guest (Telegram id 1 = nobody; no Claude calls are made)
 if ! docker inspect "$C" >/dev/null 2>&1; then
@@ -90,7 +92,7 @@ waitfor 10 is web state running && ok "start -> running" || bad "start"
 # 6. the keeper itself is killed hard (as by the OOM killer): it comes back and the
 #    service does NOT run twice (a SIGTERM would let it stop its services itself)
 waitfor 10 http_up 8080
-KP="$(x ps -eo pid=,args= | awk '$2=="python3" && $3=="/opt/sbx/keeper.py" {print $1}')"
+KP="$(x ps -eo pid=,args= | awk '$2=="python3" && $3=="services_keeper.py" {print $1}')"
 OLDWEB="$(field web pid)"
 if [ -n "$KP" ]; then
   x kill -9 "$KP"
