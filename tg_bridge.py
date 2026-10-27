@@ -2047,6 +2047,65 @@ async def cmd_esc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⎋ Escape ×2 (interrupt)")
 
 
+_RESTART_REASONS = {
+    "not-loaded": "the terminal isn't running: just write to it and it starts by itself",
+    "archived": "it is archived: restore it first (/archive)",
+    "trashed": "it is in the trash: restore it on the page first",
+    "elsewhere": "this conversation is open in another terminal right now",
+    "changed": "the terminal just switched conversations: try again",
+}
+
+
+def _restart_error(e: Exception) -> str:
+    reason = (getattr(e, "extra", None) or {}).get("reason")
+    return "⟳ Not restarted: " + _RESTART_REASONS.get(reason, str(e))
+
+
+async def _do_restart(send, sid: str, force: bool) -> None:
+    try:
+        await asyncio.to_thread(ss.lib_restart, sid, force)
+    except ss.LibError as e:
+        await send(_restart_error(e))
+        return
+    log.info("RESTART %s force=%s", sid, force)
+    await send("⟳ Restarted: Claude started anew on the same conversation, you can write.")
+
+
+async def cmd_restart(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/restart — the ⟳ of the page: unload the current terminal and load it again
+    (claude starts anew on the same conversation). A busy terminal asks first."""
+    cur = resolve_current(update.effective_chat.id)
+    if not cur:
+        await update.message.reply_text(NEED_PICK); return
+    try:
+        busy = (await asyncio.to_thread(ss.lib_restart, cur, False, True) or {}).get("busy")
+    except ss.LibError as e:
+        await update.message.reply_text(_restart_error(e)); return
+    if busy:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "⟳ Restart anyway", callback_data=f"rst:{cur}")]])
+        await update.message.reply_text(
+            f"Claude is working right now ({busy}). A restart cuts the current answer off; "
+            "the conversation itself is kept.", reply_markup=kb)
+        return
+    await _do_restart(update.message.reply_text, cur, force=False)
+
+
+async def on_restart_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    user = getattr(update, "effective_user", None)
+    if user is not None and getattr(user, "id", OWNER_ID) != OWNER_ID:
+        return
+    sid = (q.data or "").split(":", 1)[-1]
+    if not library.valid_id(sid):
+        return
+
+    async def send(text, **k):
+        await q.edit_message_text(text, **k)
+    await _do_restart(send, sid, force=True)
+
+
 async def cmd_enter(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     s = _require_session(update)
     if not s:
@@ -2311,6 +2370,7 @@ BOT_COMMANDS = [
     BotCommand("esc", "interrupt Claude (Escape)"),
     BotCommand("enter", "send Enter"),
     BotCommand("compact", "compact Claude's conversation (/compact)"),
+    BotCommand("restart", "restart the current terminal (same conversation, Claude starts anew)"),
 ]
 
 
@@ -2348,6 +2408,8 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("esc", cmd_esc, filters=owner))
     app.add_handler(CommandHandler("enter", cmd_enter, filters=owner))
     app.add_handler(CommandHandler("compact", cmd_compact, filters=owner))
+    app.add_handler(CommandHandler("restart", cmd_restart, filters=owner))
+    app.add_handler(CallbackQueryHandler(on_restart_cb, pattern=r"^rst:"))
     app.add_handler(CallbackQueryHandler(on_use_cb, pattern=r"^use:"))
     app.add_handler(CallbackQueryHandler(on_archive_cb, pattern=r"^arch:"))
     app.add_handler(CallbackQueryHandler(on_menu_select_cb, pattern=r"^msel:"))

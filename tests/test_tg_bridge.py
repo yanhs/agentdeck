@@ -2383,7 +2383,7 @@ def test_list_without_an_archive_does_not_point_to_it(world):
 
 def test_bot_commands_list_the_archive_in_menu_order_and_are_english():
     assert [c.command for c in tb.BOT_COMMANDS] == [
-        "use", "list", "archive", "new", "read", "esc", "enter", "compact"]
+        "use", "list", "archive", "new", "read", "esc", "enter", "compact", "restart"]
     got = {c.command: c.description for c in tb.BOT_COMMANDS}
     assert "archive" in got["archive"].lower()
     for d in got.values():
@@ -2783,3 +2783,67 @@ def test_use_number_of_a_trashed_migrated_topic_never_starts_the_old_slot(world,
     assert started == [] and world.ensured() == []
     assert tb.get_current(CHAT) != "6"
     assert "trash" in replies[-1][0]
+
+
+# ── /restart: restart the current terminal from Telegram (like ⟳ on the page) ──
+def _fake_restart(calls, busy=None, error=None):
+    def lib_restart(sid, force, check=False):
+        calls.append((sid, force, check))
+        if error is not None:
+            raise error
+        return {"busy": busy} if check else {"ok": True}
+    return lib_restart
+
+
+def test_restart_is_in_the_bot_menu():
+    assert "restart" in [c.command for c in tb.BOT_COMMANDS]
+
+
+def test_restart_without_a_pick_asks_to_pick_one(world, monkeypatch):
+    calls = []
+    monkeypatch.setattr(tb.ss, "lib_restart", _fake_restart(calls))
+    sink = run_cmd(tb.cmd_restart, [])
+    assert calls == []
+    assert sink and sink[-1][0] == tb.NEED_PICK
+
+
+def test_restart_restarts_an_idle_current_terminal(world, monkeypatch):
+    e = world.add("topic", uuid=U1)
+    tb.set_current(CHAT, e["id"])
+    calls = []
+    monkeypatch.setattr(tb.ss, "lib_restart", _fake_restart(calls))
+    sink = run_cmd(tb.cmd_restart, [])
+    assert (e["id"], False, True) in calls and (e["id"], False, False) in calls
+    assert "⟳" in sink[-1][0]
+
+
+def test_restart_asks_before_cutting_a_busy_terminal(world, monkeypatch):
+    e = world.add("topic", uuid=U1)
+    tb.set_current(CHAT, e["id"])
+    calls = []
+    monkeypatch.setattr(tb.ss, "lib_restart", _fake_restart(calls, busy="working"))
+    sink = run_cmd(tb.cmd_restart, [])
+    assert calls == [(e["id"], False, True)]          # only the check, nothing cut
+    text, markup = sink[-1][0], sink[-1][1]
+    assert "working" in text
+    data = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert f"rst:{e['id']}" in data
+
+
+def test_restart_button_forces_the_restart(world, monkeypatch):
+    e = world.add("topic", uuid=U1)
+    calls = []
+    monkeypatch.setattr(tb.ss, "lib_restart", _fake_restart(calls))
+    sink = run_cb(tb.on_restart_cb, f"rst:{e['id']}")
+    assert (e["id"], True, False) in calls
+    assert "⟳" in sink[-1][0]
+
+
+def test_restart_says_why_it_cannot(world, monkeypatch):
+    e = world.add("topic", uuid=U1)
+    tb.set_current(CHAT, e["id"])
+    calls = []
+    err = tb.ss.LibError(409, "it is not loaded: opening it starts Claude", reason="not-loaded")
+    monkeypatch.setattr(tb.ss, "lib_restart", _fake_restart(calls, error=err))
+    sink = run_cmd(tb.cmd_restart, [])
+    assert "isn't running" in sink[-1][0]
