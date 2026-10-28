@@ -15,6 +15,11 @@ jobs:
       - uses: actions/checkout@v5
       - run: python3 -m pip install --quiet pytest
       - run: python3 -m pytest -q tests/test_install_sh.py
+      # the safety guards on a machine with no claude, no AgentDeck and nothing of ours
+      - name: safety guards (signals, mail, secrets) and their install
+        run: >-
+          python3 -m pytest -q tests/test_install_guards.py tests/test_guard_kill.py
+          tests/test_guard_email.py tests/test_guard_secrets.py
 
   vm:
     name: install.sh on ${{ matrix.os }}

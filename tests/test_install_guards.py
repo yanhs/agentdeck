@@ -17,6 +17,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALL = os.path.join(REPO, "hooks", "install_guards.py")
 HOOKS = os.path.join(REPO, "hooks")
@@ -48,7 +50,9 @@ def commands(s, event=None):
     return out
 
 
-OURS = ("guard_task_board.py", "guard_dont_stop.py", "hold_on_timer.py")
+OURS = ("guard_task_board.py", "guard_dont_stop.py", "hold_on_timer.py",
+        "guard_kill.py", "guard_email.py", "guard_secrets.py")
+SAFETY_GUARDS = ("guard_kill.py", "guard_email.py", "guard_secrets.py")
 
 
 def guard_commands(s):
@@ -335,3 +339,110 @@ def test_installed_hold_command_writes_the_marker_for_the_panes_session(tmp_path
                                          "tool_input": {"delaySeconds": 300}}))
     assert r.returncode == 0, r.stderr
     assert (reg.parent / "hold-abcdef12").is_file()
+
+
+# ── 2.0.1: the safety guards ─────────────────────────────────────────────────
+def test_example_wires_the_safety_guards_before_every_bash_call():
+    """Words in CLAUDE.md get forgotten; these hold the same rules in code."""
+    ex = json.load(open(EXAMPLE))
+    bash = [c for g in ex["hooks"]["PreToolUse"] if g.get("matcher") == "Bash"
+            for c in [h["command"] for h in g["hooks"]]]
+    for name in SAFETY_GUARDS:
+        assert any(c.endswith("/hooks/" + name) for c in bash), name
+    # Monitor runs tool_input.command in a shell too
+    mon = [c for g in ex["hooks"]["PreToolUse"]
+           if "Monitor" in (g.get("matcher") or "").split("|")
+           for c in [h["command"] for h in g["hooks"]]]
+    assert any(c.endswith("/hooks/guard_kill.py") for c in mon)
+
+
+def test_install_remove_check_cover_the_safety_guards(tmp_path):
+    assert run(tmp_path).returncode == 0
+    cs = commands(settings(tmp_path), "PreToolUse")
+    for name in SAFETY_GUARDS:
+        hit = [c for c in cs if c.endswith("/" + name)]
+        assert hit and all(os.path.isfile(c.split()[-1]) for c in hit), name
+    assert run(tmp_path, "--check").returncode == 0
+    s = settings(tmp_path)
+    for g in s["hooks"]["PreToolUse"]:
+        g["hooks"] = [h for h in g["hooks"] if "guard_secrets.py" not in h["command"]]
+    (tmp_path / "settings.json").write_text(json.dumps(s))
+    assert run(tmp_path, "--check").returncode == 1        # one missing: not installed
+    run(tmp_path, "--remove")
+    assert not (tmp_path / "settings.json").exists() or not any(
+        n in (tmp_path / "settings.json").read_text() for n in SAFETY_GUARDS)
+
+
+def _project(tmp_path, names, local=False):
+    """A work folder whose own .claude/settings*.json already runs guards of these names."""
+    work = tmp_path / "work"
+    (work / ".claude").mkdir(parents=True, exist_ok=True)
+    hooks = [{"type": "command", "command": f"python3 {work}/.claude/hooks/{n}"} for n in names]
+    f = work / ".claude" / ("settings.local.json" if local else "settings.json")
+    f.write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": hooks}]}}))
+    return work
+
+
+def _cmdline(pid):
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            return f.read()
+    except OSError:                                       # gone, or not ours to read
+        return b""
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_a_guard_the_work_folder_already_runs_is_not_added_twice(tmp_path, local):
+    """A server whose own project settings (the agents' work folder) already run a
+    guard_kill.py / guard_email.py of their own: two copies of one guard would block the
+    same command twice. Ours is left out; everything else goes in, and --check is happy."""
+    work = _project(tmp_path, ["guard_kill.py", "guard_email.py"], local=local)
+    r = run(tmp_path, "--services-dir", str(work / ".services"))
+    assert r.returncode == 0, r.stderr
+    cs = commands(settings(tmp_path))
+    assert not any("guard_kill.py" in c or "guard_email.py" in c for c in cs)
+    assert any(c.endswith("/guard_secrets.py") for c in cs)
+    assert any("guard_task_board.py" in c for c in cs)
+    assert "guard_kill.py" in r.stdout + r.stderr                  # says what it left out
+    assert run(tmp_path, "--check", "--services-dir", str(work / ".services")).returncode == 0
+    # the explicit --workdir wins over the one derived from --services-dir
+    other = tmp_path / "elsewhere"
+    run(tmp_path, "--services-dir", str(work / ".services"), "--workdir", str(other))
+    assert any("guard_kill.py" in c for c in commands(settings(tmp_path)))
+
+
+def test_without_a_work_folder_every_guard_goes_in(tmp_path):
+    _project(tmp_path, ["guard_kill.py"])
+    run(tmp_path)                                         # no --services-dir / --workdir
+    assert any("guard_kill.py" in c for c in commands(settings(tmp_path)))
+
+
+def test_installed_kill_guard_blocks_a_pattern_kill_that_hits_others(tmp_path):
+    """End to end through the installed command: `pkill -f` whose pattern matches a process
+    outside the caller's tree is blocked, and nothing is signalled (the guard only reads)."""
+    import signal
+    import time
+    import uuid
+    mark = "adck-victim-" + uuid.uuid4().hex[:8]
+    # outside our tree: setsid -f forks twice and the parent exits, so it goes to init
+    subprocess.run(["setsid", "-f", "bash", "-c", f"exec -a {mark} sleep 300"], check=True)
+    pid = None
+    for _ in range(100):
+        pid = next((int(d) for d in os.listdir("/proc")
+                    if d.isdigit() and _cmdline(d).startswith(mark.encode())), None)
+        if pid:
+            break
+        time.sleep(0.05)
+    assert pid, "the victim did not start"
+    try:
+        run(tmp_path)
+        cmd = next(c for c in commands(settings(tmp_path), "PreToolUse")
+                   if c.endswith("/guard_kill.py"))
+        payload = {"tool_name": "Bash", "cwd": str(tmp_path),
+                   "tool_input": {"command": f"pkill -f '{mark}|nothing'"}}
+        r = subprocess.run(["sh", "-c", cmd], input=json.dumps(payload), capture_output=True,
+                           text=True, timeout=30)
+        assert r.returncode == 2 and "BLOCKED" in r.stderr, r.stderr
+        assert os.path.exists(f"/proc/{pid}")              # still alive
+    finally:
+        os.kill(pid, signal.SIGKILL)                      # the PID we saved

@@ -482,3 +482,25 @@ def test_the_seed_program_writes_each_rule_once(tmp_path):
     assert md == expected
     bridge = json.loads((tmp_path / "app" / ".sessions" / "telegram.json").read_text())
     assert bridge == {"enabled": True, "token": "sbx-PASS", "owner": 42}
+
+
+def test_the_sandbox_knows_the_servers_public_ip():
+    """guard_secrets in the sandbox blocks a commit with the server's IP; inside Docker
+    the interfaces are private, so the host hands its public IPs in."""
+    argv = gc.container_args("anna", port=1, secret="s", password="p", image="i",
+                             public_key="k", public_ips="203.0.113.7")
+    env = dict(e.split("=", 1) for e in pairs(argv, "-e"))
+    assert env["AGENTDECK_PUBLIC_IPS"] == "203.0.113.7"
+    argv = gc.container_args("anna", port=1, secret="s", password="p", image="i",
+                             public_key="k", public_ips="")
+    assert not any(e.startswith("AGENTDECK_PUBLIC_IPS=") for e in pairs(argv, "-e"))
+
+
+def test_host_public_ips_come_from_the_secrets_guard(monkeypatch):
+    import types
+    fake = types.SimpleNamespace(discover_global_ipv4=lambda: {"203.0.113.9", "203.0.113.7"})
+    monkeypatch.setitem(sys.modules, "guard_secrets", fake)
+    assert gc.host_public_ips() == "203.0.113.7,203.0.113.9"
+    broken = types.SimpleNamespace(discover_global_ipv4=lambda: 1 / 0)
+    monkeypatch.setitem(sys.modules, "guard_secrets", broken)
+    assert gc.host_public_ips() == ""                     # never stops a guest's sandbox

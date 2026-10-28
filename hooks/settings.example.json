@@ -5,7 +5,10 @@
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_task_board.py" },
-          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_dont_stop.py" }
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_dont_stop.py" },
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_kill.py" },
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_email.py" },
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_secrets.py" }
         ]
       },
       {
@@ -18,6 +21,12 @@
         "matcher": "CronCreate|ScheduleWakeup|Monitor|Agent|Task",
         "hooks": [
           { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_dont_stop.py" }
+        ]
+      },
+      {
+        "matcher": "Monitor",
+        "hooks": [
+          { "type": "command", "command": "python3 /path/to/agentdeck/hooks/guard_kill.py" }
         ]
       }
     ],

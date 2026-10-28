@@ -25,6 +25,16 @@ that is not valid JSON is left untouched (with a warning) — never overwritten.
   --services-dir PATH    with --claude-md: the services rule (programs that outlive a
                          terminal go there); appended once to an existing CLAUDE.md too
 
+  --workdir DIR          the agents' work folder (default: the parent of --services-dir)
+
+The safety guards (2.0.1): guard_kill.py (signals only to your own process tree),
+guard_email.py (mail to people only with a visible SEND_APPROVED=1), guard_secrets.py
+(no keys, tokens or this machine's IP in a git commit or push).
+
+A guard the work folder's own .claude/settings.json or settings.local.json already runs
+(a hook command with the same file name) is left out: the agents run there and would get
+both, and one command blocked twice. --check counts it as installed.
+
 The Docker entrypoint runs this on every start (opt-out: AGENTDECK_GUARDS=0).
 """
 import argparse
@@ -35,7 +45,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-GUARDS = ("guard_task_board.py", "guard_dont_stop.py", "hold_on_timer.py")
+GUARDS = ("guard_task_board.py", "guard_dont_stop.py", "hold_on_timer.py",
+          "guard_kill.py", "guard_email.py", "guard_secrets.py")
 
 CLAUDE_MD = """\
 # Working rules (AgentDeck)
@@ -113,16 +124,39 @@ When you add, stop or remove a service, tell the user in one line what and why.
 """
 
 
-def template(hooks_dir: str, tracker_state: str) -> dict:
+def template(hooks_dir: str, tracker_state: str, skip=()) -> dict:
+    """The example's hooks with real paths; guards named in `skip` left out."""
     with open(os.path.join(HERE, "settings.example.json")) as f:
         hooks = json.load(f)["hooks"]
     prefix = f"TRACKER_STATE={shlex.quote(tracker_state)} " if tracker_state else ""
-    for groups in hooks.values():
+    out = {}
+    for event, groups in hooks.items():
         for g in groups:
+            hs = []
             for h in g["hooks"]:
+                if os.path.basename(h["command"].split()[-1]) in skip:
+                    continue
                 cmd = h["command"].replace("/path/to/agentdeck/hooks", hooks_dir)
-                h["command"] = prefix + cmd
-    return hooks
+                hs.append(dict(h, command=prefix + cmd))
+            if hs:
+                out.setdefault(event, []).append(dict(g, hooks=hs))
+    return out
+
+
+def present_in_project(workdir: str, hooks_dir: str) -> set:
+    """Our guard names that the work folder's own Claude settings already run."""
+    found = set()
+    for name in ("settings.json", "settings.local.json"):
+        data, ok = load(os.path.join(workdir, ".claude", name)) if workdir else ({}, True)
+        hooks = (data or {}).get("hooks") if ok else None
+        if not isinstance(hooks, dict):
+            continue
+        for event in hooks:
+            for cmd in _commands(hooks, event):
+                for g in GUARDS:
+                    if g in cmd and os.path.join(hooks_dir, g) not in cmd:
+                        found.add(g)
+    return found
 
 
 def is_ours(cmd: str, hooks_dir: str) -> bool:
@@ -168,11 +202,11 @@ def _commands(hooks: dict, event: str) -> list:
             for h in (g.get("hooks") or []) if isinstance(h, dict)]
 
 
-def installed(data: dict, hooks_dir: str) -> bool:
+def installed(data: dict, hooks_dir: str, skip=()) -> bool:
     """True only when every hook of the set is present under its event — an older
     install missing one (e.g. hold_on_timer) reads as not installed."""
     have = data.get("hooks") or {}
-    want = template(hooks_dir, "")
+    want = template(hooks_dir, "", skip)
     for event, groups in want.items():
         cmds = _commands(have, event)
         for g in groups:
@@ -200,15 +234,18 @@ def main(argv=None) -> int:
     ap.add_argument("--claude-md", default="")
     ap.add_argument("--tracker", default=os.path.join(REPO, "tasks-dashboard", "tracker.py"))
     ap.add_argument("--services-dir", default="")
+    ap.add_argument("--workdir", default="")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--remove", action="store_true")
     mode.add_argument("--check", action="store_true")
     a = ap.parse_args(argv)
     hooks_dir = os.path.abspath(a.hooks_dir)
+    workdir = a.workdir or (os.path.dirname(a.services_dir.rstrip("/")) if a.services_dir else "")
+    skip = present_in_project(workdir, hooks_dir)
 
     data, ok = load(a.settings)
     if a.check:
-        return 0 if ok and installed(data, hooks_dir) else 1
+        return 0 if ok and installed(data, hooks_dir, skip) else 1
     if not ok:
         print(f"[agentdeck] {a.settings} is not valid JSON; guard hooks left unchanged",
               file=sys.stderr)
@@ -217,8 +254,10 @@ def main(argv=None) -> int:
     had_file = os.path.exists(a.settings)
     hooks = strip_ours(data.get("hooks") or {}, hooks_dir)
     if not a.remove:
-        for event, groups in template(hooks_dir, a.tracker_state).items():
+        for event, groups in template(hooks_dir, a.tracker_state, skip).items():
             hooks.setdefault(event, []).extend(groups)
+        for g in sorted(skip):
+            print(f"[agentdeck] {g}: {workdir}/.claude already runs one; not added again")
     new = dict(data)
     if hooks:
         new["hooks"] = hooks

@@ -157,9 +157,20 @@ def new_public_key(name: str) -> str:
     return f"{name}-{secrets.token_urlsafe(16)}"
 
 
+def host_public_ips() -> str:
+    """This server's public IPv4s, for guard_secrets inside the sandbox (whose own
+    interfaces are private). From hooks/guard_secrets.py; any trouble -> none."""
+    try:
+        sys.path.insert(0, str(HERE.parent / "hooks"))
+        import guard_secrets
+        return ",".join(sorted(guard_secrets.discover_global_ipv4()))
+    except Exception:
+        return ""
+
+
 def container_args(name: str, port: int, secret: str, password: str, image: str,
                    public_key: str, memory: str = "4g", cpus: str = "2",
-                   pids: int = 4096, ip: str = "") -> list:
+                   pids: int = 4096, ip: str = "", public_ips=None) -> list:
     if not ts.NAME_RE.match(name):
         raise ValueError(f"bad guest name {name!r}")
     argv = [
@@ -189,6 +200,9 @@ def container_args(name: str, port: int, secret: str, password: str, image: str,
         # the sbx network has inter-container traffic off)
         "SERVICES_BIND": "0.0.0.0",
     }
+    public_ips = host_public_ips() if public_ips is None else public_ips
+    if public_ips:  # a commit with the server's IP is blocked in the sandbox too
+        env["AGENTDECK_PUBLIC_IPS"] = public_ips
     for key, value in env.items():
         argv += ["-e", f"{key}={value}"]
     for volume, target in (("claude", "/root/.claude"), ("sessions", "/app/.sessions"),
