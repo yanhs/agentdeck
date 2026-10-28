@@ -7,18 +7,21 @@ key and every hook the user added, and never overwrite a file it cannot parse.
 
 Also installs a short default ~/.claude/CLAUDE.md telling agents how to use the board —
 only when none exists.
+
+The default CLAUDE.md is read by every agent on every turn, so it stays short: under
+MAX_MD_LINES. The limit was 40 until 2.0.1, when the owner asked for the safety rules
+(secrets, signals, asking first) to go in too; short is still the goal.
 """
 import json
 import os
 import subprocess
 import sys
 
-import pytest
-
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALL = os.path.join(REPO, "hooks", "install_guards.py")
 HOOKS = os.path.join(REPO, "hooks")
 EXAMPLE = os.path.join(HOOKS, "settings.example.json")
+MAX_MD_LINES = 60
 
 
 def run(tmp_path, *args, env=None):
@@ -151,7 +154,7 @@ def test_claude_md_written_only_when_missing(tmp_path):
     assert "add-item" in text and "set-task" in text and " set " in text
     assert "run_in_background" in text or "background" in text
     assert "ScheduleWakeup" in text or "timer" in text
-    assert text.isascii() and len(text.splitlines()) < 40
+    assert text.isascii() and len(text.splitlines()) < MAX_MD_LINES
     md.write_text("my own rules\n")
     run(tmp_path, "--claude-md", str(md))
     assert md.read_text() == "my own rules\n"
@@ -166,7 +169,7 @@ def test_a_new_claude_md_tells_the_agents_about_services(tmp_path):
     text = md.read_text()
     assert "/work/.services/<name>.sh" in text and "localhost:9876" in text
     assert "tell the user" in text
-    assert text.isascii() and len(text.splitlines()) < 40
+    assert text.isascii() and len(text.splitlines()) < MAX_MD_LINES
     assert "tracker.py add-task" in text                  # the board part is still there
 
 
@@ -207,6 +210,48 @@ def test_a_claude_md_agentdeck_wrote_earlier_gets_the_environment_note_once(tmp_
     text = md.read_text()
     assert text.startswith("# Working rules (AgentDeck)\n")
     assert text.count("<!-- agentdeck-environment -->") == 1
+
+
+SAFETY_MARK = "<!-- agentdeck-safety -->"
+
+
+def test_a_new_claude_md_carries_the_safety_rules(tmp_path):
+    """28.10.2026: an agent committed a server's IP and Telegram ids into a public repo.
+    Every agent is told what never happens without the person."""
+    md = tmp_path / "CLAUDE.md"
+    r = run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    assert r.returncode == 0, r.stderr
+    text = md.read_text()
+    assert text.count(SAFETY_MARK) == 1
+    safety = " ".join(text.split(SAFETY_MARK, 1)[1].split())     # lines wrap anywhere
+    for words in ("never go into a commit", "git add -A", "made-up values",   # secrets
+                  "kill the PID you saved", "pkill -f", "killall",            # signals
+                  "Ask first", "force-push", "one action only",               # ask first
+                  "environment variables",                                    # don't print
+                  "reports its result",                                       # later jobs
+                  "on a copy", "you checked the result"):                     # risky, done
+        assert words in safety, words
+    assert text.isascii() and len(text.splitlines()) < MAX_MD_LINES
+    assert "tracker.py add-task" in text and "<!-- agentdeck-environment -->" in text
+
+
+def test_a_claude_md_agentdeck_wrote_earlier_gets_the_safety_rules_once(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Working rules (AgentDeck)\n\n## Put multi-step work on the task board\n")
+    for _ in range(2):
+        run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    text = md.read_text()
+    assert text.startswith("# Working rules (AgentDeck)\n")
+    assert text.count(SAFETY_MARK) == 1
+    assert text.count("<!-- agentdeck-environment -->") == 1
+
+
+def test_a_persons_own_claude_md_gets_no_safety_rules(tmp_path):
+    """Their rules are theirs: only the services rule is appended (with its own mark)."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("my own rules\n")
+    run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    assert SAFETY_MARK not in md.read_text()
 
 
 def test_remove_never_touches_claude_md(tmp_path):

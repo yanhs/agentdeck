@@ -19,6 +19,8 @@ that is not valid JSON is left untouched (with a warning) — never overwritten.
   --hooks-dir DIR        where the guard scripts live (default: this folder)
   --tracker-state PATH   bake TRACKER_STATE=PATH into the hook commands
   --claude-md PATH       also write a short default CLAUDE.md there, only if none exists
+                         (the board, where agents run, the safety rules); a CLAUDE.md
+                         AgentDeck wrote earlier gets the newer blocks once, by their mark
   --tracker PATH         tracker.py path shown in that CLAUDE.md
   --services-dir PATH    with --claude-md: the services rule (programs that outlive a
                          terminal go there); appended once to an existing CLAUDE.md too
@@ -72,6 +74,30 @@ conversation; restart or reopening after an idle unload resumes it (claude --res
 A new terminal is a new conversation and sees no other: keep shared facts in files or memory.
 """
 AGENTDECK_HEADER = "# Working rules (AgentDeck)"
+
+# What never happens without the person. 28.10.2026 an agent committed a server's IP and
+# Telegram ids into a public repo; 26.09 a `pkill -f` pattern closed every terminal. The
+# guard hooks (guard_secrets, guard_kill, guard_email) hold the same lines in code.
+SAFETY_MARK = "<!-- agentdeck-safety -->"
+SAFETY_MD = """\
+{mark}
+## Safety: what never happens without the person
+- Secrets and personal data (keys, tokens, passwords, IP addresses, phone numbers, user ids)
+  never go into a commit, a public file or a link. Add files by name (never `git add -A` or
+  `git add .`), read the diff before a push, use made-up values in tests.
+- Signals only to processes you started: kill the PID you saved. Never `pkill -f` or
+  `killall` by name: a pattern can match the terminals' tmux server and close them all.
+- Ask first: deleting what you did not create, force-push or rewriting pushed history,
+  dropping data, anything sent to other people (mail, messages, posts). A yes covers that
+  one action only.
+- Don't print environment variables or config files that hold secrets: name the key only.
+- A job that runs later without you (timer, cron, scheduled send) reports its result to
+  the person, success and failure alike.
+- Try risky changes on a copy, never on the live system. "Done" means you checked the
+  result, not that the command finished.
+"""
+# Blocks that go into AgentDeck's own CLAUDE.md (new, or written by AgentDeck earlier), once.
+OWN_BLOCKS = ((ENV_MARK, ENV_MD), (SAFETY_MARK, SAFETY_MD))
 
 SERVICES_MARK = "<!-- agentdeck-services -->"
 SERVICES_MD = """\
@@ -207,11 +233,12 @@ def main(argv=None) -> int:
             f.write(CLAUDE_MD.format(tracker=a.tracker))
     if a.claude_md and not a.remove and os.path.exists(a.claude_md):
         # once, and only into the file AgentDeck wrote — a person's own CLAUDE.md is theirs
-        text = open(a.claude_md).read()
-        if text.startswith(AGENTDECK_HEADER) and ENV_MARK not in text:
-            with open(a.claude_md, "a") as f:
-                f.write(("\n" if not text.endswith("\n\n") else "")
-                        + ENV_MD.format(mark=ENV_MARK))
+        for mark, block in OWN_BLOCKS:
+            text = open(a.claude_md).read()
+            if text.startswith(AGENTDECK_HEADER) and mark not in text:
+                with open(a.claude_md, "a") as f:
+                    f.write(("\n" if not text.endswith("\n\n") else "")
+                            + block.format(mark=mark))
     if a.claude_md and a.services_dir and not a.remove:
         # once, also into the user's own CLAUDE.md (keep the mark line to opt out)
         text = open(a.claude_md).read() if os.path.exists(a.claude_md) else ""
