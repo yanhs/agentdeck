@@ -2,6 +2,14 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## v2.0.2 — Test first
+
+### Agents
+- **Agents write the test before the code.** AgentDeck's `~/.claude/CLAUDE.md` gets a short "Test first" block (marked `<!-- agentdeck-tdd -->`; added once to a file AgentDeck wrote earlier, a CLAUDE.md of your own is never touched): every code change starts with a test that fails for the right reason, then the code that makes it pass, then the whole test suite, and the result is shown before "done"; a bug fix starts with a test that reproduces the bug; if a change breaks an existing test, the change is fixed, not the test. Docs, config values and one-off commands are exempt. To opt out, delete the block but keep its mark line — it is not added back.
+
+### Upgrading
+- `install.sh`: run it again (or `git pull` and `./install.sh`). Docker: `git pull && docker compose up -d --build`. The CLAUDE.md is read when Claude starts, so the rule applies to terminals started (or restarted with ⟳) after the update.
+
 ## v2.0.1 — Safety rules, held in code
 
 ### Agents

@@ -16,6 +16,11 @@
 
 ![AgentDeck: many Claude Code agents in one dashboard, a task board per terminal, what uses your server, from your phone and from Telegram](docs/demo.gif)
 
+## 🆕 What's new in 2.0.2 — test first
+
+Agents are now told to start every code change with a test that fails, and a bug fix with
+a test that reproduces the bug — see [Safety](#-safety-what-agents-never-do-without-you).
+
 ## 🆕 What's new in 2.0.1 — safety rules, held in code
 
 Agents now get a short list of things that never happen without you — no secrets or
@@ -258,6 +263,13 @@ marked `<!-- agentdeck-safety -->`; a CLAUDE.md of your own is never touched):
 - A job that runs later without the agent (a timer, cron) reports its result to you —
   success and failure alike.
 - Risky changes are tried on a copy; "done" means the result was checked.
+
+**Test first** — a second block in the same file (marked `<!-- agentdeck-tdd -->`): every
+code change starts with a test that fails for the right reason, then the code, then the
+whole test suite, with the result shown before "done"; a bug fix starts with a test that
+reproduces the bug; a broken existing test means the change is fixed, not the test. Docs,
+config values and one-off commands are exempt. To drop it, delete the block and keep its
+mark line.
 
 **The guards** — Claude Code hooks that run before every shell command an agent runs.
 Each one blocks with a message saying what it found and what to do instead; each has a
