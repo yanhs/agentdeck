@@ -16,6 +16,14 @@
 
 ![AgentDeck: many Claude Code agents in one dashboard, a task board per terminal, what uses your server, from your phone and from Telegram](docs/demo.gif)
 
+## 🆕 What's new in 2.0.1 — safety rules, held in code
+
+Agents now get a short list of things that never happen without you — no secrets or
+personal data in a commit, signals only to their own processes, ask before deleting,
+force-pushing or sending anything to people — and three guard hooks hold the riskiest of
+them in code, so a forgetful agent is stopped rather than reminded. See
+[Safety: what agents never do without you](#-safety-what-agents-never-do-without-you).
+
 ## 🆕 What's new in 2.0
 
 **Services — programs that outlive a terminal.** An idle terminal is unloaded, and
@@ -225,8 +233,57 @@ on one VPS.
 - **Guard hooks — on by default in Docker and with `install.sh`.** Two Claude Code hooks
   keep agents on the task board: no edits before the work is on the board, no silent stop
   in the middle of a task. A third keeps a terminal loaded while it waits on its own timer.
+  Three more are safety guards: no signals to other people's processes, no mail without
+  your yes, no secrets in a commit — see [Safety](#-safety-what-agents-never-do-without-you).
   Opt out with `AGENTDECK_GUARDS=0`; with `./start.sh`, `AGENTDECK_GUARDS=1 ./start.sh`
   turns them on — see [Manual setup](#-manual-setup-without-docker).
+
+## 🔒 Safety: what agents never do without you
+
+An agent with a shell on your server can do in a second what takes you a day to undo:
+push a key into a public repo, close every terminal with one careless `pkill`, mail a
+client. AgentDeck tells its agents the rules, and holds the worst of them in code.
+
+**The rules** — part of the `~/.claude/CLAUDE.md` AgentDeck writes for its agents (a block
+marked `<!-- agentdeck-safety -->`; a CLAUDE.md of your own is never touched):
+
+- Secrets and personal data (keys, tokens, passwords, IP addresses, phone numbers, user
+  ids) never go into a commit, a public file or a link. Files are added by name, the diff
+  is read before a push, tests use made-up values.
+- Signals only to processes the agent started: it kills the PID it saved, never
+  `pkill -f` or `killall` by name.
+- Ask first: deleting what it did not create, force-push or rewriting pushed history,
+  dropping data, anything sent to other people. A yes covers that one action only.
+- No printing of environment variables or config files that hold secrets.
+- A job that runs later without the agent (a timer, cron) reports its result to you —
+  success and failure alike.
+- Risky changes are tried on a copy; "done" means the result was checked.
+
+**The guards** — Claude Code hooks that run before every shell command an agent runs.
+Each one blocks with a message saying what it found and what to do instead; each has a
+visible one-time override the agent must write into the command, so you see it in the
+conversation; and if a guard itself fails, it lets the command through rather than stop
+your work.
+
+| Guard | Stops | Override |
+|---|---|---|
+| `guard_kill.py` | a signal to a process outside the agent's own tree: `pkill`/`killall` patterns, `kill $(pgrep …)`, `xargs kill`, `tmux kill-server` on the terminals' tmux, `systemctl stop` of a unit that holds them. It works out who would be hit by running the read-only half (`pgrep` with the same pattern) and lists them. | `KILL_OK=1` |
+| `guard_email.py` | mail to people: `sendmail`, `mail`, `msmtp`, `smtplib`, the APIs of mail services (Resend, SendGrid, Mailgun, Postmark, Amazon SES…), also inside `docker exec`. Drafts and reading mail are free. | `SEND_APPROVED=1` — only after you saw the text, the sender and the recipient and said send |
+| `guard_secrets.py` | a `git commit` or `git push` that would publish a private key, a token of a known kind (Telegram bot, Anthropic, GitHub, AWS, Slack) or this server's public IP. It reads what is being committed (or the commits the remote doesn't have yet), shows the file and line with the value masked, and says how to take it out. | `SECRETS_OK=1` |
+
+Why these three: a `pkill -f` pattern with a `|` in it once matched the tmux server that
+hosts every terminal and closed them all; a mail sent from the wrong address can't be
+called back; and a server's IP and Telegram ids once went into a public repo in a test.
+
+What they can't see: a script run from a file (`bash x.sh`, `python3 send.py`) is not read,
+and a signal or a mail sent from inside a program isn't either. They are a seat belt, not a
+sandbox — for that, use the Docker install.
+
+`guard_secrets.py` finds the server's public IP from its network interfaces (no network
+request); inside Docker, where the interfaces are private, put the IP into
+`~/.claude/agentdeck-public-ips` (one per line) or `AGENTDECK_PUBLIC_IPS` — the guests
+module does it for every sandbox. If your project's own `.claude/settings.json` already runs
+a guard with the same file name, the installer doesn't add AgentDeck's copy.
 
 ## 📸 Screenshots
 
@@ -677,7 +734,8 @@ sessions.pm2.config.js   PM2 app for that ttyd
 idle_reaper.py           unloads idle terminals (cron, every minute)
 migrate_library.py       moves old numbered slots into the library
 hooks/hold_on_timer.py   Claude Code hook: a pending timer keeps its terminal loaded
-hooks/guard_*.py         Claude Code hooks: board before edits, no silent mid-task stop
+hooks/guard_*.py         Claude Code hooks: board before edits, no silent mid-task stop,
+                         signals only to your own processes, no mail or secrets without you
 status_server.py         login gate + library/status/buffer/paste APIs + Telegram page
 web/index.html           dashboard front-end
 tg_bridge.py             Telegram ⇄ tmux bridge

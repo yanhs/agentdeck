@@ -2,6 +2,25 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## v2.0.1 — Safety rules, held in code
+
+### Agents
+- **What never happens without you.** AgentDeck's `~/.claude/CLAUDE.md` gets a short safety block (marked `<!-- agentdeck-safety -->`; added once to a file AgentDeck wrote earlier, a CLAUDE.md of your own is never touched): secrets and personal data — keys, tokens, passwords, IP addresses, phone numbers, user ids — never go into a commit, a public file or a link (files added by name, the diff read before a push, made-up values in tests); signals only to processes the agent started; ask first before deleting what it did not create, force-pushing or rewriting pushed history, dropping data, or sending anything to people, and a yes covers that one action only; no printing of environment variables or config files with secrets; a job that runs later reports its result, success and failure alike; risky changes on a copy, and "done" means the result was checked.
+
+### Guard hooks
+Words get forgotten; three new Claude Code hooks hold the riskiest rules in code. They run before every shell command an agent runs, block with a message saying what they found and what to do instead, take a visible one-time override written into the command, and let the command through if they fail themselves.
+- **`guard_kill.py` — signals only to the agent's own processes.** `pkill`/`killall` patterns, `kill $(pgrep …)`, `… | xargs kill`, `fuser -k`, `tmux kill-server`/`kill-session` on the terminals' own tmux, and `systemctl stop|restart|kill` of a unit that holds the terminals are checked by running their read-only half (`pgrep` with the same pattern, the `ps | grep` before the `xargs`) and blocked if they would hit anything outside the agent's own process tree, with a list of what would be hit. A `|` in a `pkill -f` pattern is regex "or": such a pattern once matched the tmux server that hosts every terminal and closed them all. Override: `KILL_OK=1`. Also checks `Monitor` commands.
+- **`guard_email.py` — mail to people only with your yes.** `sendmail`, `mail`/`mailx`, `msmtp`, `mutt`, Python's `smtplib`, `git send-email`, and calls to mail services' APIs (Resend, SendGrid, Mailgun, Postmark, Brevo, SparkPost, Amazon SES), also inside `docker exec`, are blocked unless the command carries `SEND_APPROVED=1` — written only after you saw the text, the sender and the recipient and said send; a yes covers that one message. Drafts and reading mail are free.
+- **`guard_secrets.py` — no secrets in a commit or a push.** On `git commit` it reads what is staged (and what a `git add` in the same command or `commit -a` would add); on `git push`, the commits the remote doesn't have yet. It blocks on a private key, a token of a known kind (Telegram bot, Anthropic, GitHub, AWS, Slack) or this server's public IP, shows the file and line with the value masked, and says how to take it out. The IP comes from the network interfaces (never a network request), `AGENTDECK_PUBLIC_IPS` or `~/.claude/agentdeck-public-ips`; guest sandboxes get the server's IP from the guests module. Override: `SECRETS_OK=1`.
+- **No double guards.** `install.sh` and the Docker entrypoint install the three along with the board hooks (`AGENTDECK_GUARDS=0` still skips them all; `--uninstall` / `install_guards.py --remove` take them out). If the agents' work folder already runs a guard of the same file name in its own `.claude/settings.json` or `settings.local.json`, AgentDeck's copy is not added (`--workdir`, by default the parent of the services folder) — two copies would block one command twice.
+- What they can't see: a script run from a file, a signal or mail sent from inside a program. They are a seat belt, not a sandbox.
+
+### Guests
+- **A sandbox knows the server's IP.** A guest's agent committing the server's address is blocked too: `guestctl add` and `recreate` pass the server's public IPs to the sandbox (`AGENTDECK_PUBLIC_IPS`).
+
+### Upgrading
+- `install.sh`: run it again (or `git pull` and `./install.sh`). Docker: `git pull && docker compose up -d --build`. Hooks and the CLAUDE.md are read when Claude starts, so the new guards apply to terminals started (or restarted with ⟳) after the update; no service needs a restart.
+
 ## v2.0.0 — Services and guests
 
 ### Services — programs that outlive a terminal
