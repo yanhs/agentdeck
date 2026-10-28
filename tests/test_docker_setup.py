@@ -363,3 +363,11 @@ def test_compose_runs_an_init_that_reaps_orphans():
 def test_entrypoint_gives_the_agents_the_services_rule():
     src = code(SCRIPTS["entrypoint"])
     assert re.search(r'--services-dir\s+"\$\{AGENTDECK_WORKDIR:-/work\}/\.services"', src), src
+
+
+def test_the_image_has_git_for_the_agents_and_the_secrets_guard():
+    """Agents commit their work, and guard_secrets reads what a commit or push would
+    publish; without git in the image (until 2.0.1) neither happened."""
+    df = (ROOT / "Dockerfile").read_text()
+    apt = re.search(r"apt-get install[^\n]*\n([^\n]*\n)*?[^\n]*rm -rf /var/lib/apt", df)
+    assert apt and re.search(r"\bgit\b", apt.group(0)), apt and apt.group(0)

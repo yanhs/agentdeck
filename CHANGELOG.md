@@ -15,6 +15,9 @@ Words get forgotten; three new Claude Code hooks hold the riskiest rules in code
 - **No double guards.** `install.sh` and the Docker entrypoint install the three along with the board hooks (`AGENTDECK_GUARDS=0` still skips them all; `--uninstall` / `install_guards.py --remove` take them out). If the agents' work folder already runs a guard of the same file name in its own `.claude/settings.json` or `settings.local.json`, AgentDeck's copy is not added (`--workdir`, by default the parent of the services folder) — two copies would block one command twice.
 - What they can't see: a script run from a file, a signal or mail sent from inside a program. They are a seat belt, not a sandbox.
 
+### Docker
+- **git is in the image.** Agents in the container (and guests' sandboxes) can commit their work, and the secrets guard has something to check; before, `git` was missing.
+
 ### Guests
 - **A sandbox knows the server's IP.** A guest's agent committing the server's address is blocked too: `guestctl add` and `recreate` pass the server's public IPs to the sandbox (`AGENTDECK_PUBLIC_IPS`).
 

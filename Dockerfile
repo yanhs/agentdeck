@@ -5,9 +5,10 @@
 FROM node:22-slim
 
 # system deps: python3 (status_server), tmux (terminals), curl/ca-certs (ttyd download),
-# procps (status detection), uuid-runtime (session ids)
+# procps (status detection), uuid-runtime (session ids), git (the agents' work; the
+# secrets guard reads what a commit or push would publish)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-pip tmux curl ca-certificates procps uuid-runtime openssl \
+      python3 python3-pip tmux curl ca-certificates procps uuid-runtime openssl git \
     && rm -rf /var/lib/apt/lists/*
 
 # ttyd — static prebuilt binary (turns each tmux terminal into a browser WebSocket),
