@@ -10,7 +10,8 @@ only when none exists.
 
 The default CLAUDE.md is read by every agent on every turn, so it stays short: under
 MAX_MD_LINES. The limit was 40 until 2.0.1, when the owner asked for the safety rules
-(secrets, signals, asking first) to go in too; short is still the goal.
+(secrets, signals, asking first) to go in too, and 60 until 2.0.2, when the "test first"
+rule joined them (the full file with every block is 62 lines); short is still the goal.
 """
 import json
 import os
@@ -23,7 +24,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INSTALL = os.path.join(REPO, "hooks", "install_guards.py")
 HOOKS = os.path.join(REPO, "hooks")
 EXAMPLE = os.path.join(HOOKS, "settings.example.json")
-MAX_MD_LINES = 60
+MAX_MD_LINES = 70
 
 
 def run(tmp_path, *args, env=None):
@@ -256,6 +257,60 @@ def test_a_persons_own_claude_md_gets_no_safety_rules(tmp_path):
     md.write_text("my own rules\n")
     run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
     assert SAFETY_MARK not in md.read_text()
+
+
+TDD_MARK = "<!-- agentdeck-tdd -->"
+
+
+def test_a_new_claude_md_tells_the_agents_to_test_first(tmp_path):
+    """28.10.2026: the owner's agents write a test before the code because his own CLAUDE.md
+    says "TDD always"; AgentDeck's agents were never told. Asked to put it in the release."""
+    md = tmp_path / "CLAUDE.md"
+    r = run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    assert r.returncode == 0, r.stderr
+    text = md.read_text()
+    assert text.count(TDD_MARK) == 1
+    tdd = " ".join(text.split(TDD_MARK, 1)[1].split())
+    for words in ("## Test first", "a test that fails for the right reason",
+                  "the whole test suite", 'before you say "done"',
+                  "reproduces the bug", "fix the change, not the test",
+                  "Skip only for docs, config values and one-off commands"):
+        assert words in tdd, words
+    assert text.isascii() and len(text.splitlines()) < MAX_MD_LINES
+    for mark in (SAFETY_MARK, "<!-- agentdeck-environment -->", "<!-- agentdeck-services -->"):
+        assert text.count(mark) == 1, mark
+
+
+def test_a_claude_md_agentdeck_wrote_earlier_gets_test_first_once(tmp_path):
+    """Sandboxes and servers set up before 2.0.2, including ones that already got the
+    safety block from 2.0.1."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Working rules (AgentDeck)\n\n## Put multi-step work on the task board\n"
+                  "\n" + SAFETY_MARK + "\n## Safety: what never happens without the person\n")
+    for _ in range(2):
+        run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    text = md.read_text()
+    assert text.startswith("# Working rules (AgentDeck)\n")
+    assert text.count(TDD_MARK) == 1 and text.count(SAFETY_MARK) == 1
+
+
+def test_a_persons_own_claude_md_gets_no_test_first_rule(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("my own rules\n")
+    run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    assert TDD_MARK not in md.read_text()
+
+
+def test_keeping_only_the_mark_line_opts_out_of_test_first(tmp_path):
+    """To drop the rule, delete the block but keep its mark line: it is not added back."""
+    md = tmp_path / "CLAUDE.md"
+    run(tmp_path, "--claude-md", str(md))
+    text = md.read_text()
+    head, tail = text.split(TDD_MARK, 1)
+    rest = tail.split("<!--", 1)
+    md.write_text(head + TDD_MARK + "\n" + ("<!--" + rest[1] if len(rest) > 1 else ""))
+    run(tmp_path, "--claude-md", str(md))
+    assert "## Test first" not in md.read_text() and TDD_MARK in md.read_text()
 
 
 def test_remove_never_touches_claude_md(tmp_path):

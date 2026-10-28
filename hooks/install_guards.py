@@ -107,8 +107,21 @@ SAFETY_MD = """\
 - Try risky changes on a copy, never on the live system. "Done" means you checked the
   result, not that the command finished.
 """
+# Test before code. 28.10.2026 the owner asked why his agents write tests first: his own
+# CLAUDE.md says "TDD always", AgentDeck's agents were never told. Now they are.
+TDD_MARK = "<!-- agentdeck-tdd -->"
+TDD_MD = """\
+{mark}
+## Test first
+Every code change starts with a test that fails for the right reason, then the code
+that makes it pass, then the whole test suite, and the result is shown before you say
+"done". A bug fix starts with a test that reproduces the bug. If your change breaks an
+existing test, fix the change, not the test. Skip only for docs, config values and
+one-off commands.
+"""
 # Blocks that go into AgentDeck's own CLAUDE.md (new, or written by AgentDeck earlier), once.
-OWN_BLOCKS = ((ENV_MARK, ENV_MD), (SAFETY_MARK, SAFETY_MD))
+# Keeping only a block's mark line opts out of it: the block is not added back.
+OWN_BLOCKS = ((ENV_MARK, ENV_MD), (SAFETY_MARK, SAFETY_MD), (TDD_MARK, TDD_MD))
 
 SERVICES_MARK = "<!-- agentdeck-services -->"
 SERVICES_MD = """\
