@@ -119,9 +119,21 @@ that makes it pass, then the whole test suite, and the result is shown before yo
 existing test, fix the change, not the test. Skip only for docs, config values and
 one-off commands.
 """
+# Links last. The person reads replies in Telegram or a terminal, and both glue the next
+# character to an address - "(https://x.y/z)." stops opening. The owner's own agents have
+# had this rule since 26.09.2026; on 28.10 he asked for it in every AgentDeck.
+LINKS_MARK = "<!-- agentdeck-links -->"
+LINKS_MD = """\
+{mark}
+## Links go last
+A link the person should open is the LAST line of your message, alone, with nothing after
+it: no period, bracket, quote or more text (chat apps glue the next character to the
+address and the link stops opening). Several links: one per line, all at the very end.
+"""
 # Blocks that go into AgentDeck's own CLAUDE.md (new, or written by AgentDeck earlier), once.
 # Keeping only a block's mark line opts out of it: the block is not added back.
-OWN_BLOCKS = ((ENV_MARK, ENV_MD), (SAFETY_MARK, SAFETY_MD), (TDD_MARK, TDD_MD))
+OWN_BLOCKS = ((ENV_MARK, ENV_MD), (SAFETY_MARK, SAFETY_MD), (TDD_MARK, TDD_MD),
+              (LINKS_MARK, LINKS_MD))
 
 SERVICES_MARK = "<!-- agentdeck-services -->"
 SERVICES_MD = """\

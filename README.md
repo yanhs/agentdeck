@@ -16,6 +16,12 @@
 
 ![AgentDeck: many Claude Code agents in one dashboard, a task board per terminal, what uses your server, from your phone and from Telegram](docs/demo.gif)
 
+## 🆕 What's new in 2.0.3 — links go last
+
+Agents now put a link you should open alone on the last line of the reply, with nothing
+after it: Telegram and terminals glue a trailing period or bracket to the address — see
+[Safety](#-safety-what-agents-never-do-without-you).
+
 ## 🆕 What's new in 2.0.2 — test first
 
 Agents are now told to start every code change with a test that fails, and a bug fix with
@@ -270,6 +276,11 @@ whole test suite, with the result shown before "done"; a bug fix starts with a t
 reproduces the bug; a broken existing test means the change is fixed, not the test. Docs,
 config values and one-off commands are exempt. To drop it, delete the block and keep its
 mark line.
+
+**Links go last** — a third block (marked `<!-- agentdeck-links -->`): a link you should
+open is the last line of the reply, alone, with no period, bracket or text after it, because
+chat apps and terminals glue the next character to the address. Several links go one per
+line at the very end. To drop it, delete the block and keep its mark line.
 
 **The guards** — Claude Code hooks that run before every shell command an agent runs.
 Each one blocks with a message saying what it found and what to do instead; each has a

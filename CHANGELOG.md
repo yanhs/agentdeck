@@ -2,6 +2,14 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## v2.0.3 — Links go last
+
+### Agents
+- **A link is the last line of the reply.** AgentDeck's `~/.claude/CLAUDE.md` gets a short "Links go last" block (marked `<!-- agentdeck-links -->`; added once to a file AgentDeck wrote earlier, a CLAUDE.md of your own is never touched): a link you should open goes alone on the last line, with nothing after it. Telegram and terminals glue the next character to an address — `(https://example.com/x).` stops opening at the bracket and the period. To drop it, delete the block and keep its mark line.
+
+### Upgrading
+- `install.sh`: run it again (or `git pull` and `./install.sh`). Docker: `git pull && docker compose up -d --build`. The CLAUDE.md is read when Claude starts, so the rule applies to terminals started or restarted after the upgrade.
+
 ## v2.0.2 — Test first
 
 ### Agents

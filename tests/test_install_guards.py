@@ -501,3 +501,41 @@ def test_installed_kill_guard_blocks_a_pattern_kill_that_hits_others(tmp_path):
         assert os.path.exists(f"/proc/{pid}")              # still alive
     finally:
         os.kill(pid, signal.SIGKILL)                      # the PID we saved
+
+
+LINKS_MARK = "<!-- agentdeck-links -->"
+
+
+def test_a_new_claude_md_puts_links_on_the_last_line(tmp_path):
+    """28.10.2026, the owner: the link goes on the last line, as he has told his own agents
+    since 26.09 - Telegram and terminals glue the next character to the address, and the
+    link stops opening. Asked to make it every agent's rule, in the release and sandboxes."""
+    md = tmp_path / "CLAUDE.md"
+    r = run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    assert r.returncode == 0, r.stderr
+    text = md.read_text()
+    assert text.count(LINKS_MARK) == 1
+    links = " ".join(text.split(LINKS_MARK, 1)[1].split())
+    for words in ("LAST line of your message", "nothing after it",
+                  "no period, bracket, quote or more text", "one per line"):
+        assert words in links, words
+    assert text.isascii() and len(text.splitlines()) < MAX_MD_LINES
+    for mark in (TDD_MARK, SAFETY_MARK, "<!-- agentdeck-environment -->",
+                 "<!-- agentdeck-services -->"):
+        assert text.count(mark) == 1, mark
+
+
+def test_a_claude_md_agentdeck_wrote_earlier_gets_the_links_rule_once(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Working rules (AgentDeck)\n\n" + TDD_MARK + "\n## Test first\n")
+    for _ in range(2):
+        run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    text = md.read_text()
+    assert text.count(LINKS_MARK) == 1 and text.count(TDD_MARK) == 1
+
+
+def test_a_persons_own_claude_md_gets_no_links_rule(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("my own rules\n")
+    run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    assert LINKS_MARK not in md.read_text()
