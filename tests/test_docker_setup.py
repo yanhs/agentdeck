@@ -339,11 +339,14 @@ def test_start_sh_offers_the_guards_without_touching_home_by_default():
     assert "--check" in src                                     # hint only when not installed
 
 
-def test_readme_config_table_has_the_guard_switch():
+def test_config_table_has_the_guard_switch():
+    """The configuration table lives in docs/configuration.md (the README links to it)."""
     readme = (ROOT / "README.md").read_text()
-    rows = [l for l in readme.splitlines() if l.startswith("|") and "AGENTDECK_GUARDS" in l]
+    config = (ROOT / "docs" / "configuration.md").read_text()
+    assert "docs/configuration.md" in readme
+    rows = [l for l in config.splitlines() if l.startswith("|") and "AGENTDECK_GUARDS" in l]
     assert rows and "0" in rows[0]
-    assert "Guard hooks (optional)" not in readme
+    assert "Guard hooks (optional)" not in readme + config
 
 
 def test_dockerfile_sets_the_board_state_for_every_process():
