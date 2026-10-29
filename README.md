@@ -45,29 +45,9 @@ after a crash and keeps its log. Agents know the rule and tell you in one line w
 add, stop or remove a service. You see them on the **Server** page — state, log,
 Restart / Stop / Start — and with **/services** in Telegram.
 
-**Guests — other people on your server (optional, off by default).** Each guest gets a
-sandbox of their own (an AgentDeck in Docker), works on your Claude subscription with a
-daily token limit, and talks to it through one shared Telegram bot. Someone writes
-`/start` to the guest bot; your own AgentDeck bot asks you "Let them in?", and on a tap
-their sandbox, address and password are made for them (the bot open to everyone only
-passes the request on — it can't create anything). Set it up on the Server page — a four-step wizard checks
-Docker, the bot, the domain — and manage guests there: today's spend, the limit, stop,
-remove. Details: [guests/README.md](guests/README.md).
-
-<p align="center">
-  <img src="docs/screenshots/telegram-invite.png" width="640" alt="Left: a stranger writes /start to the guest bot and later gets their sandbox's address and password. Right: the owner's own AgentDeck bot asks Let them in, with Let in and Refuse buttons">
-</p>
-
-| Services and guests on the Server page | Setting up guests | /services in Telegram |
-|---|---|---|
-| ![The Server page: four services with their state and one log open; three guests with today's tokens against their daily limit](docs/screenshots/services-guests.png) | ![The guests setup wizard: Docker and the bot checked, the domain still to do, then one command to turn it on](docs/screenshots/guests-wizard.png) | ![The /services command in Telegram: each service's state with restart, stop and start buttons](docs/screenshots/telegram-services.png) |
-
-**The installer asks once.** "Will other people work on this server too?" — only when a
-person is at the terminal, default no. Yes also installs Docker, and the last lines say
-where to finish the setup. You can turn guests on any time later on the Server page;
-`--guests` / `--no-guests` answer it for scripts.
-
-![install.sh asks whether other people will work on the server; after yes, its last lines point to the Server page to finish setting up guests](docs/screenshots/installer-guests.png)
+| Services on the Server page | /services in Telegram |
+|---|---|
+| ![The Server page: four services with their state and one log open](docs/screenshots/services.png) | ![The /services command in Telegram: each service's state with restart, stop and start buttons](docs/screenshots/telegram-services.png) |
 
 **Agents know where they run.** Asked "if I change the password, does my other terminal
 stop?", an agent used to answer that it couldn't tell how the platform works. AgentDeck now
@@ -304,8 +284,7 @@ sandbox — for that, use the Docker install.
 
 `guard_secrets.py` finds the server's public IP from its network interfaces (no network
 request); inside Docker, where the interfaces are private, put the IP into
-`~/.claude/agentdeck-public-ips` (one per line) or `AGENTDECK_PUBLIC_IPS` — the guests
-module does it for every sandbox. If your project's own `.claude/settings.json` already runs
+`~/.claude/agentdeck-public-ips` (one per line) or `AGENTDECK_PUBLIC_IPS`. If your project's own `.claude/settings.json` already runs
 a guard with the same file name, the installer doesn't add AgentDeck's copy.
 
 ## 📸 Screenshots

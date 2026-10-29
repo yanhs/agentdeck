@@ -950,6 +950,16 @@ def main() -> int:
             save(pg, "services-guests.png", clip=clip_of(pg, "#services", "#guests"), full_page=True)
             done(ctx, errs, "services-guests.png")
 
+        # services.png — the same Server page, the Services block alone (README)
+        if want("services.png"):
+            print("services.png")
+            ctx, pg, errs = open_server_page(b, base, width=1180, height=1400, guests=guests_payload)
+            pg.click('#services .svc[data-name="shop-preview"] button[data-act="log"]')
+            pg.wait_for_selector('#services .svc[data-name="shop-preview"] pre.svc-log')
+            settle(pg)
+            save(pg, "services.png", clip=clip_of(pg, "#services"), full_page=True)
+            done(ctx, errs, "services.png")
+
         # guests-wizard.png — guests off, the setup wizard open half-way
         if want("guests-wizard.png"):
             print("guests-wizard.png")
