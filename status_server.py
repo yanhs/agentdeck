@@ -4,7 +4,7 @@
 GET  /  — live status + auto-detected project/task
 POST /  — update manual overrides  { "id": "1", "project": "...", "task": "..." }
 """
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 import json
 import signal
 import subprocess
@@ -2377,8 +2377,73 @@ def save_paste_image(data: bytes, ctype: str, token: str, dest_dir: str | None =
     return {"path": path, "url": f"{PASTE_URL}/{name}" if PASTE_URL else path}
 
 
+# ── 📎 File: any file from the browser → a PRIVATE folder, the terminal gets its path ──
+# A path, not a link: the agent runs on this machine and reads the file directly, and a
+# public link would expose whatever was uploaded (client documents, keys). Files keep
+# their (made safe) name under <UPLOAD_DIR>/<YYYY-MM-DD>/, folder 0700, files 0600.
+UPLOAD_DIR = (os.environ.get("AGENTDECK_UPLOAD_DIR")
+              or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".sessions", "uploads"))
+UPLOAD_MAX = int(float(os.environ.get("AGENTDECK_UPLOAD_MAX_MB", "100")) * 1024 * 1024)
+
+
+def _upload_name(raw):
+    """The file's own name, safe to type into a terminal: its last path part only, letters
+    (any script), digits and . _ - + kept, everything else (spaces, ; $ ` ( ) …) → _,
+    no leading dot, at most 120 characters with the extension kept."""
+    name = os.path.basename(str(raw or "").replace("\\", "/"))
+    name = unicodedata.normalize("NFC", name)
+    name = re.sub(r"[^\w.+-]", "_", name)
+    name = re.sub(r"_{2,}", "_", name).strip("._") or "file"
+    if len(name) > 120:
+        stem, ext = os.path.splitext(name)
+        ext = ext[:16]
+        name = stem[:120 - len(ext)] + ext
+    return name
+
+
+def save_upload(src, length: int, raw_name: str, dest_dir: str | None = None) -> dict:
+    """Stream `length` bytes from src into <dest_dir>/<today>/<safe name> (name_2, name_3 …
+    when taken); return {path, name, size}. A short body leaves no file behind."""
+    if length <= 0:
+        raise ValueError("empty body")
+    root = dest_dir or UPLOAD_DIR
+    day = os.path.join(root, time.strftime("%Y-%m-%d"))
+    os.makedirs(day, mode=0o700, exist_ok=True)
+    for d in (root, day):
+        os.chmod(d, 0o700)
+    name = _upload_name(raw_name)
+    stem, ext = os.path.splitext(name)
+    n = 1
+    while True:
+        path = os.path.join(day, name if n == 1 else f"{stem}_{n}{ext}")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            break
+        except FileExistsError:
+            n += 1
+    got = 0
+    try:
+        with os.fdopen(fd, "wb") as f:
+            while got < length:
+                chunk = src.read(min(1 << 20, length - got))
+                if not chunk:
+                    break
+                f.write(chunk)
+                got += len(chunk)
+        if got < length:
+            raise ValueError(f"upload cut short: {got} of {length} bytes")
+    except BaseException:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return {"path": path, "name": os.path.basename(path), "size": got}
+
+
 class PasteHandler(BaseHTTPRequestHandler):
-    """POST raw image bytes (Content-Type: image/*) → save → {path, url} JSON."""
+    """POST raw image bytes (Content-Type: image/*) → save → {path, url} JSON.
+    POST /api/upload?name=<file name> with any bytes → save_upload → {path, name, size}."""
 
     def _json(self, code, obj):
         body = json.dumps(obj).encode()
@@ -2388,7 +2453,34 @@ class PasteHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _upload(self):
+        # the proxy gates this too; checked here as well so a route slip can't open it
+        cookies = dict(p.strip().split("=", 1) for p in (self.headers.get("Cookie", "") or "").split(";")
+                       if "=" in p)
+        if not _verify_token(cookies.get(AUTH_COOKIE, "")):
+            self._json(401, {"error": "not signed in"}); return
+        try:
+            length = int(self.headers.get("Content-Length", "") or "-1")
+        except ValueError:
+            length = -1
+        if length < 0:
+            self._json(411, {"error": "Content-Length required"}); return
+        if length > UPLOAD_MAX:
+            self.close_connection = True
+            self._json(413, {"error": "file too large", "max_mb": UPLOAD_MAX // (1024 * 1024)}); return
+        name = parse_qs(urlparse(self.path).query).get("name", [""])[0]
+        try:
+            res = save_upload(self.rfile, length, name)
+        except ValueError as e:
+            self._json(400, {"error": str(e)[:200]}); return
+        except OSError as e:
+            self._json(500, {"error": str(e)[:200]}); return
+        print("UPLOAD-SAVED", time.strftime("%H:%M:%S"), res["path"], res["size"], flush=True)
+        self._json(200, res)
+
     def do_POST(self):
+        if urlparse(self.path).path.rstrip("/") == "/api/upload":
+            return self._upload()
         try:
             ctype = (self.headers.get("Content-Type", "") or "").split(";")[0].strip().lower()
             length = int(self.headers.get("Content-Length", "0") or "0")
@@ -2423,5 +2515,6 @@ if __name__ == "__main__":
     Thread(target=lambda: HTTPServer(("127.0.0.1", 3014), LiveHandler).serve_forever(), daemon=True).start()
     Thread(target=lambda: HTTPServer(("127.0.0.1", 3045), BufferHandler).serve_forever(), daemon=True).start()
     Thread(target=lambda: HTTPServer(("127.0.0.1", 3046), AuthHandler).serve_forever(), daemon=True).start()
-    Thread(target=lambda: HTTPServer(("127.0.0.1", 3047), PasteHandler).serve_forever(), daemon=True).start()
+    # threaded: a 100 MB upload must not hold up an image paste
+    Thread(target=lambda: ThreadingHTTPServer(("127.0.0.1", 3047), PasteHandler).serve_forever(), daemon=True).start()
     HTTPServer(("127.0.0.1", 3011), Handler).serve_forever()

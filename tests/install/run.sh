@@ -292,6 +292,17 @@ guards() { docker exec -u ubuntu "$NAME" bash -c 'grep -o guard_task_board.py ~/
 G1="$(guards)"
 expect "guard hooks installed into ~/.claude/settings.json" test "$G1" -ge 1
 
+say "📎 File upload"
+# through the install's own proxy; the agents' user must be able to read what landed
+upload_ok() {
+  local out path sha
+  out="$(python3 "$HERE/upload_check.py" "$BASE" "$PW" "${SMOKE_ARGS[@]}")" || { echo "$out"; return 1; }
+  echo "$out"
+  path="$(sed -n 's/^PATH=\(.*\) SHA=.*/\1/p' <<<"$out")"; sha="${out##*SHA=}"
+  docker exec -u ubuntu "$NAME" sha256sum "$path" | grep -q "^$sha "
+}
+expect "📎 File: an upload lands intact and the agents' user can read it" upload_ok
+
 say "reboot"
 docker restart "$NAME" >/dev/null
 expect "systemd is up after reboot" wait_systemd

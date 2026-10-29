@@ -642,6 +642,17 @@
       pointer-events: none;
     }
 
+    /* Files dragged over the terminal: a dashed frame saying they will upload */
+    .wrap.drop-files { position: relative; }
+    .wrap.drop-files::after {
+      content: 'Drop to upload — the path goes into the terminal';
+      position: absolute; inset: 6px; z-index: 6;
+      display: flex; align-items: center; justify-content: center;
+      border: 2px dashed var(--accent); border-radius: 10px;
+      background: rgba(0,0,0,0.35); color: #fff; font-size: 0.9rem;
+      pointer-events: none;
+    }
+
     /* "Copied" chip after a terminal selection is copied. Never blocks a selection. */
     .copy-hint {
       position: absolute;
@@ -809,7 +820,8 @@
       <span class="topbar-lbl" id="tNum"></span>
       <div class="topbar-info" id="tInfo"></div>
       <button class="btn" id="tEsc">Esc</button>
-      <button class="btn" id="tPasteImg" title="Paste image from clipboard">📎 Image</button>
+      <button class="btn" id="tPasteImg" title="Upload files to the server: their paths go into the terminal and the clipboard (or drop files onto the terminal)">📎 File</button>
+      <input type="file" id="tFileInput" multiple hidden>
       <a class="btn" id="tOpen" href="#" target="_blank">Open in tab</a>
       <div class="acct" id="tAcct">
         <button type="button" class="btn acct-btn" id="tMenu" aria-haspopup="menu" aria-expanded="false" aria-controls="tMenuList" title="Account: Telegram, password, log out">⋯</button>
@@ -2100,7 +2112,15 @@
 
     /* ── 📎 Image: the reliable path — read the clipboard image directly on a
        button click (no fragile paste-event interception inside the ttyd iframe). ── */
-    document.getElementById('tPasteImg').addEventListener('click', () => _pasteImageFromClipboard('button'));
+    // 📎 File: pick files → upload → their paths into the terminal (a clipboard image
+    // still pastes with Ctrl+V / ⌘V, and files can be dropped onto the terminal)
+    const _fileInput = document.getElementById('tFileInput');
+    document.getElementById('tPasteImg').addEventListener('click', () => _fileInput.click());
+    _fileInput.addEventListener('change', () => {
+      const files = Array.from(_fileInput.files || []);
+      _fileInput.value = '';                          // the same file again fires change again
+      _uploadFiles(files);
+    });
 
     /* ── Mobile: touch → xterm.js's own selection + vertical scroll ──
        Claude's fullscreen renderer tracks the mouse, so tmux hands it every mouse event
@@ -2546,6 +2566,97 @@
       } catch (e) { _clientlog({ ev: 'upload-error', error: String(e && e.message || e) }); _toast('⚠️ ' + String(e && e.message || e).slice(0, 50)); }
     }
 
+    /* ── 📎 File: any file → a private folder on the server → its PATH into the terminal ──
+       A path, not a link: the agent runs on the server and reads the file there. XHR, not
+       fetch, for the upload progress. Several files go one after another; the paths are
+       typed into the open terminal space-separated and copied to the clipboard. */
+    function _uploadFile(file, onProgress) {
+      return new Promise((resolve, reject) => {
+        const x = new XMLHttpRequest();
+        x.open('POST', '/api/upload?name=' + encodeURIComponent(file.name || 'file'));
+        x.withCredentials = true;
+        x.setRequestHeader('Content-Type', 'application/octet-stream');
+        x.upload.onprogress = e => { if (e.lengthComputable && e.total) onProgress(e.loaded / e.total); };
+        x.onload = () => {
+          let d = null;
+          try { d = JSON.parse(x.responseText); } catch (_) {}
+          if (x.status === 200 && d && d.path) return resolve(d);
+          // 413 from status_server carries its cap; one from a proxy in front (nginx,
+          // Cloudflare) is an HTML page with a smaller limit we don't know
+          if (x.status === 413) return reject(new Error(d && d.max_mb ? 'too large (max ' + d.max_mb + ' MB)'
+                                                                       : 'too large for this server'));
+          if (x.status === 401) return reject(new Error('signed out — reload the page'));
+          reject(new Error((d && d.error) || ('HTTP ' + x.status)));
+        };
+        x.onerror = () => reject(new Error('network error'));
+        x.send(file);
+      });
+    }
+
+    async function _copyQuiet(text, f) {
+      // the clipboard of whichever document has focus accepts the write
+      const navs = [];
+      try { if (f && f.contentDocument && f.contentDocument.hasFocus()) navs.push(f.contentWindow.navigator); } catch (_) {}
+      navs.push(navigator);
+      for (const n of navs) {
+        try { await n.clipboard.writeText(text); return true; } catch (_) {}
+      }
+      return false;
+    }
+
+    let _uploading = false;
+    async function _uploadFiles(files) {
+      files = Array.from(files || []).filter(Boolean);
+      if (!files.length) return;
+      if (_uploading) { _toast('⏳ Still uploading — wait a moment'); return; }
+      _uploading = true;
+      const paths = [], failed = [];
+      try {
+        for (let i = 0; i < files.length; i++) {
+          const fl = files[i], of = files.length > 1 ? ' (' + (i + 1) + '/' + files.length + ')' : '';
+          _toast('📎 Uploading ' + fl.name + of + '…', 120000);
+          try {
+            const d = await _uploadFile(fl, p =>
+              _toast('📎 Uploading ' + fl.name + of + '… ' + Math.round(p * 100) + '%', 120000));
+            paths.push(d.path);
+          } catch (e) { failed.push(fl.name + ': ' + (e && e.message || e)); }
+        }
+      } finally { _uploading = false; }
+      if (!paths.length) { _toast('⚠️ ' + failed.join(' · '), 8000); return; }
+      const text = paths.join(' ');
+      const f = document.querySelector('#wrap iframe');
+      const typed = !!f && _insertIntoTerminal(f, text + ' ') !== 'none';
+      const copied = await _copyQuiet(text, f);
+      const what = paths.length > 1 ? paths.length + ' files' : 'File';
+      const where = typed ? (copied ? 'path in the terminal and copied' : 'path in the terminal')
+                          : (copied ? 'path copied' : text);
+      _toast('✅ ' + what + ' uploaded — ' + where + (failed.length ? ' · ⚠️ ' + failed.join(' · ') : ''),
+             failed.length ? 8000 : 4000);
+    }
+
+    // files dragged over the dashboard or the terminal: show the drop frame
+    let _dropTimer = 0;
+    function _isFileDrag(e) { return !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')); }
+    function _dropHint(on) {
+      const w = document.getElementById('wrap');
+      clearTimeout(_dropTimer);
+      if (!w) return;
+      w.classList.toggle('drop-files', on);
+      if (on) _dropTimer = setTimeout(() => w.classList.remove('drop-files'), 400);
+    }
+    function _onFilesDragOver(e) {
+      if (!_isFileDrag(e)) return;
+      e.preventDefault();
+      _dropHint(true);
+    }
+    function _onFilesDrop(e) {
+      const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+      _dropHint(false);
+      if (!files.length) return;
+      e.preventDefault(); e.stopPropagation();
+      _uploadFiles(files);
+    }
+
     function _onImagePaste(e) {
       const blob = _imageFromData(e.clipboardData);
       _clientlog({ ev: 'paste-event', gotImage: !!blob, types: e.clipboardData ? Array.from(e.clipboardData.types || []) : 'null' });
@@ -2576,12 +2687,8 @@
     // catch the paste wherever focus is: parent document … (text fields on the
     // dashboard keep their normal text paste — see _onParentPaste).
     document.addEventListener('paste', _onParentPaste, true);
-    window.addEventListener('drop', (e) => {
-      const blob = _imageFromData(e.dataTransfer);
-      if (!blob) return;
-      e.preventDefault(); _uploadAndInsertImage(blob);
-    }, true);
-    window.addEventListener('dragover', (e) => { if (e.dataTransfer) e.preventDefault(); }, true);
+    window.addEventListener('drop', _onFilesDrop, true);
+    window.addEventListener('dragover', _onFilesDragOver, true);
 
     // … and inside the terminal iframe (focus is usually there). Attach on load AND
     // immediately (the iframe may already be loaded when this runs), and mark the doc
@@ -2600,12 +2707,8 @@
             _clientlog({ ev: 'iframe-bound' });
             doc.addEventListener('paste', _onImagePaste, true);
             doc.addEventListener('keydown', (e) => _onTermKeydown(e, 'iframe'), true);   // Ctrl+V paste / Ctrl+C copy inside the terminal
-            doc.addEventListener('drop', (e) => {
-              const blob = _imageFromData(e.dataTransfer);
-              if (!blob) return;
-              e.preventDefault(); e.stopPropagation(); _uploadAndInsertImage(blob);
-            }, true);
-            doc.addEventListener('dragover', (e) => { if (e.dataTransfer) e.preventDefault(); }, true);
+            doc.addEventListener('drop', _onFilesDrop, true);
+            doc.addEventListener('dragover', _onFilesDragOver, true);
           } catch (e) { clearInterval(poll); }
         }, 100);
       };

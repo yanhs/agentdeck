@@ -208,7 +208,9 @@ on one VPS.
   - **files & images** are saved and handed to the agent as a link + local path;
   - the agent's progress and final answer stream back, and interactive prompts show up as
     inline buttons.
-- **Paste images from the clipboard** straight into an agent (great for screenshots).
+- **Give an agent any file**: **📎 File** (or drop files onto the terminal) uploads them to the
+  server and types their paths into the terminal — a path, not a link: the files stay private.
+  Screenshots still paste straight from the clipboard (Ctrl+V / ⌘V).
 - **Shared task board.** A lightweight, live-updating board (`tasks-dashboard/`) for
   tracking multi-step work across all agents. The **T** button opens it as a tab inside
   the dashboard. Search, status and agent filters, sorting, dates and times, and the
@@ -500,7 +502,7 @@ cd agentdeck
 cp .env.example .env
 
 # 2) start the backend — ONE process serves every dashboard API
-#    (library, status, auth/login, tmux-buffer, page-version, paste-image, /telegram)
+#    (library, status, auth/login, tmux-buffer, page-version, paste-image, upload, /telegram)
 #    AGENTDECK_ORIGIN is only needed when the proxy doesn't pass the original Host +
 #    X-Forwarded-Proto (like nginx/agents-subdomain.conf); unset = the request's own scheme+Host.
 AGENTDECK_ORIGIN=https://your-domain python3 status_server.py &
@@ -588,7 +590,8 @@ For production, run `status_server.py` and `tg_bridge.py` as systemd services �
 | Guard hooks (task board before edits, no silent mid-task stop) | `AGENTDECK_GUARDS` env | Docker: on by default, `0` turns them off; `install.sh`: on by default, `0` skips them; `start.sh`: `1` installs them into `~/.claude/settings.json` |
 | Pretty project names | `PROJECT_MAP` in `status_server.py` | optional, cosmetic |
 | Working directory | `$AGENTDECK_WORKDIR` env | where new terminals start; `install.sh`: `~/projects` (set it when installing to change it; re-runs keep it), Docker: `/work`, otherwise the directory above the repo |
-| Pasted images (📎 Image / Ctrl+V) | `AGENTDECK_PASTE_DIR`, `AGENTDECK_PASTE_URL` env | default `.sessions/paste`, no public URL; the terminal gets the file's path either way |
+| Pasted images (Ctrl+V / ⌘V) | `AGENTDECK_PASTE_DIR`, `AGENTDECK_PASTE_URL` env | default `.sessions/paste`, no public URL; the terminal gets the file's path either way |
+| Uploaded files (📎 File / drop) | `AGENTDECK_UPLOAD_DIR`, `AGENTDECK_UPLOAD_MAX_MB` env | default `.sessions/uploads/<date>/`, private (0700/0600), 100 MB per file; never served on the web |
 
 ## 🤖 Create & connect a Telegram bot
 

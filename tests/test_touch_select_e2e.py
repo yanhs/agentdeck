@@ -323,3 +323,56 @@ def test_touchpad_scroll_is_three_cells_per_report(desktop):
 def test_mouse_wheel_notch_is_still_one_report(desktop):
     reports, _ = _wheel_reports(desktop, steps=5, delta=-100, pause=60)
     assert reports == [64] * 5, reports
+
+
+# ── 📎 File: the uploaded file's PATH reaches the app, and the clipboard ─────
+def _route_upload(pg, seen):
+    def upload(route):
+        from urllib.parse import unquote
+        name = unquote(route.request.url.split("name=", 1)[1])
+        seen.append((name, route.request.post_data_buffer))
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"path": f"/srv/up/2026-10-29/{name}", "name": name,
+                                       "size": len(route.request.post_data_buffer or b"")}))
+    pg.route(re.compile(r"/api/upload\?"), upload)
+
+
+def test_file_button_types_the_path_into_the_terminal(desktop, tmp_path):
+    """The path the server answers with reaches the app and the clipboard (the bytes on
+    disk: tests/test_upload.py::test_real_browser_to_real_server)."""
+    pg, log = desktop["page"], desktop["log"]
+    seen = []
+    _route_upload(pg, seen)
+    f = tmp_path / "notes.txt"
+    f.write_bytes(b"hello")
+    p = _pos(log)
+    with pg.expect_file_chooser() as fc:
+        pg.click("#tPasteImg")
+    fc.value.set_files(str(f))
+    pg.wait_for_function("() => (document.getElementById('_imgToast')||{}).textContent"
+                         "?.includes('✅')")
+    pg.wait_for_timeout(500)
+    assert [n for n, _ in seen] == ["notes.txt"]
+    assert b"/srv/up/2026-10-29/notes.txt " in _since(log, p)
+    assert pg.evaluate("navigator.clipboard.readText()") == "/srv/up/2026-10-29/notes.txt"
+
+
+def test_dropping_files_on_the_terminal_uploads_them(desktop):
+    pg, term, log = desktop["page"], desktop["term"], desktop["log"]
+    seen = []
+    _route_upload(pg, seen)
+    p = _pos(log)
+    term.evaluate("""() => {
+        const dt = new DataTransfer();
+        dt.items.add(new File(['one'], 'a.pdf', {type: 'application/pdf'}));
+        dt.items.add(new File(['two'], 'b.png', {type: 'image/png'}));
+        const s = document.querySelector('.xterm-screen');
+        s.dispatchEvent(new DragEvent('dragover', {dataTransfer: dt, bubbles: true, cancelable: true}));
+        s.dispatchEvent(new DragEvent('drop', {dataTransfer: dt, bubbles: true, cancelable: true}));
+    }""")
+    pg.wait_for_function("() => (document.getElementById('_imgToast')||{}).textContent"
+                         "?.includes('✅')")
+    pg.wait_for_timeout(500)
+    assert sorted(seen) == [("a.pdf", b"one"), ("b.png", b"two")]
+    out = _since(log, p)
+    assert b"/srv/up/2026-10-29/a.pdf /srv/up/2026-10-29/b.png " in out, out

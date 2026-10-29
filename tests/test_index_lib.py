@@ -4023,3 +4023,57 @@ def test_open_page_renews_the_login(browser, site):
         assert api.renews >= 3, api.renews           # on load + repeated
     finally:
         ctx.close()
+
+
+# ── 📎 File: upload files, their paths go into the terminal (owner 29.10.2026) ──
+def test_file_button_uploads_each_chosen_file_with_its_name(browser, site, tmp_path):
+    api = FakeAPI()
+    ctx, pg = _open(browser, site, api)
+    ups = []
+
+    def upload(route):
+        r = route.request
+        ups.append((r.method, r.url, r.post_data_buffer))
+        name = r.url.split("name=", 1)[1]
+        route.fulfill(status=200, content_type="application/json",
+                      body=json.dumps({"path": f"/srv/up/{name}", "name": name, "size": 1}))
+    try:
+        pg.route(re.compile(r"/api/upload\?"), upload)
+        pg.click(row("bbbb0002"))
+        btn = pg.locator("#tPasteImg")
+        assert btn.inner_text().strip() == "📎 File"
+        a, b = tmp_path / "отчёт.pdf", tmp_path / "b.txt"
+        a.write_bytes(b"%PDF-1"), b.write_bytes(b"bee")
+        with pg.expect_file_chooser() as fc:
+            btn.click()
+        assert fc.value.is_multiple()
+        fc.value.set_files([str(a), str(b)])
+        pg.wait_for_function("() => (document.getElementById('_imgToast')||{}).textContent"
+                             "?.includes('✅')")
+        assert [m for m, _, _ in ups] == ["POST", "POST"]
+        from urllib.parse import unquote
+        assert [unquote(u.split("name=", 1)[1]) for _, u, _ in ups] == ["отчёт.pdf", "b.txt"]
+        # the bytes themselves: Playwright hides a disk file's body from route();
+        # test_touch_select_e2e checks them through the real upload server
+    finally:
+        ctx.close()
+
+
+def test_file_upload_error_is_shown(browser, site, tmp_path):
+    api = FakeAPI()
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.route(re.compile(r"/api/upload\?"),
+                 lambda r: r.fulfill(status=413, content_type="application/json",
+                                     body=json.dumps({"error": "file too large", "max_mb": 100})))
+        pg.click(row("bbbb0002"))
+        f = tmp_path / "big.iso"
+        f.write_bytes(b"x")
+        with pg.expect_file_chooser() as fc:
+            pg.click("#tPasteImg")
+        fc.value.set_files(str(f))
+        pg.wait_for_function("() => (document.getElementById('_imgToast')||{}).textContent"
+                             "?.includes('100 MB')")
+        assert "big.iso" in pg.inner_text("#_imgToast")
+    finally:
+        ctx.close()
