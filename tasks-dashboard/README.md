@@ -3,7 +3,7 @@
 Live, shared task board for all Claude agents on this server. One `state.json`, pushed to
 every open tab over SSE (plus a 5s baseline poll, robust behind a CDN).
 
-- **URL:** https://agents.reimake.com/tasks/ (behind the same cookie auth as the launcher)
+- **URL:** https://agents.example.com/tasks/ (behind the same cookie auth as the launcher)
 - **Backend:** `server.py` on `127.0.0.1:9308` (stdlib HTTP + SSE). User systemd unit
   `tasks-tracker.service` (`~/.config/systemd/user/`), `Restart=always`, linger on.
 - **nginx:** `location /tasks/` in `/etc/nginx/sites-available/agents-subdomain`
