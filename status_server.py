@@ -2102,6 +2102,7 @@ def _check_password(user, pw):
 
 LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentKennel — login</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon.ico" sizes="32x32"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
 *{box-sizing:border-box} html,body{height:100%}
 body{margin:0;display:flex;align-items:center;justify-content:center;background:#0d1117;
@@ -2154,7 +2155,8 @@ def login_html(error=False):
 
 
 _AUTH_HEAD = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
-  '<meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentKennel</title><style>'
+  '<meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentKennel</title>'
+  '<link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon.ico" sizes="32x32"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><style>'
   '*{box-sizing:border-box}html,body{height:100%}'
   'body{margin:0;display:flex;align-items:center;justify-content:center;background:#0d1117;'
   'color:#e6edf3;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}'

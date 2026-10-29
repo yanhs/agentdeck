@@ -21,6 +21,9 @@ The brand changed in v2.0.5; now the technical names follow it.
 - Also accepted: the old install record (`~/.config/agentdeck/install.env`, read when there is no new one and replaced by it) and the old `.agentdeck-managed` marker (`--uninstall --purge` still deletes only a folder the installer cloned itself); `~/.claude/agentdeck-public-ips` (both files are read); a tmux server marked `@agentdeck-conf` (not sourced again); the browser's old `agentdeck-theme` / `agentdeck-copy-hint`; the `agentdeck:open-terminal` message from an open board tab; `guestctl recreate` reads the password of a sandbox made earlier (`AGENTDECK_PASSWORD` in `docker inspect`) and keeps the image the container has; `guestctl doctor` counts the guests' services running under their old names.
 - `guard_kill.py` protects `agentkennel-*` and `agentdeck-*` units alike.
 
+### Added
+- **The paw in the tab.** The dashboard and the login page have their own icon (the paw from agentkennel.com) in the tab, in bookmarks and on a phone's home screen, instead of the browser's grey globe. The three icon files (`web/favicon.svg`, `favicon.ico`, `apple-touch-icon.png`) are served without a session; both Caddyfiles and `nginx/agents-subdomain.conf` say so. On your own nginx, copy that one `location` line.
+
 ### Fixed
 - **An `--http` install stays on http after any number of re-runs.** The first re-run recorded the mode as "kept", and the one after it read that as "never asked for" and moved the install to HTTPS on the same port.
 

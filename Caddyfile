@@ -23,6 +23,12 @@
 			reverse_proxy 127.0.0.1:3046
 		}
 
+		# the tab / bookmark / home-screen icon: public, so the login page shows it too
+		@icons path /favicon.svg /favicon.ico /apple-touch-icon.png
+		handle @icons {
+			file_server
+		}
+
 		# gate everything else: valid session cookie required, else redirect to /login
 		forward_auth 127.0.0.1:3046 {
 			uri /check
