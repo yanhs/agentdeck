@@ -223,7 +223,8 @@ say "transport ($SCENARIO)"
 listening() { docker exec "$NAME" ss -ltnH "sport = :$1" | grep -q .; }
 case "$SCENARIO" in
   cert-timeout|port80-busy)
-    expect ":8765 answers https (self-signed)" test "$(dash_curl -o /dev/null -w '%{http_code}' "$BASE/login")" = 200
+    # 403 = up, no password yet (only the setup link can set one)
+    expect ":8765 answers https (self-signed)" test "$(dash_curl -o /dev/null -w '%{http_code}' "$BASE/login")" = 403
     expect ":8765 serves no plain http" bash -c "[ \"\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/login)\" != 200 ]"
     expect "Caddy holds no port 80 / 443" bash -c "! docker exec $NAME ss -ltnpH | grep caddy | grep -Eq ':(80|443) '" ;;
   internal|internal-alt)
@@ -232,7 +233,7 @@ case "$SCENARIO" in
     want="https://$NAME_SSLIP/login"; [ "$SCENARIO" = internal-alt ] && want="https://$NAME_SSLIP:8443/login"
     expect "http on 80 redirects to $want (got $loc)" test "$loc" = "$want" ;;
   http)
-    expect ":8765 answers plain http" test "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/login")" = 200 ;;
+    expect ":8765 answers plain http" test "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/login")" = 403 ;;
 esac
 expect "~/projects exists, owned by ubuntu" docker exec "$NAME" bash -c '[ "$(stat -c %U /home/ubuntu/projects)" = ubuntu ]'
 
