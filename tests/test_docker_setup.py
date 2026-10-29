@@ -148,6 +148,8 @@ def test_caddy_task_board_and_status_apis(name):
     for m, up in (("/api/terminal-status*", "127.0.0.1:3011"), ("/api/tmux-buffer/*", "127.0.0.1:3045"),
                   ("/api/page-version*", "127.0.0.1:3014"), ("/api/paste-image*", "127.0.0.1:3047")):
         assert route_for(p, m)[2] == up, m
+    # 📎 File uploads keep their full path (status_server routes /api/upload by it)
+    assert route_for(p, "/api/upload*")[:3] == ("handle", "/api/upload*", "127.0.0.1:3047")
 
 
 @pytest.mark.parametrize("name", CADDYFILES)

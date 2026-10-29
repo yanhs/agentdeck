@@ -29,7 +29,10 @@ def post(path, body, opener):
         r = opener.open(req, timeout=60); return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
-anon = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):     # see the proxy's own answer, not /login's page
+        return None
+anon = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), _NoRedirect)
 anon.addheaders = op.addheaders
 st, _ = post("/api/upload?name=x.txt", b"x", anon)
 check("upload without login refused", st in (302, 401), f"status {st}")
