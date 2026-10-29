@@ -171,7 +171,7 @@ def test_phone_width_no_sideways_scroll(browser, site, svc):  # noqa: F811
 
 def test_light_theme(browser, site, svc):  # noqa: F811
     ctx, pg = _open_with(browser, site, svc)
-    pg.evaluate("localStorage.setItem('agentdeck-theme', 'light')")
+    pg.evaluate("localStorage.setItem('agentkennel-theme', 'light')")
     pg.reload()
     rows(pg)
     shot(pg, "server-services-light.png")

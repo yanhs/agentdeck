@@ -8,7 +8,8 @@
   <meta http-equiv="Expires" content="0">
   <title>AgentKennel</title>
   <!-- Theme before first paint (no dark flash on a light choice). -->
-  <script>(function(){var t='dark';try{if(localStorage.getItem('agentdeck-theme')==='light')t='light';}catch(e){}document.documentElement.dataset.theme=t;})();</script>
+  <!-- theme: 'agentkennel-theme', else 'agentdeck-theme' (its name before v2.1.0) -->
+  <script>(function(){var t='dark';try{if((localStorage.getItem('agentkennel-theme')||localStorage.getItem('agentdeck-theme'))==='light')t='light';}catch(e){}document.documentElement.dataset.theme=t;})();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1848,7 +1849,8 @@
     window.addEventListener('message', e => {
       if (e.origin !== location.origin) return;
       const d = e.data;
-      if (!d || typeof d !== 'object' || d.type !== 'agentdeck:open-terminal') return;
+      // 'agentdeck:open-terminal': the same message from a board page before v2.1.0
+      if (!d || typeof d !== 'object' || (d.type !== 'agentkennel:open-terminal' && d.type !== 'agentdeck:open-terminal')) return;
       if (typeof d.id !== 'string' || !ID_RE.test(d.id)) return;
       openTerminalById(d.id);
     });
@@ -1922,7 +1924,8 @@
        top-right corner confirms it and says how to paste. The paste shortcut is
        spelled out for the first HINT_MAX copies in this browser (count in
        localStorage; broken storage = keep spelling it out), then just "Copied". ── */
-    const HINT_KEY = 'agentdeck-copy-hint', HINT_MAX = 5, HINT_MS = 1500;
+    const HINT_KEY = 'agentkennel-copy-hint', HINT_MAX = 5, HINT_MS = 1500;
+    const HINT_KEY_OLD = 'agentdeck-copy-hint';   // the count before v2.1.0, still read
     const _isMac = (() => {
       const n = navigator;
       return /mac|iphone|ipad/i.test([n.userAgentData && n.userAgentData.platform,
@@ -1935,7 +1938,7 @@
     }
     function showCopyHint() {
       let n = 0;
-      try { n = parseInt(localStorage.getItem(HINT_KEY), 10) || 0; } catch (e) {}
+      try { n = parseInt(localStorage.getItem(HINT_KEY) || localStorage.getItem(HINT_KEY_OLD), 10) || 0; } catch (e) {}
       if (n < HINT_MAX) { try { localStorage.setItem(HINT_KEY, String(n + 1)); } catch (e) {} }
       const wrap = document.getElementById('wrap');
       let h = document.getElementById('copyHint');
@@ -2087,11 +2090,11 @@
       window.addEventListener('blur', () => close(false));   // focus went into the terminal iframe
     })();
 
-    /* ── Dark / Light theme (⋯ menu). Stored in localStorage 'agentdeck-theme'
+    /* ── Dark / Light theme (⋯ menu). Stored in localStorage 'agentkennel-theme'
        (same origin as the Tasks and Server pages, which follow it live through
        the storage event); the <head> script applies it before first paint. ── */
     (function themeSwitch() {
-      const KEY = 'agentdeck-theme';
+      const KEY = 'agentkennel-theme', OLD_KEY = 'agentdeck-theme';   // OLD_KEY: before v2.1.0
       const item = document.getElementById('tTheme');
       const current = () => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
       function apply(t) {
@@ -2106,7 +2109,7 @@
         try { localStorage.setItem(KEY, t); } catch (err) {}
       });
       window.addEventListener('storage', e => {          // switched in another tab
-        if (e.key === KEY) apply(e.newValue === 'light' ? 'light' : 'dark');
+        if (e.key === KEY || e.key === OLD_KEY) apply(e.newValue === 'light' ? 'light' : 'dark');
       });
     })();
 

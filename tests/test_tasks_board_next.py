@@ -577,7 +577,7 @@ def test_embedded_board_text_matches_the_dashboard_size(browser, board):
         ctx.close()
 
 
-# ---- light dashboard theme: the embedded board follows localStorage agentdeck-theme
+# ---- light dashboard theme: the embedded board follows localStorage agentkennel-theme
 def _lum(s):
     import re as _re
     r, g, b = [float(x) for x in _re.findall(r"[\d.]+", s)[:3]]
@@ -593,9 +593,9 @@ def _embedded(browser, board, theme, scheme="dark"):
     pg.goto(board.url)
     pg.wait_for_selector(".task")
     if theme is None:
-        pg.evaluate("localStorage.removeItem('agentdeck-theme')")
+        pg.evaluate("localStorage.removeItem('agentkennel-theme')")
     else:
-        pg.evaluate("t => localStorage.setItem('agentdeck-theme', t)", theme)
+        pg.evaluate("t => localStorage.setItem('agentkennel-theme', t)", theme)
     pg.set_content(f'<iframe id="f" src="{board.url}" style="width:1200px;height:800px"></iframe>')
     pg.frame_locator("#f").locator(".task").first.wait_for()
     return ctx, pg, pg.frames[1]
@@ -629,10 +629,10 @@ def test_embedded_board_switches_live(browser, board):
     ctx, pg, fr = _embedded(browser, board, "dark")
     try:
         assert fr.evaluate("getComputedStyle(document.body).backgroundColor") == DECK_BG
-        pg.evaluate("localStorage.setItem('agentdeck-theme', 'light')")   # what the dashboard does
+        pg.evaluate("localStorage.setItem('agentkennel-theme', 'light')")   # what the dashboard does
         fr.wait_for_function("document.documentElement.dataset.theme === 'deck-light'", timeout=3000)
         assert fr.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(241, 241, 243)"
-        pg.evaluate("localStorage.setItem('agentdeck-theme', 'dark')")
+        pg.evaluate("localStorage.setItem('agentkennel-theme', 'dark')")
         fr.wait_for_function("document.documentElement.dataset.theme === 'deck'", timeout=3000)
     finally:
         ctx.close()
@@ -643,7 +643,7 @@ def test_standalone_board_ignores_the_dashboard_theme(browser, board):
     pg = ctx.new_page()
     try:
         pg.goto(board.url)
-        pg.evaluate("localStorage.setItem('agentdeck-theme', 'light')")
+        pg.evaluate("localStorage.setItem('agentkennel-theme', 'light')")
         pg.reload()
         pg.wait_for_selector(".task")
         assert pg.evaluate("document.documentElement.dataset.theme") in (None, "", "undefined") \
@@ -677,7 +677,7 @@ def test_framed_board_asks_the_dashboard_to_open_the_terminal(browser, board):
         pg.wait_for_function("() => window.__msgs.length > 0", timeout=3000)
         msgs = pg.evaluate("window.__msgs")
         origin = pg.evaluate("location.origin")
-        assert msgs == [{"data": {"type": "agentdeck:open-terminal", "id": "5e1f00ab"},
+        assert msgs == [{"data": {"type": "agentkennel:open-terminal", "id": "5e1f00ab"},
                          "origin": origin}]
         assert _expanded(fr, "pipeline-quality") == "false"      # no expand/collapse
         assert fr.url.startswith(board.url)                      # the board stayed put
@@ -688,7 +688,7 @@ def test_framed_board_asks_the_dashboard_to_open_the_terminal(browser, board):
         assert fr.get_attribute(det, "title").startswith("Open this terminal")
         fr.click(det)
         pg.wait_for_function("() => window.__msgs.length > 1", timeout=3000)
-        assert pg.evaluate("window.__msgs[1].data") == {"type": "agentdeck:open-terminal",
+        assert pg.evaluate("window.__msgs[1].data") == {"type": "agentkennel:open-terminal",
                                                         "id": "5e1f00ab"}
         assert _expanded(fr, "pipeline-quality") == "true"
         assert fr.url.startswith(board.url)

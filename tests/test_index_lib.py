@@ -1699,7 +1699,7 @@ def test_server_tab_at_400px(browser, site):
 
 
 # ── Dark / Light theme (switch in the ⋯ menu; owner, 2026-09-25) ────────────
-THEME_KEY = "agentdeck-theme"
+THEME_KEY = "agentkennel-theme"
 # the dark look as it was before the palette became variables — must not move
 DARK = {
     ("body", "backgroundColor"): "rgb(9, 9, 11)",
@@ -1836,7 +1836,7 @@ def test_theme_survives_broken_storage(browser, site):
     ctx.add_init_script("""for (const m of ['getItem', 'setItem']) {
         const orig = Storage.prototype[m];
         Storage.prototype[m] = function (k, ...a) {
-          if (k === 'agentdeck-theme') throw new Error('blocked');
+          if (k === 'agentkennel-theme') throw new Error('blocked');
           return orig.call(this, k, ...a); }; }""")
     pg = ctx.new_page()
     errors = []
@@ -2067,11 +2067,25 @@ def test_board_message_from_the_same_origin_opens_the_terminal(browser, site):
         fr = _board_frame(pg)
         # cccc0003 is hidden by the search filter: still opens
         pg.fill("#search", "свет")
-        fr.evaluate("() => parent.postMessage({type: 'agentdeck:open-terminal', id: 'cccc0003'},"
+        fr.evaluate("() => parent.postMessage({type: 'agentkennel:open-terminal', id: 'cccc0003'},"
                     " location.origin)")
         pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
                              " === '/sess/?arg=cccc0003'")
         assert pg.inner_text("#tNum") == "cccc0003"
+    finally:
+        ctx.close()
+
+
+def test_board_message_under_the_old_type_still_opens_the_terminal(browser, site):
+    """A board page loaded before v2.1.0 (an open tab) sends 'agentdeck:open-terminal'."""
+    api = FakeAPI()
+    ctx, pg = _tasks_stubbed(browser, site, api)
+    try:
+        fr = _board_frame(pg)
+        fr.evaluate("() => parent.postMessage({type: 'agentdeck:open-terminal', id: 'cccc0003'},"
+                    " location.origin)")
+        pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
+                             " === '/sess/?arg=cccc0003'")
     finally:
         ctx.close()
 
@@ -2081,14 +2095,14 @@ def test_board_message_for_an_unknown_terminal_only_toasts(browser, site):
     ctx, pg = _tasks_stubbed(browser, site, api)
     try:
         fr = _board_frame(pg)
-        fr.evaluate("() => parent.postMessage({type: 'agentdeck:open-terminal', id: '12345678'},"
+        fr.evaluate("() => parent.postMessage({type: 'agentkennel:open-terminal', id: '12345678'},"
                     " location.origin)")
         pg.wait_for_function("() => ((document.getElementById('_imgToast')||{}).textContent||'')"
                              ".includes('12345678')", timeout=3000)
         assert "not found" in pg.inner_text("#_imgToast").lower()
         assert _src(pg) == "/tasks/"
         # garbage ids and other message types are ignored outright
-        fr.evaluate("() => { parent.postMessage({type: 'agentdeck:open-terminal', id: 'x\\');'},"
+        fr.evaluate("() => { parent.postMessage({type: 'agentkennel:open-terminal', id: 'x\\');'},"
                     " location.origin); parent.postMessage({type: 'other', id: 'cccc0003'},"
                     " location.origin); }")
         pg.wait_for_timeout(300)
@@ -2103,7 +2117,7 @@ def test_board_message_for_an_archived_terminal_restores_and_opens_it(browser, s
     ctx, pg = _tasks_stubbed(browser, site, api)
     try:
         fr = _board_frame(pg)
-        fr.evaluate("() => parent.postMessage({type: 'agentdeck:open-terminal', id: 'ffff0005'},"
+        fr.evaluate("() => parent.postMessage({type: 'agentkennel:open-terminal', id: 'ffff0005'},"
                     " location.origin)")
         pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
                              " === '/sess/?arg=ffff0005'", timeout=3000)
@@ -2119,13 +2133,13 @@ def test_foreign_origin_message_is_ignored(browser, site):
     try:
         _board_frame(pg)
         pg.evaluate("() => window.dispatchEvent(new MessageEvent('message', {origin:"
-                    " 'https://evil.example', data: {type: 'agentdeck:open-terminal',"
+                    " 'https://evil.example', data: {type: 'agentkennel:open-terminal',"
                     " id: 'cccc0003'}}))")
         pg.wait_for_timeout(300)
         assert _src(pg) == "/tasks/"
         # the same message from our own origin works (the check is the origin)
         pg.evaluate("() => window.dispatchEvent(new MessageEvent('message', {origin:"
-                    " location.origin, data: {type: 'agentdeck:open-terminal', id: 'cccc0003'}}))")
+                    " location.origin, data: {type: 'agentkennel:open-terminal', id: 'cccc0003'}}))")
         pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
                              " === '/sess/?arg=cccc0003'")
     finally:
@@ -2202,7 +2216,7 @@ def test_account_menu_stays_after_a_terminal_is_closed(page):
 # The terminal stub here has an .xterm element, so enableClipboardCopy binds its
 # mousedown/mouseup on it; /api/tmux-buffer/ is faked: the read at mousedown
 # (the anchor) returns the previous buffer, later reads the new selection.
-HINT_KEY = "agentdeck-copy-hint"
+HINT_KEY = "agentkennel-copy-hint"
 HINT_PC = "Copied · Ctrl+Shift+V to paste"
 HINT_MAC = "Copied · ⌘V to paste"
 MAC_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
@@ -2286,7 +2300,7 @@ def test_copied_chip_after_a_selection_is_copied(browser, site):
 
 def test_copied_chip_light_theme(browser, site):
     ctx, pg = _copy_page(browser, site, init_script=(
-        "try { localStorage.setItem('agentdeck-theme', 'light'); } catch (e) {}"))
+        "try { localStorage.setItem('agentkennel-theme', 'light'); } catch (e) {}"))
     try:
         _open_terminal(pg)
         _select(pg)
@@ -2378,7 +2392,7 @@ def test_copied_chip_survives_broken_storage(browser, site):
     ctx, pg = _copy_page(browser, site, init_script="""for (const m of ['getItem', 'setItem']) {
         const orig = Storage.prototype[m];
         Storage.prototype[m] = function (k, ...a) {
-          if (k === 'agentdeck-copy-hint') throw new Error('blocked');
+          if (k === 'agentkennel-copy-hint') throw new Error('blocked');
           return orig.call(this, k, ...a); }; }""")
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -2426,7 +2440,7 @@ def test_open_link_with_a_vanished_number_opens_its_terminal(browser, site):
         pg.click(row("cccc0003") + " .proj")
         _src_is(pg, "cccc0003")
         pg.evaluate("() => window.dispatchEvent(new MessageEvent('message', {origin:"
-                    " location.origin, data: {type: 'agentdeck:open-terminal', id: '9999aaaa'}}))")
+                    " location.origin, data: {type: 'agentkennel:open-terminal', id: '9999aaaa'}}))")
         _src_is(pg, "dddd0004")
     finally:
         ctx.close()

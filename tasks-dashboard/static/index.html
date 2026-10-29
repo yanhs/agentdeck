@@ -9,7 +9,8 @@
 <title>Task Board</title>
 <script>
 /* Inside the dashboard (an iframe) the board wears the dashboard's palette: 'deck'
-   (dark) or 'deck-light', from the dashboard's localStorage 'agentdeck-theme' (same
+   (dark) or 'deck-light', from the dashboard's localStorage 'agentkennel-theme' (or 'agentdeck-theme', its
+   name before v2.1.0; same
    origin), switched live by the storage event. Standalone it follows the system. */
 (function () {
   var embedded;
@@ -17,11 +18,11 @@
   if (!embedded) return;
   function pick() {
     var t = 'dark';
-    try { t = localStorage.getItem('agentdeck-theme') || 'dark'; } catch (_) {}
+    try { t = localStorage.getItem('agentkennel-theme') || localStorage.getItem('agentdeck-theme') || 'dark'; } catch (_) {}
     document.documentElement.dataset.theme = t === 'light' ? 'deck-light' : 'deck';
   }
   pick();
-  window.addEventListener('storage', function (e) { if (e.key === 'agentdeck-theme' || e.key === null) pick(); });
+  window.addEventListener('storage', function (e) { if (e.key === 'agentkennel-theme' || e.key === 'agentdeck-theme' || e.key === null) pick(); });
 })();
 </script>
 <style>
@@ -552,7 +553,7 @@ function openTerminal(id) {
   if (!SESS_RE.test(id)) return;
   let framed = false;
   try { framed = window.parent !== window; } catch (_) { framed = true; }
-  if (framed) window.parent.postMessage({ type: 'agentdeck:open-terminal', id }, location.origin);
+  if (framed) window.parent.postMessage({ type: 'agentkennel:open-terminal', id }, location.origin);
   else location.href = '/?open=' + id;
 }
 function rowHTML(r, open) {

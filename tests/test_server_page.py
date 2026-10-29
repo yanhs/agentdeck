@@ -355,7 +355,7 @@ def test_cpu_no_process_holds_is_shown_as_short_lived(page):
     assert "Short-lived" in page.inner_text("#nowLeg")
 
 
-# ── Dark / Light: follows the dashboard's localStorage 'agentdeck-theme' ─────
+# ── Dark / Light: follows the dashboard's localStorage 'agentkennel-theme' ─────
 def _lum(s):
     r, g, b = [float(x) for x in re.findall(r"[\d.]+", s)[:3]]
     f = lambda c: (c / 255) / 12.92 if c / 255 <= 0.03928 else ((c / 255 + 0.055) / 1.055) ** 2.4  # noqa: E731
@@ -370,7 +370,7 @@ def _contrast(a, b):
 def _themed(browser, site, api, theme, **kw):
     ctx, pg = _open(browser, site, api, **kw)
     if theme is not None:
-        pg.evaluate("t => localStorage.setItem('agentdeck-theme', t)", theme)
+        pg.evaluate("t => localStorage.setItem('agentkennel-theme', t)", theme)
         pg.reload()
         pg.wait_for_selector(".row[data-id]")
     return ctx, pg
@@ -434,11 +434,27 @@ def test_theme_switches_live_from_another_page(browser, site, api):
     try:
         other = ctx.new_page()
         other.goto(site.replace("server.html", "no-such-page"))      # any same-origin page
-        other.evaluate("localStorage.setItem('agentdeck-theme', 'light')")
+        other.evaluate("localStorage.setItem('agentkennel-theme', 'light')")
         pg.wait_for_function("document.documentElement.dataset.theme === 'light'", timeout=3000)
         assert _lum(pg.evaluate("getComputedStyle(document.body).backgroundColor")) > 0.85
-        other.evaluate("localStorage.setItem('agentdeck-theme', 'dark')")
+        other.evaluate("localStorage.setItem('agentkennel-theme', 'dark')")
         pg.wait_for_function("getComputedStyle(document.body).backgroundColor === 'rgb(9, 9, 11)'",
                              timeout=3000)
+    finally:
+        ctx.close()
+
+
+def test_a_theme_saved_under_the_old_key_still_applies(browser, site, api):
+    """A browser that chose light before v2.1.0 has it under 'agentdeck-theme'."""
+    ctx, pg = _open(browser, site, api)
+    try:
+        pg.evaluate("localStorage.setItem('agentdeck-theme', 'light')")
+        pg.reload()
+        pg.wait_for_selector(".row[data-id]")
+        assert pg.evaluate("document.documentElement.dataset.theme") == "light"
+        pg.evaluate("localStorage.setItem('agentkennel-theme', 'dark')")   # the new key wins
+        pg.reload()
+        pg.wait_for_selector(".row[data-id]")
+        assert pg.evaluate("document.documentElement.dataset.theme") == "dark"
     finally:
         ctx.close()
