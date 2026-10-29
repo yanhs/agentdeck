@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to AgentDeck. Newest first.
+All notable changes to AgentKennel (formerly AgentDeck). Newest first.
 
-## Unreleased
+## v2.0.5 — AgentDeck is now AgentKennel
+
+### The name
+- **AgentDeck is now AgentKennel** — a kennel is where your agents are kept and fed: on your own server. The repository moves to [github.com/yanhs/agentkennel](https://github.com/yanhs/agentkennel) (GitHub redirects the old address, so existing clones keep pulling) and the site to agentkennel.com.
+- **Nothing to migrate.** Internal names keep the earlier name, so existing installs upgrade in place: the `agentdeck-*` systemd units, the install folder `~/agentdeck`, the `AGENTDECK_*` variables, the compose service `agentdeck` and its volumes, and the `<!-- agentdeck-… -->` marks in `CLAUDE.md`. Docker: keep running `git pull` in the folder you already have — Compose prefixes volume names with the folder's name, so a fresh clone into a new `agentkennel` folder would start with empty volumes.
 
 ### Dashboard
 - **📎 File: give an agent any file.** The top-bar button (was 📎 Image) opens the file picker — several files at once — and you can also drop files onto the terminal. Each file uploads to a private folder on the server (`.sessions/uploads/<date>/`, folder 0700, files 0600, 100 MB per file; `AGENTDECK_UPLOAD_DIR`, `AGENTDECK_UPLOAD_MAX_MB`), keeps its name (made safe to type: `договор аренды.docx` → `договор_аренды.docx`), and its path is typed into the open terminal and copied to the clipboard. A path, not a link: the agent reads the file where it is, and nothing is published on the web. Screenshots still paste with Ctrl+V / ⌘V.

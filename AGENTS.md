@@ -1,62 +1,74 @@
-# Agent rules (shared, versioned)
+# Agent operating rules (example)
 
-Canonical, human-readable copy of the standing rules for Claude agents working on this
-server. This file is the shared source of truth you can read and edit in git.
+An example set of standing rules for Claude Code agents that work on a server around the
+clock. Copy what fits into your own `~/.claude/CLAUDE.md` or a project's `CLAUDE.md` —
+Claude Code reads those files when a session starts; it does not read this one.
 
-> How recall actually works: each session loads my per-project **auto-memory**
-> (`~/.claude/projects/<project>/memory/`) into context — that is what makes me *follow*
-> these rules. This repo file does **not** auto-load for arbitrary projects; it is the
-> shared canonical copy. Keep the two in sync: when a rule changes, update both.
+AgentKennel already writes a short version of the safety, test-first and links rules into
+the `~/.claude/CLAUDE.md` it creates for its agents (see the README's Safety section).
+This file is the longer, editable form.
 
 ## Working style
-- **TDD always.** Write a failing test first, make it pass, refactor. Show test results
-  before saying "done".
-- **Always test for real.** Every task includes actually running the code (and tests),
-  not just code review. No "should work".
-- **Validate on real data.** Before a big or destructive run, test on a slice of the
-  ACTUAL data, and on a short run (a couple of minutes / small slice); check the result
-  (e.g. in the DB) before the full run.
-- **No projection from incomplete data.** Report only measured facts. Mark untested
-  outcomes as untested; never predict them as if observed.
-- **Supervisor mode:** medium strictness, max 3 self-review iterations, then show the
-  result. If a gate fails, fix it rather than report it.
 
-## Finishing what I start
-> **#1 RULE — DO NOT STOP.** On an authorized, unfinished task, keep going to DONE or a REAL
-> blocker. A finished sub-phase, a commit, a "clean boundary", "this is consequential so I'll
-> confirm", or "say go to continue" are NOT reasons to stop — they are the exact betrayal the
-> user has called out repeatedly. The only legitimate stop is a genuine blocker (missing
-> decision/credential/access). Everything else: continue.
+- **Test first.** Write a test that fails for the right reason, then the code that makes it
+  pass, then run the whole suite. Show the result before saying "done". A bug fix starts
+  with a test that reproduces the bug. If a change breaks an existing test, fix the change,
+  not the test.
+- **Run it for real.** Every task includes actually running the code, not just reading it.
+  "Should work" is not a result.
+- **Try it small first.** Before a big or destructive run, try a short run on a slice of the
+  real data and check the result where it lands (the database, the file), then do the full run.
+- **Report what was measured.** Mark anything untested as untested; never describe a
+  predicted outcome as if it was observed.
+- **Read before writing.** Read the existing code before changing it, and don't ask what
+  the code can answer. If a requirement is ambiguous, pick a reasonable option, write the
+  choice down and move on.
 
-- **No empty continuation.** Never end a turn with a bare "continuing / will do it now".
-  Do it in the same turn or stop explicitly. Between turns I do not exist.
-- **Autonomous to completion.** When told "to the end / don't stop", run until the task is
-  DONE or genuinely BLOCKED. Do not stop at "milestones". If a turn ends mid-task, in that
-  SAME turn call `ScheduleWakeup` with `delaySeconds: 60` and a prompt that resumes the
-  task, so it self-continues without the user. Only stop without a wakeup when DONE+verified
-  or truly BLOCKED (then say "DONE" or "BLOCKED on X — need Y").
-- **Self-timer for promises.** "I'll check back in N min" → schedule the wakeup in the same
-  turn; an unscheduled promise is empty.
+## Finishing what you start
 
-## Big / multi-step tasks
-- **Use a tracker, up front.** For anything beyond ~3-4 steps or spanning turns, set up a
-  visible tracker before diving in and update it at each milestone (not at the end):
-  - In-session task list (Task tools).
-  - Durable `.progress-<task>.md` for cross-session state (keep it after completion).
-  - The shared live board: **https://agents.reimake.com/tasks/** — one state.json shared by
-    all agents, SSE-pushed to every open tab. Move it with `tasks-dashboard/tracker.py`
-    (`set <task> <item_index> <todo|active|done|blocked>`).
-  - **Auto-sync (preferred for long/background jobs):** wrap the command with
-    `tasks-dashboard/track-run.sh <task> <item> [--note N] -- <cmd>` and it flips its own
-    board item on completion — `done` on exit 0, `blocked` on failure (exit code preserved).
-    No manual post-hoc `set`, so the board can't go stale.
+- **Keep going until done or truly blocked.** A finished sub-step or a commit is not a
+  reason to stop. A real blocker is a missing decision, credential or access — then say
+  "BLOCKED on X, need Y".
+- **No empty promises.** Don't end a turn with "continuing…". Either do the next step now,
+  or leave something that brings you back: a background command, a timer
+  (`ScheduleWakeup` / `CronCreate`), or the task closed on the board.
+- **"I'll check back in 10 minutes" means a timer is set** in the same turn.
+
+## Big or multi-step tasks
+
+- **Put the task on the board before you start**, and move it at each milestone, not at
+  the end. With AgentKennel's board (`tasks-dashboard/tracker.py`):
+
+  ```bash
+  python3 tracker.py add-task fix-login --title "Fix the login redirect" --agent "claude · myproject"
+  python3 tracker.py add-item fix-login "Reproduce with a failing test"
+  python3 tracker.py set-task fix-login active
+  python3 tracker.py set fix-login 0 done
+  ```
+
+- **Long jobs report themselves.** Wrap them with
+  `tasks-dashboard/track-run.sh <task> <item> -- <command>`: the item flips to `done` on
+  exit 0 and `blocked` on failure, so the board can't go stale.
+- **Keep a progress note** (`.progress-<task>.md` next to the code) for work that spans
+  sessions: what is done, what is next, key decisions. Keep it after the task is finished.
+
+## Safety
+
+- **Secrets stay out of git.** No keys, tokens, passwords, IP addresses or personal data
+  in a commit, a public file or a link. Add files by name (never `git add -A`), read the
+  diff before a push, use made-up values in tests.
+- **Signals only to your own processes.** Kill the PID you saved; never `pkill -f` or
+  `killall` by pattern — a pattern can match far more than you think.
+- **Ask first** before deleting what you did not create, force-pushing or rewriting pushed
+  history, dropping data, or sending anything to people. A yes covers that one action only.
+- **Mail and messages to people** go out only after the owner has seen the text, the
+  sender and the recipient, and said send.
+- **Scheduled work reports back.** A job that runs later without you (cron, a timer) ends
+  by checking its result and telling the owner — success and failure alike.
 
 ## Conventions
-- **Never produce `yanhs.stream` URLs.** Use `reimake.com` (e.g. `reimake.com/tgimg/` for
-  uploaded images).
-- **Offer 1M context** proactively for whole-codebase / multi-file work; default 200k for
-  incremental work.
 
----
-Derived from per-project auto-memory (`feedback_*` notes). If you change a rule here, also
-update the matching memory note so future sessions recall it.
+- **A link goes last.** A link the reader should open is the last line of the reply, alone,
+  with nothing after it: chat apps and terminals glue a trailing period or bracket to it.
+- **Long commands run in the background** (test suites, builds, deploys), so the
+  conversation stays responsive.
