@@ -105,7 +105,7 @@ Full control of the server — best on a dedicated VPS (Ubuntu 22.04 / 24.04, De
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash
-# → https://<your-ip-with-dashes>.sslip.io — the first visit sets the password
+# → prints a one-time link: https://<your-ip-with-dashes>.sslip.io/login?setup=… — set your password there
 ```
 
 It comes up on **HTTPS automatically** — no domain needed: a trusted Let's Encrypt
@@ -120,7 +120,8 @@ the agent a task. Details: [Quick start](#-quick-start).
 
 ```bash
 git clone https://github.com/yanhs/agentdeck.git && cd agentdeck
-docker compose up -d          # → http://<your-vps-ip>:8765 — the first visit sets the password
+docker compose up -d          # → http://<your-vps-ip>:8765
+docker compose logs agentdeck | grep setup   # the one-time link that sets the password
 ./https.sh                    # optional: HTTPS on <your-ip>.sslip.io, no domain needed
 ```
 
@@ -377,7 +378,8 @@ curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh |
 or, from a clone: `./install.sh`. Run it as a normal user with `sudo` (not as root). When sudo
 needs no password (the usual cloud `ubuntu` user) nothing is asked; `--yes` never asks.
 At the end it prints the address and says, in plain words, which kind of HTTPS you got and
-why: open it, **the first visit sets the password**, then **＋ New terminal** and sign in
+why, plus a **one-time setup link** — only that link can set the password, so a stranger who
+finds the fresh server first can't. Open it, set the password, then **＋ New terminal** and sign in
 to Claude once. New terminals open in `~/projects` (so Claude asks to trust that folder, not
 your whole home); `AGENTDECK_WORKDIR=/path` at install time changes it, and re-runs keep it.
 
@@ -433,8 +435,9 @@ docker compose up -d                            # → http://<your-vps-ip>:8765
 Want HTTPS? Run `./https.sh` — no domain needed (it uses a free `<ip>.sslip.io` name), or
 `./https.sh your-domain.com`.
 
-Open `http://<your-vps-ip>:8765`:
-1. the **first visit asks you to set a dashboard password** (it exposes live terminals);
+Set the password at the one-time link from the log (`docker compose logs agentdeck | grep setup`,
+then open `http://<your-vps-ip>:8765/login?setup=…`) — only that link can set it:
+1. **set a dashboard password** (it exposes live terminals);
 2. create a terminal (**＋ New terminal**) and **sign in to your Claude account once** — it's saved in a volume and reused.
    The first terminal's Claude asks two things before it's ready: first a **colour theme**, then
    **how to log in** (pick your Claude subscription or an API key and follow the link it shows);

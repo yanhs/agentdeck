@@ -2,6 +2,14 @@
 
 All notable changes to AgentDeck. Newest first.
 
+## v2.0.4 — Only the setup link sets the password
+
+### Security
+- **A fresh install can't be taken by whoever finds it first.** With no password yet, the login page used to offer "Set a password" to anyone, and the first visitor owned the dashboard — a shell with your sudo. A new `sslip.io` name shows up in public certificate logs within minutes, and bots read them. Now the password can be set only through a one-time link, `/login?setup=<token>`: `install.sh` prints it at the end (run it again to see it), the Docker container writes it to its log (`docker compose logs agentdeck | grep setup`), and `python3 status_server.py --setup-link` shows it on the server. Without it the page says where to find it, and a POST without the token is refused. The token is kept next to the password file (`.sessions/.dashpass.setup`, readable only by you) and deleted once the password is set. Installs that already have a password are not affected; `AGENTDECK_PASSWORD` still pre-seeds it.
+
+### Upgrading
+- `install.sh`: run it again (or `git pull` and `./install.sh`). Docker: `git pull && docker compose up -d --build`.
+
 ## v2.0.3 — Links go last
 
 ### Agents

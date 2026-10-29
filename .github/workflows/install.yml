@@ -37,7 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: ./install.sh --yes
-        run: ./install.sh --yes
+        run: ./install.sh --yes | tee /tmp/install.log
       - name: services active
         run: |
           for u in agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service \
@@ -48,7 +48,7 @@ jobs:
         run: |
           for i in $(seq 20); do curl -fsS http://127.0.0.1:9876/status && exit 0; sleep 1; done; exit 1
       - name: smoke test (login, new terminal, board, server tab)
-        run: python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --first-run --new-terminal --id-file /tmp/sid
+        run: python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --first-run --setup "$(grep -o '/login?setup=[A-Za-z0-9_-]*' /tmp/install.log | tail -1)" --new-terminal --id-file /tmp/sid
       - name: claude runs in the new terminal
         run: |
           TMUX_TMPDIR=$PWD/.sessions/tmux tmux list-panes -a -F '#{session_name} #{pane_current_command}' | tee /dev/stderr | grep -Eq "^cs-$(cat /tmp/sid) (claude|node)"
@@ -79,11 +79,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: ./install.sh --yes --guests
-        run: ./install.sh --yes --guests
+        run: ./install.sh --yes --guests | tee /tmp/install.log
       - name: the answer is recorded, the dashboard works
         run: |
           grep -x 'AGENTDECK_GUESTS=1' ~/.config/agentdeck/install.env
-          python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --first-run
+          python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --first-run --setup "$(grep -o '/login?setup=[A-Za-z0-9_-]*' /tmp/install.log | tail -1)"
       - name: guests/install.sh --check
         run: guests/install.sh --check
       - name: guests/install.sh --yes (guests/.env not filled in yet)

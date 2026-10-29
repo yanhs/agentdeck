@@ -3,7 +3,8 @@
 # (nginx/agents-subdomain.conf): backend (status_server: all API ports + the session
 # library API) + the task board + ONE ttyd for the session library (/sess/) + the idle
 # reaper (once a minute) + Caddy (login gate + automatic HTTPS) in front.
-# The dashboard password is set on first visit (no env needed) and stored in the volume.
+# The dashboard password is set through the one-time setup link this script logs (no env
+# needed) and stored in the volume.
 set -uo pipefail
 cd /app
 
@@ -30,8 +31,12 @@ os.umask(0o077); open(path, "w").write(f"{salt.hex()}${h.hex()}")
 PY
   echo "[agentdeck] dashboard password seeded from AGENTDECK_PASSWORD"
 fi
-[ -s "$AGENTDECK_PASSFILE" ] && echo "[agentdeck] dashboard password is set" \
-  || echo "[agentdeck] no password yet — open the dashboard and set one on first visit"
+if [ -s "$AGENTDECK_PASSFILE" ]; then
+  echo "[agentdeck] dashboard password is set"
+else   # only this one-time link can set it (a stranger opening the port first can't)
+  echo "[agentdeck] no password yet — set it at the one-time setup link (your dashboard address +):"
+  echo "[agentdeck]   $(python3 status_server.py --setup-link)   e.g. http://<your-vps-ip>:8765/login?setup=…"
+fi
 
 # ~/.claude.json (claude's home-level config) is NOT inside the ~/.claude volume on its own —
 # keep it persisted: store it in the volume and symlink it back, so a restart doesn't lose the

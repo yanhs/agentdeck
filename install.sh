@@ -1016,11 +1016,24 @@ explain_mode() {
   esac
 }
 
+setup_link() {  # the first-run link's path (/login?setup=…), empty once a password is set
+  (cd "$DIR" && AGENTDECK_PASSFILE="$DIR/.sessions/.dashpass" \
+    AGENTDECK_AUTH_SECRET="$DIR/.sessions/.agents_auth_secret" \
+    python3 status_server.py --setup-link 2>/dev/null) || true
+}
+
 finish() {
+  local link
+  link="$(setup_link)"
   echo
   say "AgentDeck is running:  $(dashboard_url)"
   explain_mode
-  say "  1. Open it — the first visit sets the password."
+  if [ -n "$link" ]; then
+    say "  1. Set your password at this one-time link (only it can — keep it private):"
+    say "       $(dashboard_url)$link"
+  else
+    say "  1. Open it and sign in with your password."
+  fi
   say "  2. Then + New terminal, and sign in to Claude once (every terminal reuses the login)."
   [ -n "$WORKDIR" ] || resolve_workdir
   say "  New terminals open in ${WORKDIR/#$HOME/\~} (set AGENTDECK_WORKDIR to change)"

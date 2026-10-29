@@ -114,4 +114,5 @@ docker exec -u ubuntu "$NAME" bash -lc 'claude --version'
 echo "=== scenario"
 docker cp "$HERE/fake_anthropic_api.py" "$NAME:/opt/fake_anthropic_api.py"
 python3 "$HERE/convo_e2e.py" "$BASE" --container "$NAME" --password "$PW" \
+  --setup "$(grep -o '/login?setup=[A-Za-z0-9_-]*' "$WORK/install.log" | tail -1)" \
   --label "$LABEL ($COMMIT)"

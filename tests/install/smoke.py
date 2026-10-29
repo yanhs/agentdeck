@@ -4,8 +4,10 @@
     smoke.py BASE_URL --password PW [--first-run] [--new-terminal] [--expect-id ID]
              [--id-file PATH] [--insecure] [--connect HOST:PORT]
 
-  --first-run      the login page must be the "set a password" form; POST /login
-                   pass/pass2 sets it. Otherwise log in with user admin + PW.
+  --first-run      no password yet: /login (no token) must refuse to set one — page and
+                   POST — and --setup LINK (/login?setup=<token>, what install.sh prints)
+                   must show the "set a password" form; POST /login pass/pass2/setup sets
+                   it. Otherwise log in with user admin + PW.
   --new-terminal   POST /api/library/new (JSON, Origin = BASE_URL), open /sess/?arg=<id>,
                    then attach over the ttyd websocket and wait for terminal output
                    (proves ttyd -> open-session.sh -> tmux -> claude starts). The id is
@@ -54,6 +56,7 @@ def main():
     ap.add_argument("base")
     ap.add_argument("--password", required=True)
     ap.add_argument("--first-run", action="store_true")
+    ap.add_argument("--setup", default="", help="the first-run link's path, /login?setup=…")
     ap.add_argument("--new-terminal", action="store_true")
     ap.add_argument("--expect-id")
     ap.add_argument("--id-file")
@@ -89,23 +92,34 @@ def main():
     while time.time() < deadline:
         try:
             code, _, body = req("GET", "/login")
-            if code == 200:
+            if code == (403 if a.first_run else 200):
                 break
         except OSError:
             pass
         time.sleep(2)
-    check("GET /login 200", code == 200, f"got {code}")
-    if code != 200:
+    want = 403 if a.first_run else 200
+    check(f"GET /login {want}", code == want, f"got {code}")
+    if code != want:
         return 1
+    token = urllib.parse.parse_qs(urllib.parse.urlparse(a.setup).query).get("setup", [""])[0]
     if a.first_run:
-        check("first run shows the set-password form", b'name="pass2"' in body)
+        # a stranger who opens the fresh install first can't take it
+        check("first run: no set-password form without the setup link", b'name="pass2"' not in body)
+        code, _, _ = req("POST", "/login", urllib.parse.urlencode(
+            {"pass": "stranger-1", "pass2": "stranger-1"}).encode(),
+            {"Content-Type": "application/x-www-form-urlencoded"})
+        check("first run: POST without the token is refused", code == 403 and len(jar) == 0,
+              f"status {code}")
+        code, _, body = req("GET", a.setup or "/login?setup=missing")
+        check("the setup link shows the set-password form",
+              code == 200 and b'name="pass2"' in body, f"status {code}")
 
     code, hdrs, _ = req("GET", "/")
     check("GET / without login -> /login", code == 302 and "/login" in hdrs.get("Location", ""),
           f"{code} {hdrs.get('Location')}")
 
     # 1. log in (first run: set the password)
-    form = ({"pass": a.password, "pass2": a.password} if a.first_run
+    form = ({"pass": a.password, "pass2": a.password, "setup": token} if a.first_run
             else {"user": "admin", "pass": a.password})
     code, hdrs, _ = req("POST", "/login", urllib.parse.urlencode(form).encode(),
                         {"Content-Type": "application/x-www-form-urlencoded"})

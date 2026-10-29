@@ -40,7 +40,7 @@ os.umask(0o077); open(p, "w").write(f"{salt.hex()}${h.hex()}")
 PY
 fi
 [ -s "$AGENTDECK_PASSFILE" ] && echo "[agentdeck] dashboard password is set" \
-  || echo "[agentdeck] no password yet — open the dashboard and set one on first visit"
+  || echo "[agentdeck] no password yet — set it at the one-time link: <dashboard>$(python3 status_server.py --setup-link)"
 
 # Guard hooks (task board before edits, no silent mid-task stop): ON by default in Docker.
 # Here they would go into YOUR ~/.claude/settings.json, which every Claude Code session on

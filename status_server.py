@@ -15,6 +15,7 @@ import os
 import re
 import hmac
 import hashlib
+import secrets
 import unicodedata
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
@@ -1922,7 +1923,7 @@ class LiveHandler(BaseHTTPRequestHandler):
 # request (fetch, iframe, ttyd ws) carries it automatically. Passwords are the
 # SAME (verified against the existing /etc/nginx/.htpasswd_agents).
 
-HTPASSWD_FILE = "/etc/nginx/.htpasswd_agents"
+HTPASSWD_FILE = os.environ.get("AGENTDECK_HTPASSWD", "/etc/nginx/.htpasswd_agents")
 # Cookie-signing key. AGENTDECK_AUTH_SECRET lets the entrypoint keep it in the persistent
 # volume (so sessions survive a container recreate and the key is never baked into the image);
 # the default sits next to this module, leaving the existing host service untouched.
@@ -1992,6 +1993,59 @@ def _pw_store(pw):
             f.write(f"{salt.hex()}${h.hex()}")
     finally:
         os.umask(old)
+    _setup_token_drop()
+
+
+# First run: the password may be set only through /login?setup=<token>. Without it, the
+# first stranger to open a fresh install (sslip.io names show up in public certificate
+# logs within minutes) would set the password and own a shell with your sudo. The token
+# sits next to the passfile (0600); install.sh and the container's log print the link
+# (`status_server.py --setup-link`); setting the password deletes it.
+def _setup_token_file():
+    return PASSFILE + ".setup" if PASSFILE else ""
+
+
+def _setup_open():
+    return bool(PASSFILE) and not _pw_is_set() and not _pw_seedable()
+
+
+def _setup_token():
+    """The current token, made on first use; '' when there is nothing to set up."""
+    if not _setup_open():
+        return ""
+    path = _setup_token_file()
+    try:
+        with open(path) as f:
+            tok = f.read().strip()
+        if tok:
+            return tok
+    except OSError:
+        pass
+    tok = secrets.token_urlsafe(24)
+    old = os.umask(0o077)
+    try:
+        with open(path, "w") as f:
+            f.write(tok + "\n")
+    finally:
+        os.umask(old)
+    return tok
+
+
+def _setup_token_ok(given):
+    tok = _setup_token()
+    return bool(tok and given) and hmac.compare_digest(tok, given)
+
+
+def _setup_token_drop():
+    try:
+        os.unlink(_setup_token_file())
+    except OSError:
+        pass
+
+
+def setup_link_path():
+    tok = _setup_token()
+    return f"/login?setup={tok}" if tok else ""
 
 
 def _pw_verify(pw):
@@ -2118,15 +2172,26 @@ _AUTH_HEAD = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
   'a{color:#58a6ff}</style>' + _FRAME_BREAKOUT + '</head><body>')
 
 
-def _setup_form(error=""):
+def _setup_form(error="", token=""):
     return (_AUTH_HEAD + '<form class="card" method="POST" action="/login">'
       '<h1>🛰 AgentDeck</h1><p class="sub">Set a password to protect the dashboard</p>'
+      f'<input type="hidden" name="setup" value="{token}">'
       '<label for="p">New password</label>'
       '<input id="p" name="pass" type="password" autocomplete="new-password" autofocus>'
       '<label for="p2">Repeat password</label>'
       '<input id="p2" name="pass2" type="password" autocomplete="new-password">'
       '<button type="submit">Set password</button>'
       + (f'<p class="err">{error}</p>' if error else '') + '</form></body></html>')
+
+
+def _setup_locked():
+    return (_AUTH_HEAD + '<div class="card">'
+      '<h1>🛰 AgentDeck</h1><p class="sub">No password yet</p>'
+      '<p>Open the <b>setup link</b> the installer printed — only that link can set the '
+      'password. To show it again, on the server run <code>~/agentdeck/install.sh</code> '
+      'again, or <code>python3 status_server.py --setup-link</code> in the AgentDeck folder '
+      '(Docker: <code>docker compose logs agentdeck | grep setup</code>).</p>'
+      '</div></body></html>')
 
 
 def _change_form(error="", ok=""):
@@ -2167,9 +2232,11 @@ class AuthHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_login(self, error=False):
-        if PASSFILE and not _pw_is_set() and not _pw_seedable():
-            return self._html(_setup_form("Passwords must match (6+ chars)" if error else ""),
-                              401 if error else 200)
+        if _setup_open():
+            given = parse_qs(urlparse(self.path).query).get("setup", [""])[0]
+            if not _setup_token_ok(given):
+                return self._html(_setup_locked(), 403)
+            return self._html(_setup_form(token=given))
         self._html(login_html(error), 401 if error else 200)
 
     def _session_cookie(self, user):
@@ -2247,11 +2314,15 @@ class AuthHandler(BaseHTTPRequestHandler):
             _pw_store(new)
             return self._html(_change_form(ok="Password changed."))
 
-        # /login — FIRST RUN (passfile mode, no password yet) sets it; otherwise verify
-        if PASSFILE and not _pw_is_set() and not _pw_seedable():
+        # /login — FIRST RUN (passfile mode, no password yet) sets it, with the setup
+        # link's token only; otherwise verify
+        if _setup_open():
+            given = form.get("setup", [""])[0]
+            if not _setup_token_ok(given):
+                return self._html(_setup_locked(), 403)
             new, new2 = form.get("pass", [""])[0], form.get("pass2", [""])[0]
             if len(new) < 6 or new != new2:
-                return self._html(_setup_form("Passwords must match (6+ chars)"))
+                return self._html(_setup_form("Passwords must match (6+ chars)", token=given))
             _pw_store(new)
             return self._login_cookie("admin")
 
@@ -2342,6 +2413,10 @@ class PasteHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if "--setup-link" in sys.argv[1:]:   # the first-run link's path ('' + exit 1: none)
+        link = setup_link_path()
+        print(link)
+        sys.exit(0 if link else 1)
     from threading import Thread
     SERVER_COLLECTOR.start()  # /api/server: sample /proc every 5 s
     tg_autostart()  # bring the Telegram bridge back up if it was configured + enabled

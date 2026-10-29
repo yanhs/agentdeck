@@ -164,15 +164,16 @@ class Deck:
         while time.time() < end:
             try:
                 code, body = self.req("GET", "/login")
-                if code == 200:
+                if code in (200, 403):      # 403: no password yet, the setup link is needed
                     return body
             except OSError:
                 pass
             time.sleep(2)
         return None
 
-    def login(self, password, first_run):
-        form = ({"pass": password, "pass2": password} if first_run
+    def login(self, password, first_run, setup=""):
+        token = urllib.parse.parse_qs(urllib.parse.urlparse(setup).query).get("setup", [""])[0]
+        form = ({"pass": password, "pass2": password, "setup": token} if first_run
                 else {"user": "admin", "pass": password})
         self.req("POST", "/login", urllib.parse.urlencode(form).encode(),
                  {"Content-Type": "application/x-www-form-urlencoded"})
@@ -321,14 +322,14 @@ def term_id(deck, default=""):
     return (terminal(deck) or {}).get("id") or default
 
 
-def run(deck, box, password, label):
+def run(deck, box, password, label, setup=""):
     import threading
     print(f"=== one number per terminal — {label}", flush=True)
     note("claude: " + box.sh("claude --version").stdout.strip())
     if deck.wait_up() is None:
         check("dashboard answers", False)
         return 1
-    check("first run: password set, logged in", deck.login(password, first_run=True))
+    check("first run: password set, logged in", deck.login(password, first_run=True, setup=setup))
 
     # 0. a new terminal on a server where nobody has signed in to Claude yet
     code, row = deck.post("new", {"name": NAME})
@@ -537,8 +538,9 @@ def main():
     ap.add_argument("--container", required=True)
     ap.add_argument("--password", required=True)
     ap.add_argument("--label", default="")
+    ap.add_argument("--setup", default="", help="the first-run link install.sh printed")
     a = ap.parse_args()
-    raise SystemExit(run(Deck(a.base), Box(a.container), a.password, a.label))
+    raise SystemExit(run(Deck(a.base), Box(a.container), a.password, a.label, a.setup))
 
 
 if __name__ == "__main__":

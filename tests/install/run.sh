@@ -268,8 +268,11 @@ expect "claude installed for the user" docker exec -u ubuntu "$NAME" bash -lc 'c
 expect "ttyd + caddy + node in place" docker exec "$NAME" bash -c 'ttyd --version && caddy version && node --version'
 
 say "smoke (first run)"
+# the one-time link, taken from what the installer printed — the way a user gets it
+SETUP="$(grep -o '/login?setup=[A-Za-z0-9_-]*' "$WORK/install1.log" | tail -1)"
+expect "installer prints the one-time setup link" test -n "$SETUP"
 expect "smoke: first run + new terminal" smoke --password "$PW" \
-  --first-run --new-terminal --id-file "$WORK/id"
+  --first-run --setup "$SETUP" --new-terminal --id-file "$WORK/id"
 SID="$(cat "$WORK/id" 2>/dev/null || true)"
 tmux_has() {
   docker exec -u ubuntu -e TMUX_TMPDIR=/home/ubuntu/agentdeck/.sessions/tmux "$NAME" \
