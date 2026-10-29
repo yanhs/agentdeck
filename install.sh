@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# AgentDeck — one-command install on your own server. The agents get the whole machine:
+# AgentKennel — one-command install on your own server. The agents get the whole machine:
 # they run as you, with your sudo, so they can install packages, databases, nginx,
 # HTTPS, Docker… exactly like you at the keyboard. Use a dedicated VPS, not your laptop.
 #
-#   curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/yanhs/agentkennel/master/install.sh | bash
 #   ./install.sh                 (from a clone: installs that clone as it is)
 #
 # HTTPS is the default — the dashboard password never travels in clear text:
@@ -57,7 +57,7 @@
 # AGENTDECK_ALT_PORT (HTTPS when 443 is taken, default 8443).
 set -Eeuo pipefail
 
-REPO_URL="${AGENTDECK_REPO_URL:-https://github.com/yanhs/agentdeck.git}"
+REPO_URL="${AGENTDECK_REPO_URL:-https://github.com/yanhs/agentkennel.git}"
 BRANCH="${AGENTDECK_BRANCH:-master}"
 CADDY_VERSION="${CADDY_VERSION:-2.11.4}"
 NODE_MAJOR=22
@@ -71,7 +71,7 @@ SUDO="${SUDO-sudo}"
 UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.service agentdeck-reaper.timer agentdeck-services.service"
 # the units that run (the reaper .service is started by its timer)
 RUN_UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.timer agentdeck-services.service"
-SANDBOX_HINT="git clone https://github.com/yanhs/agentdeck && cd agentdeck && docker compose up -d"
+SANDBOX_HINT="git clone https://github.com/yanhs/agentkennel && cd agentkennel && docker compose up -d"
 CERT_WAIT="${AGENTDECK_CERT_WAIT:-120}"
 CERT_POLL="${AGENTDECK_CERT_POLL:-3}"
 CHANGED_UNITS=()
@@ -257,7 +257,7 @@ unit_service_common() {
   sd_env AGENTDECK_AUTH_SECRET "$d/.sessions/.agents_auth_secret"
   sd_env TRACKER_STATE "$d/.sessions/tasks-state.json"
   sd_env AGENTDECK_SITE "${AGENTDECK_SITE:-:8765}"
-  # the agents' tmux server gets a folder of its own: every tmux call of AgentDeck (and
+  # the agents' tmux server gets a folder of its own: every tmux call of AgentKennel (and
   # of the agents) talks to it, and none touches your own tmux sessions
   sd_env TMUX_TMPDIR "$d/$TMUX_SUBDIR"
   sd_env XDG_DATA_HOME "$h/.local/share"
@@ -275,7 +275,7 @@ render_unit() {
     agentdeck-status.service)
       cat <<EOF
 [Unit]
-Description=AgentDeck backend (status_server.py: API + login gate)
+Description=AgentKennel backend (status_server.py: API + login gate)
 After=network-online.target
 Wants=network-online.target
 
@@ -294,7 +294,7 @@ EOF
     agentdeck-tasks.service)
       cat <<EOF
 [Unit]
-Description=AgentDeck task board (/tasks/)
+Description=AgentKennel task board (/tasks/)
 After=network-online.target
 
 [Service]
@@ -310,7 +310,7 @@ EOF
     agentdeck-services.service)
       cat <<EOF
 [Unit]
-Description=AgentDeck services keeper (<work folder>/.services: programs that outlive a terminal)
+Description=AgentKennel services keeper (<work folder>/.services: programs that outlive a terminal)
 After=network-online.target
 
 [Service]
@@ -326,7 +326,7 @@ EOF
     agentdeck-sessions.service)
       cat <<EOF
 [Unit]
-Description=AgentDeck terminals (one ttyd for /sess/ -> open-session.sh)
+Description=AgentKennel terminals (one ttyd for /sess/ -> open-session.sh)
 After=network-online.target
 
 [Service]
@@ -344,7 +344,7 @@ EOF
     agentdeck-caddy.service)
       cat <<EOF
 [Unit]
-Description=AgentDeck proxy + login + HTTPS (Caddy)
+Description=AgentKennel proxy + login + HTTPS (Caddy)
 After=network-online.target agentdeck-status.service
 Wants=network-online.target
 
@@ -366,7 +366,7 @@ EOF
     agentdeck-reaper.service)
       cat <<EOF
 [Unit]
-Description=AgentDeck idle reaper (unloads terminals nobody uses)
+Description=AgentKennel idle reaper (unloads terminals nobody uses)
 
 [Service]
 Type=oneshot
@@ -377,7 +377,7 @@ EOF
     agentdeck-reaper.timer)
       cat <<EOF
 [Unit]
-Description=AgentDeck idle reaper, once a minute
+Description=AgentKennel idle reaper, once a minute
 
 [Timer]
 OnBootSec=1min
@@ -428,11 +428,11 @@ purge_target() {
 # ── the installer ─────────────────────────────────────────────────────────────────────
 usage() {
   cat <<'EOF'
-AgentDeck installer — agents get the whole server (use a dedicated VPS).
+AgentKennel installer — agents get the whole server (use a dedicated VPS).
 HTTPS by default: a free Let's Encrypt certificate on https://<ip>.sslip.io when ports
 80/443 are free, otherwise a self-signed one on :8765 (the browser warns once).
 
-  curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/yanhs/agentkennel/master/install.sh | bash
   ./install.sh [options]          (from a clone)
 
   --yes, -y          never ask anything (sudo must work without a password)
@@ -485,7 +485,7 @@ parse_args() {
 refuse_unsupported() {
   cat >&2 <<EOF
 
-AgentDeck's installer runs on Ubuntu 22.04 / 24.04 and Debian 12 (x86_64 or aarch64).
+AgentKennel's installer runs on Ubuntu 22.04 / 24.04 and Debian 12 (x86_64 or aarch64).
 This machine is $1: not supported — nothing was changed.
 
 Use the Docker sandbox instead (runs anywhere Docker does):
@@ -579,7 +579,7 @@ ask_guests() {
   GUESTS=0
   human_here || return 0
   printf '\nWill other people work on this server too? Each would get their own sandbox\n' >&2
-  printf '(an AgentDeck of their own, in Docker) on your Claude subscription, with a daily\n' >&2
+  printf '(an AgentKennel of their own, in Docker) on your Claude subscription, with a daily\n' >&2
   printf 'limit. You can turn it on any time later in the dashboard. [y/N] ' >&2
   read -r ans <"${AGENTDECK_TTY:-/dev/tty}" || ans=""
   case "$ans" in [yY]|[yY][eE][sS]) GUESTS=1 ;; esac
@@ -810,7 +810,7 @@ get_repo() {
     git -C "$DIR" pull --ff-only -q </dev/null \
       || warn "couldn't fast-forward $DIR (local changes?) — installing the code that is there"
   elif [ -e "$DIR" ]; then
-    die "$DIR exists but is not a git clone of AgentDeck. Move it away, or set AGENTDECK_DIR=/another/path"
+    die "$DIR exists but is not a git clone of AgentKennel. Move it away, or set AGENTDECK_DIR=/another/path"
   else
     say "cloning $REPO_URL -> $DIR"
     git clone -q -b "$BRANCH" "$REPO_URL" "$DIR" </dev/null
@@ -1026,7 +1026,7 @@ finish() {
   local link
   link="$(setup_link)"
   echo
-  say "AgentDeck is running:  $(dashboard_url)"
+  say "AgentKennel is running:  $(dashboard_url)"
   explain_mode
   if [ -n "$link" ]; then
     say "  1. Set your password at this one-time link (only it can — keep it private):"
@@ -1084,16 +1084,16 @@ uninstall() {
     say "guard hooks removed from ~/.claude/settings.json"
   fi
   if [ "$PURGE" = 1 ]; then
-    step "Deleting AgentDeck's files"
+    step "Deleting AgentKennel's files"
     if [ -n "$purge_dir" ]; then
       rm -rf -- "$purge_dir"; say "deleted $purge_dir"
       rm -f -- "$CONF_FILE"
     fi
     say "kept: ttyd, Caddy, Node.js, Claude Code and your Claude login in ~/.claude"
   else
-    say "kept: ${dir:-the AgentDeck folder} with your terminals, task board and password — --uninstall --purge deletes them"
+    say "kept: ${dir:-the AgentKennel folder} with your terminals, task board and password — --uninstall --purge deletes them"
   fi
-  say "AgentDeck services removed."
+  say "AgentKennel services removed."
 }
 
 main() {
@@ -1108,7 +1108,7 @@ main() {
   step "System packages (apt)"
   apt_install tmux python3 git curl ca-certificates procps uuid-runtime openssl gnupg iproute2 tar
 
-  step "AgentDeck code"
+  step "AgentKennel code"
   local was_piped=0; [ -z "$(self_dir)" ] && was_piped=1
   get_repo
   if [ "$was_piped" = 1 ] && [ -z "${AGENTDECK_REEXEC:-}" ]; then

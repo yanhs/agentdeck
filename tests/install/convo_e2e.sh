@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # End-to-end check of "one number per terminal" on a fresh server: a container with
-# systemd as PID 1 (tests/install/Dockerfile.ubuntu-24.04), AgentDeck installed the way
+# systemd as PID 1 (tests/install/Dockerfile.ubuntu-24.04), AgentKennel installed the way
 # users do (`bash < install.sh`), the real Claude Code the installer puts there.
 #
 #   tests/install/convo_e2e.sh            the working tree (tracked files, like run.sh)
@@ -16,7 +16,7 @@
 #      in the container (tests/install/fake_anthropic_api.py) in ~/.claude/oauth.env;
 #      A is reopened (claude --session-id A…), the first-run screens are answered and
 #      Claude's bypass-permissions consent (never pre-accepted) gets "Yes, I accept"
-#   2. Claude relaunches ITSELF without the --session-id AgentDeck gave it — on 2.1.282
+#   2. Claude relaunches ITSELF without the --session-id AgentKennel gave it — on 2.1.282
 #      the consent alone doesn't; its "Try the new fullscreen renderer?" offer does
 #      (forced on with CLAUDE_CODE_FORCE_FULLSCREEN_UPSELL=1 so it comes now; /tui
 #      fullscreen is the fallback): the conversation gets a new number B, the command

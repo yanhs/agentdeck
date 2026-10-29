@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drives the "one number per terminal" scenario against an installed AgentDeck in a
+"""Drives the "one number per terminal" scenario against an installed AgentKennel in a
 test container (tests/install/convo_e2e.sh boots it). Stdlib only.
 
     convo_e2e.py BASE_URL --container NAME --password PW [--label TEXT]
@@ -65,7 +65,7 @@ class Box:
         return r
 
     def tmux(self, *args):
-        # a UTF-8 locale, as AgentDeck's services have: without one tmux 3.4 prints a
+        # a UTF-8 locale, as AgentKennel's services have: without one tmux 3.4 prints a
         # tab in -F output as "_"
         return subprocess.run(["docker", "exec", "-u", "ubuntu", "-e", f"TMUX_TMPDIR={TMUX_TMPDIR}",
                                "-e", "LC_ALL=C.UTF-8", self.name, "tmux", *args],
@@ -375,7 +375,7 @@ def run(deck, box, password, label, setup=""):
     TABLE.append(("'Yes, I accept' (consent) relaunches Claude?",
                   f"{'yes' if on_consent else 'no'}: conversation {(u2 or '?')[:8]}"))
 
-    # 2. Claude relaunches itself without the --session-id AgentDeck gave it: a new
+    # 2. Claude relaunches itself without the --session-id AgentKennel gave it: a new
     #    conversation B in terminal A. A "browser tab" stays attached meanwhile.
     tab = threading.Thread(target=deck.open, args=(A,), kwargs={"seconds": 150, "stay": True},
                            daemon=True)                  # ends by itself (or at the unload)
