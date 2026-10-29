@@ -54,45 +54,79 @@ HOME = os.path.expanduser("~")
 # ── friendly names ──────────────────────────────────────────────────────────
 # unit -> (name, what (None = the unit's own description), group)
 FRIENDLY_UNITS = {
-    "nginx.service": ("nginx", "Web server and reverse proxy for every site", "apps"),
-    "postgresql@14-main.service": ("PostgreSQL 14", "Host database (Safin RAG and others)", "apps"),
+    "agentkennel-status.service": ("Dashboard backend", "Serves this dashboard's APIs", "apps"),
+    "agentkennel-tasks.service": ("Task board", "Live task board for the agents", "apps"),
+    "agentkennel-sessions.service": ("Web terminals", "One ttyd for every terminal tab", "apps"),
+    "agentkennel-caddy.service": ("Caddy", "HTTPS, login and reverse proxy for the dashboard", "apps"),
+    "agentkennel-services.service": ("Services keeper", "Programs that outlive a terminal", "apps"),
+    "agentkennel-reaper.service": ("Idle reaper", "Unloads terminals nobody uses", "system"),
+    "claude-tg-bridge.service": ("Telegram bridge", "Telegram <-> terminal bridge", "apps"),
+    "nginx.service": ("nginx", "Web server and reverse proxy", "apps"),
+    "postgresql@14-main.service": ("PostgreSQL 14", "Host database", "apps"),
     "mariadb.service": ("MariaDB", "MySQL-compatible database", "apps"),
     "php8.1-fpm.service": ("PHP-FPM", "Runs the PHP sites", "apps"),
-    "secondwind-backend.service": ("SecondWind backend", None, "apps"),
-    "secondwind-storefront.service": ("SecondWind storefront", None, "apps"),
-    "svetlota-orders.service": ("Svetlota orders", None, "apps"),
     "ttyd.service": ("ttyd", "Browser terminal", "apps"),
     "postfix@-.service": ("Postfix", "Mail server", "apps"),
-    "agents-status-server.service": ("Dashboard backend", "Serves this dashboard's APIs", "apps"),
-    "claude-telegram-bot.service": ("Claude Telegram bot", None, "apps"),
-    "claude-tg-bridge.service": ("Telegram bridge", "Telegram <-> terminal bridge", "apps"),
-    "iai-embedder.service": ("IAI embedder", "Local text embedder for agent memory", "apps"),
-    "iai-mcp-daemon.service": ("IAI memory daemon", "Consolidates agent memory between sessions", "apps"),
-    "safin-rag.service": ("Safin RAG", None, "apps"),
-    "tasks-tracker.service": ("Task board", "Live task board for the agents", "apps"),
-    "lagratar-order-bot.service": ("La Gratar order bot", None, "apps"),
-    "vpn-bot.service": ("VPN sales bot", None, "apps"),
-    "kolobok-api.service": ("Kolobok VPN API", None, "apps"),
-    "contact-api.service": ("Contact API", None, "apps"),
-    "orchestra-web.service": ("Orchestra web", None, "apps"),
-    "yacht-api.service": ("Yacht booking API", None, "apps"),
     "docker.service": ("Docker engine", "Runs the containers", "system"),
     "containerd.service": ("containerd", "Container runtime", "system"),
     "tailscaled.service": ("Tailscale", "Private network", "system"),
-    "memguard.service": ("memguard", "Kills runaway processes when memory runs low", "system"),
     "dbus.service": ("D-Bus", "System message bus", "system"),
     "gpg-agent.service": ("gpg-agent", "Key agent", "system"),
 }
-# docker container name -> (display name, what); regex groups fill {1}, {2}
-FRIENDLY_CONTAINERS = [
-    (r"immappeal-prod-(blue|green)", "ImmAppeal production web + API ({1} slot)"),
-    (r"immappeal-dev", "ImmAppeal web + API (dev)"),
-    (r"immappeal-(\w+)-db", "ImmAppeal {1} database (Postgres + pgvector)"),
-    (r"sparkaide-web", "SparkAide cleaning platform (Next.js)"),
-    (r"sparkaide-db", "SparkAide database (Postgres)"),
-    (r"secondwind-db", "SecondWind database (Postgres)"),
-    (r"3x-ui", "VPN panel + Xray (Kolobok VPN)"),
-]
+# docker container name (a regex, whole name) -> what; regex groups fill {1}, {2}.
+# None built in: containers are each server's own — see load_names().
+FRIENDLY_CONTAINERS = []
+NAME_GROUPS = ("apps", "system", "jobs")
+
+
+def names_file():
+    """Where this server's own friendly names live (optional): AGENTKENNEL_SERVER_NAMES,
+    else ~/.config/agentkennel/server-names.json."""
+    return envcompat.get("SERVER_NAMES") or os.path.join(
+        os.path.expanduser("~"), ".config", "agentkennel", "server-names.json")
+
+
+def _parse_names(data):
+    if not isinstance(data, dict):
+        raise ValueError("not a JSON object")
+    units, containers = data.get("units", {}), data.get("containers", [])
+    if not isinstance(units, dict) or not isinstance(containers, list):
+        raise ValueError('"units" must be an object and "containers" a list')
+    out_u = {}
+    for unit, v in units.items():
+        if not (isinstance(v, list) and len(v) == 3 and isinstance(v[0], str) and v[0]
+                and (v[1] is None or isinstance(v[1], str)) and v[2] in NAME_GROUPS):
+            raise ValueError(f'units["{unit}"] must be ["Name", "what" or null, '
+                             f'"apps|system|jobs"]')
+        out_u[unit] = tuple(v)
+    out_c = []
+    for v in containers:
+        if not (isinstance(v, list) and len(v) == 2 and all(isinstance(x, str) for x in v)):
+            raise ValueError('a "containers" entry must be ["<regex>", "description"]')
+        re.compile(v[0])
+        out_c.append(tuple(v))
+    return out_u, out_c
+
+
+def load_names(path=None):
+    """(units, containers): the built-in friendly names with this server's names file
+    merged over them — its units win, its container patterns are checked first. No file:
+    the built-in ones. A broken file is ignored whole, with one line on stderr."""
+    units, containers = dict(FRIENDLY_UNITS), list(FRIENDLY_CONTAINERS)
+    path = path or names_file()
+    try:
+        with open(path, encoding="utf-8") as f:
+            own_u, own_c = _parse_names(json.loads(f.read()))
+    except FileNotFoundError:
+        return units, containers
+    except (OSError, ValueError, re.error) as ex:      # JSON/UTF-8 errors are ValueErrors
+        print(f"server_status: ignoring {path}: {str(ex).splitlines()[0][:200]}",
+              file=sys.stderr)
+        return units, containers
+    units.update(own_u)
+    return units, own_c + containers
+
+
 _SKIP_UNITS = re.compile(r"^(pm2-\w+|user@\d+)\.service$")
 
 # ── process labels (never a full command line) ──────────────────────────────
@@ -324,7 +358,8 @@ _NOT_JOBS = {"tmux", "tmux:", "bash", "sh", "zsh", "dash", "sshd", "systemd", "i
 class Collector:
     def __init__(self, proc_root="/proc", interval=INTERVAL, history_len=HISTORY_LEN,
                  tmux_panes=None, docker_ps=None, units=None, pm2_names=None,
-                 library_names=None, disk_path="/", clock=time.time, hz=None, page_kb=None):
+                 library_names=None, disk_path="/", clock=time.time, hz=None, page_kb=None,
+                 names_path=None):
         self.root = proc_root
         self.interval = interval
         self.clock = clock
@@ -336,6 +371,7 @@ class Collector:
         self.src_units = units or default_units
         self.src_pm2 = pm2_names or default_pm2_names
         self.src_lib = library_names or default_library_names
+        self.units_names, self.container_names = load_names(names_path)
         self._cache = {}                 # name -> (t, value)
         self._meta = {}                  # (pid, start, comm) -> {"argv", "cgroup"}
         self._prev_ticks = {}
@@ -638,7 +674,7 @@ class Collector:
             u = unit_of(p.pid)
             if not u:
                 continue
-            fr = FRIENDLY_UNITS.get(u)
+            fr = self.units_names.get(u)
             scope = (units.get(u) or {}).get("scope") or (
                 "user" if "/user@" in cgroup(p.pid) else "system")
             grp = fr[2] if fr else ("apps" if scope == "user" else "system")
@@ -647,7 +683,7 @@ class Collector:
             if key not in members:
                 members[key] = self._unit_member(key, u, grp, units.get(u), fr)
         for u, info in units.items():
-            fr = FRIENDLY_UNITS.get(u)
+            fr = self.units_names.get(u)
             grp = fr[2] if fr else ("apps" if info.get("scope") == "user" else "system")
             if grp != "apps" or ("unit:" + u) in members:
                 continue
@@ -711,7 +747,7 @@ class Collector:
 
     def _container_member(self, key, info):
         what = None
-        for pat, desc in FRIENDLY_CONTAINERS:
+        for pat, desc in self.container_names:
             m = re.fullmatch(pat, info["name"])
             if m:
                 what = desc

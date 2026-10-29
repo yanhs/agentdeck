@@ -26,4 +26,14 @@ Docker, put them in a `.env` next to `docker-compose.yml`.
 | Pasted images (Ctrl+V / ⌘V) | `AGENTKENNEL_PASTE_DIR`, `AGENTKENNEL_PASTE_URL` env | default `.sessions/paste`, no public URL; the terminal gets the file's path either way |
 | Uploaded files (📎 File / drop) | `AGENTKENNEL_UPLOAD_DIR`, `AGENTKENNEL_UPLOAD_MAX_MB` env | default `.sessions/uploads/<date>/`, private (0700/0600), 100 MB per file; never served on the web |
 | Pretty project names | `PROJECT_MAP` in `status_server.py` | optional, cosmetic |
+| Friendly names on the Server page | `~/.config/agentkennel/server-names.json` (`AGENTKENNEL_SERVER_NAMES`) | optional, cosmetic; see below |
 | Reverse proxy / TLS (manual setup) | `nginx/agents-subdomain.conf` | a template: swap in your domain and paths, see [Manual setup](manual-setup.md) |
+
+**Server page names.** The Server page names AgentKennel's own units and a few common
+ones (nginx, PostgreSQL, Docker, …); everything else shows its systemd description or
+Docker image. To name your own, write `server-names.json`:
+`{"units": {"shop-api.service": ["Shop API", null, "apps"]}, "containers": [["shop-(\\w+)", "Shop web ({1})"]]}`.
+A unit is `["Name", "what it does" or null for the unit's own description, "apps" | "system" | "jobs"]`;
+a container is `["<regex for the whole name>", "description"]`, where `{1}`, `{2}` are the
+regex groups. Your units win over the built-in ones and your container patterns are tried
+first. It is read when the backend starts; a broken file is ignored with one line in its log.

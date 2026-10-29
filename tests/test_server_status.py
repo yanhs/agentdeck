@@ -112,25 +112,35 @@ class Clock:
         return self.t
 
 
+NAMES_FILE = {
+    "units": {"acme-api.service": ["Acme API", None, "apps"],
+              "acme-bot.service": ["Acme bot", None, "apps"]},
+    "containers": [[r"acme-(\w+)", "Acme web + API ({1})"]],
+}
+
+
 def make_collector(fp, clock, **kw):
-    lib_by_sid = {"b36f2fd1": "ImmAppeal deploy"}
+    lib_by_sid = {"b36f2fd1": "Acme deploy"}
     lib_by_uuid = {"aaaa1111-2222-4333-8444-555566667777": "TG bridge work"}
+    # the private, per-server names (load_names merges them over the built-in ones)
+    names = fp.root.parent / "server-names.json"
+    names.write_text(json.dumps(NAMES_FILE))
     args = dict(
-        proc_root=str(fp.root), clock=clock, hz=HZ, page_kb=PAGE_KB, disk_path="/",
+        names_path=str(names), proc_root=str(fp.root), clock=clock, hz=HZ, page_kb=PAGE_KB, disk_path="/",
         tmux_panes=lambda: [("cs-b36f2fd1", 500), ("claude-terminal-3", 600),
                             ("cmd-shell", 700)],
-        docker_ps=lambda: {DOCKER_ID: {"name": "immappeal-dev", "state": "running",
-                                       "status": "Up 2 hours", "image": "immappeal:f5010d7"},
+        docker_ps=lambda: {DOCKER_ID: {"name": "acme-dev", "state": "running",
+                                       "status": "Up 2 hours", "image": "acme:f5010d7"},
                            "cd" * 32: {"name": "old-thing", "state": "exited",
                                        "status": "Exited (0) 3 days ago", "image": "busybox"}},
-        units=lambda: {"safin-rag.service": {"active": "active", "scope": "user",
-                                             "desc": "Safin RAG API (FastAPI + pgvector + Claude)"},
+        units=lambda: {"acme-api.service": {"active": "active", "scope": "user",
+                                            "desc": "Acme API (FastAPI + pgvector + Claude)"},
                        "nginx.service": {"active": "active", "scope": "system",
                                          "desc": "A high performance web server"},
                        "cron.service": {"active": "active", "scope": "system",
                                         "desc": "Regular background program processing daemon"},
-                       "vpn-bot.service": {"active": "failed", "scope": "user",
-                                           "desc": "MakeBlitz VPN Sales Bot"}},
+                       "acme-bot.service": {"active": "failed", "scope": "user",
+                                            "desc": "Acme Sales Bot"}},
         library_names=lambda: (lib_by_sid, lib_by_uuid),
     )
     args.update(kw)
@@ -153,7 +163,7 @@ def world(tmp_path):
     # library terminal: the pane IS claude, with a pytest grandchild burning CPU
     fp.add(500, "claude", 400, argv=["/home/ubuntu/.local/bin/claude", "--resume",
                                       "bbbb2222-3333-4444-8555-666677778888"],
-           cwd="/home/ubuntu/pr/Appeals/dev", rss_mb=400)
+           cwd="/home/ubuntu/pr/acme/dev", rss_mb=400)
     fp.add(501, "bash", 500, argv=["/bin/bash", "-c", f"ANTHROPIC_API_KEY={SECRET} pytest -q"])
     fp.add(502, "python3", 501, argv=["python3", "-m", "pytest", "-q", "tests/", f"--token={SECRET}"],
            rss_mb=200)
@@ -178,8 +188,8 @@ def world(tmp_path):
     fp.add(1002, "claude", 1001, cgroup=f"0::/system.slice/docker-{DOCKER_ID}.scope",
            argv=["claude", "-p"], rss_mb=200)
     # services
-    fp.add(1100, "python3", 1, cgroup=USER_UNIT.format("safin-rag.service"),
-           argv=["/home/ubuntu/pr/safin/.venv/bin/python3", "-m", "uvicorn", "app:app"], rss_mb=120)
+    fp.add(1100, "python3", 1, cgroup=USER_UNIT.format("acme-api.service"),
+           argv=["/home/ubuntu/pr/acme/.venv/bin/python3", "-m", "uvicorn", "app:app"], rss_mb=120)
     fp.add(1200, "nginx", 1, cgroup=SYS_UNIT.format("nginx.service"),
            argv=["nginx: master process /usr/sbin/nginx -g daemon on;"], rss_mb=5)
     fp.add(1201, "nginx", 1200, cgroup=SYS_UNIT.format("nginx.service"),
@@ -321,13 +331,13 @@ def test_group_order_and_titles(world):
 def test_library_terminal_agent_with_its_children(world):
     snap = world[3]
     a = member(snap, "agents", lambda m: m.get("terminal") == "cs-b36f2fd1")
-    assert a["name"] == "ImmAppeal deploy"
+    assert a["name"] == "Acme deploy"
     assert a["kind"] == "claude"
     assert a["status"] == "working"
     # claude 10 % + pytest 100 % + mcp node 5 %; bash 0
     assert a["cpu_pct"] == pytest.approx(115, abs=0.5)
     assert a["rss_mb"] == pytest.approx(400 + 10 + 200 + 60, abs=1)
-    assert "~/pr/Appeals/dev" in a["what"]
+    assert "~/pr/acme/dev" in a["what"]
     names = [ch["name"] for ch in a["children"]]
     assert names[0] == "pytest"                      # busiest first
     assert "node mcp-server.js" in names
@@ -354,12 +364,12 @@ def test_claude_outside_tmux_is_still_an_agent(world):
 def test_claude_inside_a_container_belongs_to_the_container(world):
     snap = world[3]
     assert not [m for m in group(snap, "agents")["members"] if m["id"].endswith(":1002")]
-    d = member(snap, "apps", lambda m: m["name"] == "immappeal-dev")
+    d = member(snap, "apps", lambda m: m["name"] == "acme-dev")
     assert d["kind"] == "container"
     assert d["status"] == "working"                 # 50 % of a core
     assert d["cpu_pct"] == pytest.approx(50, abs=0.5)
     assert d["rss_mb"] == pytest.approx(1000, abs=1)
-    assert "ImmAppeal" in d["what"]
+    assert d["what"] == "Acme web + API (dev)"          # from the names file, {1} = dev
 
 
 def test_stopped_container_is_listed_as_stopped(world):
@@ -370,15 +380,15 @@ def test_stopped_container_is_listed_as_stopped(world):
 
 def test_services_are_discovered_by_cgroup_with_friendly_names(world):
     snap = world[3]
-    s = member(snap, "apps", lambda m: m["id"] == "unit:safin-rag.service")
+    s = member(snap, "apps", lambda m: m["id"] == "unit:acme-api.service")
     assert s["kind"] == "service"
-    assert s["name"] == "Safin RAG"
-    assert s["what"] == "Safin RAG API (FastAPI + pgvector + Claude)"
+    assert s["name"] == "Acme API"                      # from the names file
+    assert s["what"] == "Acme API (FastAPI + pgvector + Claude)"   # what=null: the unit's own
     n = member(snap, "apps", lambda m: m["id"] == "unit:nginx.service")
     assert n["name"] == "nginx"
     assert n["cpu_pct"] == pytest.approx(2, abs=0.2)
     # a known-but-failed unit shows up as stopped
-    v = member(snap, "apps", lambda m: m["id"] == "unit:vpn-bot.service")
+    v = member(snap, "apps", lambda m: m["id"] == "unit:acme-bot.service")
     assert v["status"] == "stopped"
 
 
@@ -469,7 +479,7 @@ def test_redact_free_text(text, bad):
 
 
 def test_redact_keeps_ordinary_text():
-    s = "Safin RAG API (FastAPI + pgvector + Claude) ~/pr/Appeals/dev immappeal:f5010d7"
+    s = "Acme API (FastAPI + pgvector + Claude) ~/pr/acme/dev acme:f5010d7"
     assert ss.redact(s) == s
 
 
@@ -611,3 +621,90 @@ def test_nginx_puts_api_server_behind_the_login():
     assert "auth_request off" not in body
     # the server-level auth_request covers every location that doesn't switch it off
     assert re.search(r"^\s*auth_request /__auth;", conf, re.M)
+
+
+# ── friendly names: built-in generic ones + an optional local file ─────────
+def _names(tmp_path, data):
+    p = tmp_path / "server-names.json"
+    if isinstance(data, bytes):
+        p.write_bytes(data)
+    else:
+        p.write_text(data if isinstance(data, str) else json.dumps(data))
+    return str(p)
+
+
+def test_builtin_names_cover_the_units_a_fresh_install_runs():
+    src = (TERMINAL_DIR / "install.sh").read_text()
+    units = re.search(r'^RUN_UNITS="([^"]+)"', src, re.M).group(1).split()
+    for u in [u for u in units if u.endswith(".service")] + ["agentkennel-reaper.service"]:
+        assert u in ss.FRIENDLY_UNITS, u
+    for u, (name, what, grp) in ss.FRIENDLY_UNITS.items():
+        assert name and grp in ("apps", "system", "jobs"), u
+
+
+def test_names_file_is_merged_over_the_builtin_names(tmp_path, capsys):
+    path = _names(tmp_path, {
+        "units": {"acme-api.service": ["Acme API", None, "apps"],
+                  "nginx.service": ["Front door", "The proxy", "system"]},
+        "containers": [["acme-(blue|green)", "Acme web ({1} slot)"]]})
+    units, containers = ss.load_names(path)
+    assert units["acme-api.service"] == ("Acme API", None, "apps")
+    assert units["nginx.service"] == ("Front door", "The proxy", "system")     # the file wins
+    assert units["docker.service"] == ss.FRIENDLY_UNITS["docker.service"]       # the rest kept
+    assert containers[0] == ("acme-(blue|green)", "Acme web ({1} slot)")       # checked first
+    assert containers[1:] == list(ss.FRIENDLY_CONTAINERS)
+    assert ss.FRIENDLY_UNITS["nginx.service"][0] == "nginx"                     # not mutated
+    assert capsys.readouterr().err == ""
+
+
+def test_names_file_location_env_then_config_dir(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".config" / "agentkennel").mkdir(parents=True)
+    (home / ".config" / "agentkennel" / "server-names.json").write_text(
+        json.dumps({"units": {"a.service": ["From home", None, "apps"]}}))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("AGENTKENNEL_SERVER_NAMES", raising=False)
+    monkeypatch.delenv("AGENTDECK_SERVER_NAMES", raising=False)
+    assert ss.load_names()[0]["a.service"][0] == "From home"
+    monkeypatch.setenv("AGENTKENNEL_SERVER_NAMES",
+                       _names(tmp_path, {"units": {"a.service": ["From env", None, "apps"]}}))
+    assert ss.load_names()[0]["a.service"][0] == "From env"
+
+
+def test_a_missing_names_file_is_just_the_builtin_names(tmp_path, capsys):
+    units, containers = ss.load_names(str(tmp_path / "nope.json"))
+    assert units == ss.FRIENDLY_UNITS and containers == list(ss.FRIENDLY_CONTAINERS)
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("bad", [
+    "{broken", "[1, 2]", '{"units": [1]}', '{"containers": {"a": "b"}}',
+    '{"units": {"x.service": ["only a name"]}}',
+    '{"units": {"x.service": ["X", null, "nowhere"]}}',
+    '{"units": {"x.service": [5, null, "apps"]}}',
+    '{"units": {"x.service": ["X", 5, "apps"]}}',
+    '{"containers": [["(unclosed", "bad regex"]]}',
+    '{"containers": [["ok", 7]]}',
+    '{"containers": [["ok"]]}',
+    b"\xff\xfe{",
+])
+def test_a_broken_names_file_is_ignored_with_one_line_on_stderr(tmp_path, capsys, bad):
+    path = _names(tmp_path, bad)
+    units, containers = ss.load_names(path)
+    assert units == ss.FRIENDLY_UNITS and containers == list(ss.FRIENDLY_CONTAINERS)
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and path in err, err
+
+
+def test_names_file_regex_groups_fill_the_description(tmp_path):
+    fp = FakeProc(tmp_path / "proc")
+    fp.add(1, "systemd", 0, cgroup="0::/init.scope", argv=["/sbin/init"])
+    path = _names(tmp_path, {"containers": [[r"shop-(\w+)-(blue|green)", "Shop {1} ({2} slot)"]]})
+    c = ss.Collector(names_path=path, proc_root=str(fp.root), clock=Clock(), hz=HZ,
+                     page_kb=PAGE_KB, tmux_panes=lambda: [], units=lambda: {},
+                     library_names=lambda: ({}, {}),
+                     docker_ps=lambda: {DOCKER_ID: {"name": "shop-prod-green", "state": "running",
+                                                    "status": "Up", "image": "shop:1"}})
+    snap = c.sample()
+    d = member(snap, "apps", lambda m: m["name"] == "shop-prod-green")
+    assert d["what"] == "Shop prod (green slot)"

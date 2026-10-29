@@ -39,20 +39,20 @@ def m(mid, name, kind, status, cpu, rss, what="", children=(), **kw):
 def snapshot(cpu=62.0, t=1_790_000_000.0):
     groups = [
         ("agents", "Agents", [
-            m("agent:500", "ImmAppeal deploy", "claude", "working", 115.0, 670,
-              "Claude Code in ~/pr/Appeals/dev · running pytest",
+            m("agent:500", "Acme deploy", "claude", "working", 115.0, 670,
+              "Claude Code in ~/pr/acme/dev · running pytest",
               [("pytest", 100.0, 200), ("node mcp-server.js", 5.0, 60)], terminal="cs-b36f2fd1"),
             m("agent:601", "Landing page copy", "claude", "idle", 1.0, 300,
               "Claude Code in ~/pr", terminal="claude-terminal-3"),
         ]),
         ("apps", "Sites & apps", [
-            m("docker:immappeal-dev", "immappeal-dev", "container", "working", 50.0, 1000,
-              "ImmAppeal web + API (dev)", [("next-server", 40.0, 500), ("python3 api.py", 10, 300)],
+            m("docker:acme-dev", "acme-dev", "container", "working", 50.0, 1000,
+              "Acme web + API (dev)", [("next-server", 40.0, 500), ("python3 api.py", 10, 300)],
               detail="Up 2 hours"),
             m("unit:nginx.service", "nginx", "service", "running", 2.0, 25,
-              "Web server and reverse proxy for every site", [("nginx", 2.0, 25)]),
-            m("unit:vpn-bot.service", "VPN sales bot", "service", "stopped", 0, 0,
-              "MakeBlitz VPN Sales Bot"),
+              "Web server and reverse proxy", [("nginx", 2.0, 25)]),
+            m("unit:acme-bot.service", "Acme bot", "service", "stopped", 0, 0,
+              "Acme Sales Bot"),
         ] + [m(f"unit:svc{i}.service", f"Service {i}", "service", "running", 0.1 * i, 20 + i,
                f"Small service {i}") for i in range(14)]),
         ("jobs", "Background jobs", [
@@ -202,17 +202,17 @@ def test_groups_in_order_with_rows(page):
     titles = page.eval_on_selector_all("section.group h2 .gt", "els => els.map(e => e.textContent)")
     assert titles == ["Agents", "Sites & apps", "Background jobs", "System"]
     a = page.query_selector('.row[data-id="agent:500"]')
-    assert "ImmAppeal deploy" in a.inner_text()
+    assert "Acme deploy" in a.inner_text()
     assert "running pytest" in a.inner_text()
     assert "working" in a.query_selector(".dot").get_attribute("class")
     idle = page.query_selector('.row[data-id="agent:601"] .dot').get_attribute("class")
     assert "idle" in idle
-    stopped = page.query_selector('.row[data-id="unit:vpn-bot.service"]')
+    stopped = page.query_selector('.row[data-id="unit:acme-bot.service"]')
     assert "stopped" in stopped.get_attribute("class")
     # CPU shown as a share of the whole machine: 115 % of one core / 8 cores
     assert page.inner_text('.row[data-id="agent:500"] .cpu .v').strip() == "14%"
     assert page.inner_text('.row[data-id="agent:500"] .mem .v').strip() == "670 MB"
-    assert page.inner_text('.row[data-id="docker:immappeal-dev"] .mem .v').strip() == "1.0 GB"
+    assert page.inner_text('.row[data-id="docker:acme-dev"] .mem .v').strip() == "1.0 GB"
 
 
 def test_long_groups_are_trimmed_with_show_more(page):
