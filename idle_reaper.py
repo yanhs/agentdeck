@@ -129,6 +129,19 @@ def session_screen(session):
     return r.stdout if r.returncode == 0 else None
 
 
+def _corner_notice(line):
+    """A line pushed to the right edge: Claude Code's notice corner ("Checking for
+    updates", "new task? /clear …"). An idle repaint adds and clears these."""
+    lead = len(line) - len(line.lstrip(" "))
+    return lead >= 20 and lead * 2 >= len(line.rstrip())
+
+
+def screen_digest(screen):
+    """Hash of what the terminal shows, without blank lines and the notice corner."""
+    kept = [l.rstrip() for l in screen.splitlines() if l.strip() and not _corner_notice(l)]
+    return hashlib.sha1("\n".join(kept).encode()).hexdigest()
+
+
 def output_at(session, now, screens):
     """Unix time the terminal's screen last changed, or None if unknown.
 
@@ -140,7 +153,7 @@ def output_at(session, now, screens):
     screen = session_screen(session)
     if screen is None:
         return tmux_at
-    digest = hashlib.sha1(screen.encode()).hexdigest()
+    digest = screen_digest(screen)
     seen = screens.get(session)
     if seen and seen[0] == digest:
         return seen[1]

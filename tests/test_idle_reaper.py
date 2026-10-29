@@ -148,6 +148,29 @@ def test_a_screen_that_changes_restarts_the_clock(monkeypatch, tmp_path):
     assert reaper.sweep(now=t0 + 1800 + IDLE + 60) == ["s"]
 
 
+def test_a_notice_in_the_corner_is_not_work(monkeypatch, tmp_path):
+    # the same repaint sometimes adds or clears Claude Code's right-aligned notice
+    # "Checking for updates" (seen 2026-10-29 12:17 and 12:24); the screen is the same
+    pad = " " * 190
+    screen = "\u276f \n" + "\u23f5\u23f5 bypass permissions on\n"
+    t0 = 100_000
+    t = FakeTmux({"s": dict(activity=t0 - 60, attached=False, bg=False, screen=screen)})
+    t.install(monkeypatch, tmp_path)
+    assert reaper.sweep(now=t0) == []
+    t.sessions["s"].update(activity=t0 + 1800, screen=screen + pad + "Checking for updates\n")
+    assert reaper.sweep(now=t0 + 1830) == []
+    t.sessions["s"].update(activity=t0 + 3600, screen=screen + pad + "\n")
+    assert reaper.sweep(now=t0 + 3630) == []
+    assert reaper.sweep(now=t0 + IDLE) == ["s"]
+
+
+def test_text_on_the_left_still_counts():
+    a = "  \u280b Working (12s)\n" + " " * 150 + "Checking for updates\n"
+    b = "  \u2819 Working (13s)\n" + " " * 150 + "Checking for updates\n"
+    assert reaper.screen_digest(a) != reaper.screen_digest(b)
+    assert reaper.screen_digest(a) == reaper.screen_digest(a.replace("Checking for updates", ""))
+
+
 def test_first_sight_counts_from_the_last_output(monkeypatch, tmp_path):
     # a terminal silent for 3 h when the reaper first reads its screen goes now,
     # not two hours later
