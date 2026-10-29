@@ -6,9 +6,6 @@ Most people should use the one-line installer or the Docker sandbox from the
 [README](../README.md#-quick-start). This page is for running the pieces yourself — for
 example on a server that already has nginx and a certificate for your domain.
 
-Names such as `agentdeck-*`, `~/agentdeck`, `AGENTDECK_*` and `.sessions/` keep the
-project's earlier name, so existing installs upgrade in place.
-
 ## Requirements
 
 - Linux, **Python 3.11+**
@@ -23,17 +20,17 @@ project's earlier name, so existing installs upgrade in place.
 
 ```bash
 git clone https://github.com/yanhs/agentkennel.git && cd agentkennel
-./start.sh                       # → http://<server>:8765; AGENTDECK_SITE=your-domain for HTTPS
+./start.sh                       # → http://<server>:8765; AGENTKENNEL_SITE=your-domain for HTTPS
 ```
 
 It starts the status server, the task board, one ttyd, the idle reaper, the services keeper
 and Caddy, and
 prints the one-time setup link for the password. Guard hooks are not installed into your
-own `~/.claude/settings.json` unless you ask: `AGENTDECK_GUARDS=1 ./start.sh`.
+own `~/.claude/settings.json` unless you ask: `AGENTKENNEL_GUARDS=1 ./start.sh`.
 
 ## Behind your own nginx
 
-> `claude` is found on your `PATH`, agents start in `$AGENTDECK_WORKDIR` (default: the
+> `claude` is found on your `PATH`, agents start in `$AGENTKENNEL_WORKDIR` (default: the
 > directory above the repo), and every terminal's conversation is kept under `.sessions/`.
 > There is no agent list to edit by hand: terminals are created, renamed, archived and
 > trashed in the dashboard (**＋ New terminal**), which writes `.sessions/library.json`.
@@ -43,12 +40,12 @@ git clone https://github.com/yanhs/agentkennel.git && cd agentkennel
 
 # 1) the backend — ONE process serves every dashboard API
 #    (library, status, login, tmux-buffer, page-version, paste-image, upload, /telegram).
-#    AGENTDECK_PASSFILE: the dashboard keeps its own password (so ⋯ → Password works).
-#    AGENTDECK_ORIGIN is only needed when the proxy doesn't pass the original Host +
+#    AGENTKENNEL_PASSFILE: the dashboard keeps its own password (so ⋯ → Password works).
+#    AGENTKENNEL_ORIGIN is only needed when the proxy doesn't pass the original Host +
 #    X-Forwarded-Proto; unset = the request's own scheme + Host.
-export AGENTDECK_PASSFILE=$PWD/.sessions/.dashpass
+export AGENTKENNEL_PASSFILE=$PWD/.sessions/.dashpass
 mkdir -p .sessions
-AGENTDECK_ORIGIN=https://agents.example.com python3 status_server.py &
+AGENTKENNEL_ORIGIN=https://agents.example.com python3 status_server.py &
 
 # 2) ONE ttyd for every terminal: /sess/?arg=<code> runs open-session.sh <code>
 #    (-a passes ?arg= to the script, -O checks the WebSocket origin)
@@ -59,7 +56,7 @@ ttyd -W -a -O -i lo -p 3031 --base-path /sess bash ./open-session.sh &
 python3 tasks-dashboard/server.py &
 
 # 4) the idle reaper — once a minute from cron (crontab -e):
-#    * * * * * cd /path/to/agentdeck && python3 idle_reaper.py >> idle_reaper.log 2>&1
+#    * * * * * cd /path/to/agentkennel && python3 idle_reaper.py >> idle_reaper.log 2>&1
 
 # 5) the services keeper — programs that outlive a terminal (<work folder>/.services/)
 python3 services_keeper.py &
@@ -73,15 +70,15 @@ python3 services_keeper.py &
 ```
 
 Copy `nginx/agents-subdomain.conf` to `/etc/nginx/sites-available/`, replace
-`agents.example.com` and `/home/deck/agentdeck` with your domain and checkout, point
+`agents.example.com` and `/home/deck/agentkennel` with your domain and checkout, point
 `ssl_certificate` / `ssl_certificate_key` at your certificate (the comments in the file say
 where), enable it and reload nginx.
 
 ### The first password
 
-With `AGENTDECK_PASSFILE` set and the file still empty, only a one-time link can set the
+With `AGENTKENNEL_PASSFILE` set and the file still empty, only a one-time link can set the
 password, so a stranger who finds the server first can't. Print it on the server, with the
-same `AGENTDECK_PASSFILE` in the environment:
+same `AGENTKENNEL_PASSFILE` in the environment:
 
 ```bash
 python3 status_server.py --setup-link     # → /login?setup=<token>
@@ -89,10 +86,10 @@ python3 status_server.py --setup-link     # → /login?setup=<token>
 
 and open `https://agents.example.com/login?setup=<token>`. Setting the password deletes
 the token. To pre-seed it instead, put the password in the file the way `start.sh` does
-with `AGENTDECK_PASSWORD`.
+with `AGENTKENNEL_PASSWORD`.
 
-Without `AGENTDECK_PASSFILE`, the login checks an nginx-style htpasswd file instead
-(`/etc/nginx/.htpasswd_agents`, or `AGENTDECK_HTPASSWD`):
+Without `AGENTKENNEL_PASSFILE`, the login checks an nginx-style htpasswd file instead
+(`/etc/nginx/.htpasswd_agents`, or `AGENTKENNEL_HTPASSWD`):
 
 ```bash
 sudo htpasswd -c /etc/nginx/.htpasswd_agents <your-username>
@@ -105,7 +102,7 @@ copies the password into the passfile.
 
 Run `status_server.py`, the ttyd and `tg_bridge.py` as systemd services —
 `claude-tg-bridge.service` is a template. `install.sh` writes the same set of units
-(`agentdeck-status`, `-tasks`, `-sessions`, `-services`, `-caddy`, the `agentdeck-reaper`
+(`agentkennel-status`, `-tasks`, `-sessions`, `-services`, `-caddy`, the `agentkennel-reaper`
 timer); reading them is a quick way to see the exact command lines.
 
 ## Hooks
@@ -116,7 +113,7 @@ until 10 minutes after the wake-up time (a `CronCreate` or `Monitor`: for 6 hour
 neither the memory limit nor the idle reaper unloads it and kills the timer.
 
 **Task-board hooks** (on by default in Docker and with `install.sh`; opt out with
-`AGENTDECK_GUARDS=0`), plain Python with no dependencies:
+`AGENTKENNEL_GUARDS=0`), plain Python with no dependencies:
 
 - `guard_task_board.py` blocks the first file edit of a session until the work is on the
   task board (any `tracker.py` call). For a genuinely trivial change the agent runs
@@ -136,15 +133,15 @@ The three safety guards are described in the README's
 default `~/.claude/CLAUDE.md` if there is none; `install.sh` does the same in your own
 `~/.claude` (`--uninstall` takes them out again). With `./start.sh` they would go into
 your own `~/.claude/settings.json`, which every Claude Code session on the machine reads,
-so `start.sh` only prints a hint; run `AGENTDECK_GUARDS=1 ./start.sh` (or
+so `start.sh` only prints a hint; run `AGENTKENNEL_GUARDS=1 ./start.sh` (or
 `python3 hooks/install_guards.py`) to install them, `python3 hooks/install_guards.py
 --remove` to take them out. Or copy the `hooks` block from `hooks/settings.example.json`
-into one project's `.claude/settings.json` and replace `/path/to/agentdeck` with where you
+into one project's `.claude/settings.json` and replace `/path/to/agentkennel` with where you
 cloned the repo.
 
 **Settings** (environment variables): `TRACKER_STATE` (the board file, same default as
-`tracker.py`), `AGENTDECK_TRACKER` (path to `tracker.py`), `AGENTDECK_BOARD_URL` (a board
-link to show in the messages) and `AGENTDECK_BOARD_MARKS` / `AGENTDECK_STOP_MARKS`
+`tracker.py`), `AGENTKENNEL_TRACKER` (path to `tracker.py`), `AGENTKENNEL_BOARD_URL` (a board
+link to show in the messages) and `AGENTKENNEL_BOARD_MARKS` / `AGENTKENNEL_STOP_MARKS`
 (per-session marker folders, default under `$TMPDIR`). If a hook hits an error of its own,
 it lets the action through.
 

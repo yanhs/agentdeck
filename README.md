@@ -40,7 +40,7 @@ Or keep the agents inside a container:
 ```bash
 git clone https://github.com/yanhs/agentkennel.git && cd agentkennel
 docker compose up -d                           # → http://<your-vps-ip>:8765
-docker compose logs agentdeck | grep setup     # the one-time link that sets the password
+docker compose logs agentkennel | grep setup   # the one-time link that sets the password
 ```
 
 > ⚠️ **What the agents may do.** AgentKennel starts Claude Code with
@@ -51,8 +51,9 @@ docker compose logs agentdeck | grep setup     # the one-time link that sets the
 > touch the host. [Safety](#-safety-what-agents-never-do-without-you) lists what they never
 > do without you.
 
-**Latest: v2.0.5** — the new name, 📎 File uploads; since 2.0: a one-time setup link for the
-first password, services that outlive a terminal, safety guards → [CHANGELOG](CHANGELOG.md)
+**Latest: v2.1.0** — the internal names follow the new name; since 2.0: 📎 File uploads, a
+one-time setup link for the first password, services that outlive a terminal, safety guards
+→ [CHANGELOG](CHANGELOG.md)
 
 ## Why AgentKennel
 
@@ -104,7 +105,7 @@ web runs in Anthropic's cloud.)
 - **Archive — keep it, unload it now.** Click an archived terminal to restore and open it.
   **Move to Trash** for ones you don't need; nothing is erased until you empty the trash.
 - **⟳ Restart** Claude in the same conversation, from the dashboard or `/restart` in Telegram.
-- **Only what you use stays in memory.** At most 12 loaded (`AGENTDECK_MAX_ACTIVE`); an idle
+- **Only what you use stays in memory.** At most 12 loaded (`AGENTKENNEL_MAX_ACTIVE`); an idle
   terminal unloads after 2 hours, but never one with an open tab or a pending timer.
 - **Give an agent any file.** **📎 File** (or drop files on the terminal) uploads up to
   100 MB each to a private folder on the server and types the path into the terminal.
@@ -146,23 +147,23 @@ curl -fsSL https://raw.githubusercontent.com/yanhs/agentkennel/master/install.sh
   self-signed certificate on `https://<your-ip>:8765` that the browser warns about once.
   `--https your-domain.com` uses your own domain; `--http` turns encryption off.
 - **What it installs:** `tmux`, `python3`, `git`, `curl`, `ttyd`, Caddy, Node.js 22 (if there
-  is no Node 18+), Claude Code (pinned), the repo in `~/agentdeck`, and the guard hooks in your
-  `~/.claude` (merged, never overwritten; `AGENTDECK_GUARDS=0` skips them).
+  is no Node 18+), Claude Code (pinned), the repo in `~/agentkennel`, and the guard hooks in your
+  `~/.claude` (merged, never overwritten; `AGENTKENNEL_GUARDS=0` skips them).
 - **How it runs:** systemd services as your user, started at boot:
-  `systemctl status 'agentdeck-*'`, `journalctl -u agentdeck-status`.
+  `systemctl status 'agentkennel-*'`, `journalctl -u agentkennel-status`.
 - **Update or repair:** run the same command again; running agents keep running.
-  **Remove:** `~/agentdeck/install.sh --uninstall` keeps your terminals, board and password;
+  **Remove:** `~/agentkennel/install.sh --uninstall` keeps your terminals, board and password;
   add `--purge` to delete the folder too (only one the installer cloned itself).
 
 ### Docker sandbox — agents stay inside a container
 
-You need Docker and one free TCP port (`8765`, or `AGENTDECK_PORT=9000`) open in your
+You need Docker and one free TCP port (`8765`, or `AGENTKENNEL_PORT=9000`) open in your
 firewall. Docker-published ports bypass `ufw`.
 
 ```bash
 git clone https://github.com/yanhs/agentkennel.git && cd agentkennel
 docker compose up -d
-docker compose logs agentdeck | grep setup     # → /login?setup=<token>
+docker compose logs agentkennel | grep setup   # → /login?setup=<token>
 ```
 
 1. Open `http://<your-vps-ip>:8765/login?setup=<token>` and set the password.
@@ -177,10 +178,7 @@ The price of the sandbox: agents can't manage the host, a site they start inside
 reachable from outside, `apt` installs vanish when the container is re-created, and there
 is no systemd.
 
-> **About the names.** AgentKennel was called AgentDeck until v2.0.5. Internal names keep
-> the earlier name for compatibility, so existing installs upgrade in place: the
-> `agentdeck-*` systemd units, `~/agentdeck`, the `AGENTDECK_*` variables, the compose
-> service `agentdeck` and its volumes, and marks like `<!-- agentdeck-safety -->`.
+Upgrading from AgentDeck: run the installer again; it moves the services to the new names and keeps your terminals, board and password.
 
 ## 🔒 Safety: what agents never do without you
 
@@ -189,7 +187,7 @@ repo, close every terminal with one careless `pkill`, mail a client. AgentKennel
 agents the rules, and holds the worst of them in code.
 
 **The rules** live in the `~/.claude/CLAUDE.md` AgentKennel writes for its agents (blocks
-marked `<!-- agentdeck-safety -->`, `<!-- agentdeck-tdd -->`, `<!-- agentdeck-links -->`;
+marked `<!-- agentkennel-safety -->`, `<!-- agentkennel-tdd -->`, `<!-- agentkennel-links -->`;
 delete a block and keep its mark line to opt out):
 
 - No secrets or personal data (keys, tokens, passwords, IPs, phone numbers, user ids) in a
@@ -218,7 +216,7 @@ the wrong address can't be called back.
 What they can't see: a script run from a file (`bash x.sh`), or a signal or mail sent from
 inside a program. They are a seat belt, not a sandbox — for that, use Docker. Two more hooks
 keep agents on the task board; all of them are on by default and off with
-`AGENTDECK_GUARDS=0` ([details](docs/manual-setup.md#hooks)).
+`AGENTKENNEL_GUARDS=0` ([details](docs/manual-setup.md#hooks)).
 
 ## 🤖 Telegram
 

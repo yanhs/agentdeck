@@ -4,8 +4,6 @@
 
 AgentKennel is plain Python and Bash around three programs you already know: `tmux` keeps
 every agent alive, `ttyd` shows a tmux session in the browser, and Claude Code runs inside.
-File and unit names keep the project's earlier name (`agentdeck-*`, `~/agentdeck`), so
-existing installs upgrade in place.
 
 ```
                    ┌───────────── Caddy (install.sh, Docker) or nginx ─────────────┐
@@ -55,9 +53,9 @@ existing installs upgrade in place.
   `tmux -f /dev/null new-session -d -s hold-<hex> tmux wait-for hold-<hex>`, from `/` —
   then `tmux.conf` is loaded into it, and only then the terminal is made
   (`-c <folder>`, `bin/pane <code>`).
-- **The agents' tmux server** is their own, in `~/agentdeck/.sessions/tmux`; your own tmux
+- **The agents' tmux server** is their own, in `~/agentkennel/.sessions/tmux`; your own tmux
   sessions are never touched. To look at it over SSH:
-  `TMUX_TMPDIR=~/agentdeck/.sessions/tmux tmux ls`.
+  `TMUX_TMPDIR=~/agentkennel/.sessions/tmux tmux ls`.
 - **`idle_reaper.py`** — unloads terminals nobody is using.
 - **`services_keeper.py`** — starts every `<work folder>/.services/<name>.sh`, restarts it
   after a crash with a growing pause, keeps its log, and stops it with its child processes

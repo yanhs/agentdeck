@@ -62,7 +62,7 @@ TG_BRIDGE_OWNER=123456789                     # your numeric user id (default 0 
 # TG_FILES_DIR=/path/to/uploads               # where uploaded files are saved (default .sessions/tgfiles)
 # TG_FILES_URL=https://example.com/files      # public base URL of that folder (default: none — the reply gives the local path)
 # TG_WHISPER_PY=/path/to/venv/bin/python      # a Python that has faster-whisper (default: the bridge's own python)
-# TG_AGENT_CWD=/path/to/projects              # where an agent started from the bot runs (default $AGENTDECK_WORKDIR or ~)
+# TG_AGENT_CWD=/path/to/projects              # where an agent started from the bot runs (default $AGENTKENNEL_WORKDIR or ~)
 # TG_BRIDGE_API_BASE=https://relay.example.com  # a Bot API relay instead of api.telegram.org
 ```
 

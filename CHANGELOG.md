@@ -2,6 +2,44 @@
 
 All notable changes to AgentKennel (formerly AgentDeck). Newest first.
 
+## v2.1.0 — internal names follow the new name
+
+### What changed
+The brand changed in v2.0.5; now the technical names follow it.
+- **systemd units** `agentdeck-*` → `agentkennel-*` (`agentkennel-status`, `-tasks`, `-sessions`, `-caddy`, `-services`, the `agentkennel-reaper` timer); the guests' units `agentdeck-guest-*` → `agentkennel-guest-*`.
+- **Variables** `AGENTDECK_*` → `AGENTKENNEL_*` (all of them: `AGENTKENNEL_WORKDIR`, `AGENTKENNEL_PASSFILE`, `AGENTKENNEL_ORIGIN`, `AGENTKENNEL_SESSION`, …).
+- **A new install** goes to `~/agentkennel` and records itself in `~/.config/agentkennel/install.env`; a folder it cloned itself carries `.agentkennel-managed`.
+- **Docker:** the compose service is `agentkennel`, the volumes `agentkennel-*`, and the project has a fixed name (`name: agentkennel`), so the volumes are `agentkennel_agentkennel-*` whatever the folder is called. Images: `agentkennel:<version>`, `agentkennel-guest:<version>`.
+- **Marks** in the `~/.claude/CLAUDE.md` AgentKennel writes: `<!-- agentkennel-environment -->`, `-safety`, `-tdd`, `-links`, `-services`.
+- Smaller ones: `~/.claude/agentkennel-public-ips` (the secrets guard's list of this server's IPs), `~/.cache/agentkennel/`, the tmux option `@agentkennel-conf`, the browser's `agentkennel-theme` and `agentkennel-copy-hint`, the board's `agentkennel:open-terminal` message to the dashboard, the self-signed certificate's `CN=agentkennel`, the placeholder `/path/to/agentkennel` in `hooks/settings.example.json`.
+- Kept as they were: the login cookie (nobody is logged out), the Python file names, and the files inside `.sessions/`.
+
+### Compatibility: the old names still work
+- **Every setting is read under both names**: `AGENTKENNEL_<X>` first, then `AGENTDECK_<X>`; an empty value counts as unset. One helper does it in Python (`envcompat.py`), one in `start.sh` and the Docker entrypoint (`envcompat.sh`); `install.sh`, `https.sh`, `open-session.sh`, `bin/pane` and `docker-compose.yml` spell the same rule as `${AGENTKENNEL_X:-${AGENTDECK_X:-…}}`. Systemd drop-ins, `.env` files and `docker run -e` lines with the old names keep working.
+- **Where AgentKennel hands a variable on, it sets both names**: each terminal gets `AGENTKENNEL_SESSION` and `AGENTDECK_SESSION`; the units' `Environment=` lines carry both (`WORKDIR`, `PASSFILE`, `AUTH_SECRET`, `SITE` — and an `AGENTDECK_*` line of yours in the install's `.env` still wins over the unit's value, as before); `start.sh` and the Docker entrypoint export both to everything they start; a guest container is created with both names for its password, site, origin and public IPs (an older guest image inside reads the old ones).
+- **Old marks count as present.** A `CLAUDE.md` written by an earlier version has `<!-- agentdeck-… -->` marks: no block is added a second time, and a kept old mark line still opts out of its block. The guard hooks are recognised by their path, as before.
+- Also accepted: the old install record (`~/.config/agentdeck/install.env`, read when there is no new one and replaced by it) and the old `.agentdeck-managed` marker (`--uninstall --purge` still deletes only a folder the installer cloned itself); `~/.claude/agentdeck-public-ips` (both files are read); a tmux server marked `@agentdeck-conf` (not sourced again); the browser's old `agentdeck-theme` / `agentdeck-copy-hint`; the `agentdeck:open-terminal` message from an open board tab; `guestctl recreate` reads the password of a sandbox made earlier (`AGENTDECK_PASSWORD` in `docker inspect`) and keeps the image the container has; `guestctl doctor` counts the guests' services running under their old names.
+- `guard_kill.py` protects `agentkennel-*` and `agentdeck-*` units alike.
+
+### Fixed
+- **An `--http` install stays on http after any number of re-runs.** The first re-run recorded the mode as "kept", and the one after it read that as "never asked for" and moved the install to HTTPS on the same port.
+
+### Upgrading
+- `install.sh`: run it again (the `curl | bash` line, or `./install.sh` in your folder). It keeps the folder you have (`~/agentdeck` stays `~/agentdeck`: the agents' tmux socket is inside it), stops, disables and removes the `agentdeck-*` units and starts `agentkennel-*` in their place. Terminals keep running through the move — the agents' tmux server is not stopped with a unit (`KillMode=process`); until the next reboot systemd still lists the old unit that started it, as not-found and inactive. Your password, terminals and board stay. `--uninstall` removes both the old and the new units.
+- Guests: run `guests/install.sh` again; it moves `agentdeck-guest-*` system units to the new names. Running sandboxes are left alone and keep their image until you recreate them.
+- Docker: the volumes have new names, so a `docker compose up` after the pull starts empty. To keep your data, stop the old container and copy its volumes once (replace `agentdeck` with the folder name you cloned into):
+
+  ```bash
+  docker compose -p agentdeck down
+  for v in agentdeck-claude:agentkennel-claude agentdeck-sessions:agentkennel-sessions \
+           agentdeck-work:agentkennel-work caddy-data:caddy-data; do
+    docker volume create "agentkennel_${v#*:}" >/dev/null
+    docker run --rm -v "agentdeck_${v%%:*}:/from" -v "agentkennel_${v#*:}:/to" alpine cp -a /from/. /to/
+  done
+  docker compose up -d --build
+  ```
+  With `./https.sh`, run it again after the pull: the file it writes names the service.
+
 ## v2.0.5 — AgentDeck is now AgentKennel
 
 ### The name
