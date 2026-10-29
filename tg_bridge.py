@@ -1871,7 +1871,7 @@ async def cmd_use(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await reply(head, reply_markup=kb)
         return
     # a bare legacy slot number is the old form: numbers are too common in topic
-    # names ("Налоги 2026") for name search to be the first reading of "/use 6"
+    # names ("Taxes 2026") for name search to be the first reading of "/use 6"
     num = query.lstrip("#")
     if num in SESSIONS:
         text, picked = await _use_number(chat_id, num)
@@ -1920,7 +1920,7 @@ async def cmd_archive(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/new <name> — create a topic (name optional: a dated default), select it
-    and load it. It starts where the dashboard's «＋ Новая тема» starts one."""
+    and load it. It starts where the dashboard's "＋ New terminal" starts one."""
     name = _CTRL_NL.sub("", " ".join(ctx.args or [])).replace("\n", " ").strip()[:TOPIC_NAME_MAX]
     cwd = envcompat.get("WORKDIR") or os.path.dirname(GATE_DIR)
     try:

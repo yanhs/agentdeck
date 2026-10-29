@@ -78,8 +78,8 @@ def tmux_sessions():
 
 def human_size(n):
     if n < 1024 * 1024:
-        return f"{round(n / 1024)} КБ"
-    return f"{n / 1024 / 1024:.1f} МБ"
+        return f"{round(n / 1024)} KB"
+    return f"{n / 1024 / 1024:.1f} MB"
 
 
 def plan(repo, home, cwd, now=None):
@@ -119,11 +119,11 @@ def plan(repo, home, cwd, now=None):
         e = library.find(lib, rep["id"])
         st = stats.get(e["uuid"])
         if st is None:
-            row["skip"] = "нет переписки"
+            row["skip"] = "no transcript"
         else:
             row["size"], row["mtime"] = st
             if st[0] < MIN_TRANSCRIPT:
-                row["skip"] = "< 10 КБ"
+                row["skip"] = "< 10 KB"
         row["entry"] = e
         row["uuid"] = e["uuid"]
         rows.append(row)
@@ -175,7 +175,7 @@ def _atomic_write(path, text, mode):
 
 
 def install_shim(row):
-    """'шим поставлен' / 'шим уже стоит' / 'шим обновлён'."""
+    """'shim installed' / 'shim already in place' / 'shim updated'."""
     path = row["script"]
     text = shim_text(row["slot"], row["legacy"], row["id"], row["name"])
     pre = path + ".pre-library"
@@ -183,11 +183,11 @@ def install_shim(row):
     if not os.path.exists(pre):
         shutil.copy2(path, pre)
         _atomic_write(path, text, mode)
-        return "шим поставлен"
+        return "shim installed"
     if open(path, encoding="utf-8", errors="replace").read() == text:
-        return "шим уже стоит"
+        return "shim already in place"
     _atomic_write(path, text, mode)
-    return "шим обновлён"
+    return "shim updated"
 
 
 # ── dashboard ───────────────────────────────────────────────────────────────
@@ -203,7 +203,7 @@ def _save_if_unknown(index, known):
                                          for k in known):
         dst = f"{index}.pre-swap-{time.strftime('%Y%m%d-%H%M%S')}"
         shutil.copy2(index, dst)
-        return [f"сохранена правленая {os.path.basename(index)} -> {os.path.basename(dst)}"]
+        return [f"saved edited {os.path.basename(index)} -> {os.path.basename(dst)}"]
     return []
 
 
@@ -211,7 +211,7 @@ def swap_dashboard(web):
     index, legacy, lib = (os.path.join(web, f) for f in
                           ("index.html", "index-legacy.html", "index-lib.html"))
     if not os.path.exists(lib):
-        raise RuntimeError(f"нет {lib}")
+        raise RuntimeError(f"missing {lib}")
     out = []
     if not os.path.exists(legacy):
         shutil.copy2(index, legacy)
@@ -219,7 +219,7 @@ def swap_dashboard(web):
     else:
         out += _save_if_unknown(index, [legacy, lib])
     if filecmp.cmp(index, lib, shallow=False):
-        out.append("дашборд уже новый (index.html = index-lib.html)")
+        out.append("dashboard already new (index.html = index-lib.html)")
     else:
         _copy(lib, index)
         out.append("web/index-lib.html -> web/index.html")
@@ -230,10 +230,10 @@ def rollback_dashboard(web):
     index, legacy, lib = (os.path.join(web, f) for f in
                           ("index.html", "index-legacy.html", "index-lib.html"))
     if not os.path.exists(legacy):
-        raise RuntimeError("нет web/index-legacy.html — откатывать нечего")
+        raise RuntimeError("no web/index-legacy.html — nothing to roll back")
     out = _save_if_unknown(index, [legacy, lib])
     if os.path.exists(index) and filecmp.cmp(index, legacy, shallow=False):
-        return out + ["дашборд уже старый"]
+        return out + ["dashboard already old"]
     _copy(legacy, index)
     return out + ["web/index-legacy.html -> web/index.html"]
 
@@ -241,26 +241,26 @@ def rollback_dashboard(web):
 # ── report ──────────────────────────────────────────────────────────────────
 def action_text(row, have_ids):
     if row["skip"]:
-        return f"пропуск: {row['skip']}"
-    parts = ["уже в реестре" if row["id"] in have_ids else "в реестр"]
+        return f"skip: {row['skip']}"
+    parts = ["already in registry" if row["id"] in have_ids else "to registry"]
     if row["running"]:
-        parts.append(f"работает — остаётся {row['legacy']} до выгрузки")
+        parts.append(f"running — stays {row['legacy']} until unloaded")
     elif row["legacy"]:
-        parts.append("не запущен")
+        parts.append("stopped")
     if row["script"]:
-        parts.append(f"{os.path.basename(row['script'])} -> шим")
+        parts.append(f"{os.path.basename(row['script'])} -> shim")
     else:
-        parts.append("launch-скрипта нет")
+        parts.append("no launch script")
     return "; ".join(parts)
 
 
 def table(rows, have_ids):
-    lines = [f"{'слот':>4}  {'id':8}  {'переписка':>9}  {'дата':16}  {'имя':34}  действие"]
+    lines = [f"{'slot':>4}  {'id':8}  {'transcript':>10}  {'date':16}  {'name':34}  action"]
     for r in rows:
         size = human_size(r["size"]) if r["size"] is not None else "—"
         date = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["mtime"])) if r["mtime"] else "—"
         name = (r["name"] or "")[:34]
-        lines.append(f"{r['slot']:>4}  {r['id'] or '—':8}  {size:>9}  {date:16}  {name:34}  "
+        lines.append(f"{r['slot']:>4}  {r['id'] or '—':8}  {size:>10}  {date:16}  {name:34}  "
                      f"{action_text(r, have_ids)}")
     return "\n".join(lines)
 
@@ -283,33 +283,33 @@ def main(argv=None):
 
     if a.rollback_dashboard:
         if not a.apply:
-            print("сухой прогон: --apply --rollback-dashboard вернёт web/index-legacy.html "
-                  "на место web/index.html")
+            print("dry run: --apply --rollback-dashboard puts web/index-legacy.html "
+                  "back as web/index.html")
             return 0
         try:
             for line in rollback_dashboard(web):
                 print(line)
         except RuntimeError as ex:
-            print(f"откат дашборда не выполнен: {ex}", file=sys.stderr)
+            print(f"dashboard rollback failed: {ex}", file=sys.stderr)
             return 1
         return 0
 
     try:
         have = {e["id"] for e in library.load(library.LIB_FILE)["sessions"]}
     except library.CorruptRegistry as ex:
-        print(f"реестр тем повреждён, ничего не делаю: {ex}", file=sys.stderr)
+        print(f"terminal registry is corrupt, doing nothing: {ex}", file=sys.stderr)
         return 1
     rows = plan(repo, home, cwd)
-    print(f"реестр: {library.LIB_FILE}\nпереписки: {os.path.join(home, '.claude', 'projects', library_cli.slug(cwd))}\n")
+    print(f"registry: {library.LIB_FILE}\ntranscripts: {os.path.join(home, '.claude', 'projects', library_cli.slug(cwd))}\n")
     print(table(rows, have))
     todo = [r for r in rows if not r["skip"]]
 
     if not a.apply:
-        print(f"\nсухой прогон: перенести {len(todo)} из {len(rows)} слотов; "
-              "ничего не изменено (боевой — --apply).")
+        print(f"\ndry run: would migrate {len(todo)} of {len(rows)} slots; "
+              "nothing changed (to do it: --apply).")
         if a.swap_dashboard:
-            print("с --apply --swap-dashboard: web/index-lib.html станет web/index.html "
-                  "(старая — web/index-legacy.html).")
+            print("with --apply --swap-dashboard: web/index-lib.html becomes web/index.html "
+                  "(the old one kept as web/index-legacy.html).")
         return 0
 
     # 1. registry (write only if something is new: a no-op run leaves file and .bak alone)
@@ -321,22 +321,22 @@ def main(argv=None):
                     if library.find(lib, e["id"]) is None:
                         lib["sessions"].append(e)
     except library.CorruptRegistry as ex:
-        print(f"реестр тем повреждён, ничего не делаю: {ex}", file=sys.stderr)
+        print(f"terminal registry is corrupt, doing nothing: {ex}", file=sys.stderr)
         return 1
 
     # 2-3. legacy sessions untouched; launch scripts -> shims
-    print("\nотчёт:")
-    print(f"  реестр: добавлено {len(new)}, уже было {len(todo) - len(new)}")
+    print("\nreport:")
+    print(f"  registry: added {len(new)}, already there {len(todo) - len(new)}")
     for r in todo:
-        bits = [f"  слот {r['slot']} -> {r['id']} «{r['name']}»"]
+        bits = [f"  slot {r['slot']} -> {r['id']} \"{r['name']}\""]
         if r["running"]:
-            bits.append(f"работает — остаётся {r['legacy']} до выгрузки")
+            bits.append(f"running — stays {r['legacy']} until unloaded")
         if r["script"]:
             bits.append(f"{os.path.basename(r['script'])}: {install_shim(r)}")
         print("; ".join(bits))
     for r in rows:
         if r["skip"]:
-            print(f"  слот {r['slot']}: пропуск ({r['skip']}), скрипт не тронут")
+            print(f"  slot {r['slot']}: skip ({r['skip']}), script untouched")
 
     # 4. dashboard
     if a.swap_dashboard:
@@ -344,7 +344,7 @@ def main(argv=None):
             for line in swap_dashboard(web):
                 print(f"  {line}")
         except RuntimeError as ex:
-            print(f"замена дашборда не выполнена: {ex}", file=sys.stderr)
+            print(f"dashboard swap failed: {ex}", file=sys.stderr)
             return 1
     return 0
 

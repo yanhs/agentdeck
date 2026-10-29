@@ -610,7 +610,7 @@ def move_hold(old, new, lib_file=None):
 def migrate_from_slots(sessions_dir, agents, cwd, now, last_used=None):
     """Registry entries from the old .sessions/agent-N.id files.
 
-    Name = the slot's `project` label from agents.json, else "терминал N".
+    Name = the slot's `project` label from agents.json, else "terminal N".
     Returns (lib, report) — report lists every slot and what became of it.
     """
     last_used = last_used or {}
@@ -622,7 +622,7 @@ def migrate_from_slots(sessions_dir, agents, cwd, now, last_used=None):
         if not _UUID.fullmatch(u):
             report.append(dict(slot=slot, skipped=True, reason="not a uuid"))
             continue
-        label = ((agents or {}).get(str(slot)) or {}).get("project") or f"терминал {slot}"
+        label = ((agents or {}).get(str(slot)) or {}).get("project") or f"terminal {slot}"
         e = create(lib, label, cwd=cwd, now=now, uuid=u)
         e["legacy_slot"] = slot
         e["last_used"] = last_used.get(e["id"], now)

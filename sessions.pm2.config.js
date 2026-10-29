@@ -3,7 +3,7 @@
 // open-session.sh, which validates it, loads the topic into tmux (cs-<id>) and
 // attaches the tab. Bound to localhost; nginx (/sess/, cookie auth) fronts it.
 // -O: the websocket's Origin must equal its Host. The login cookie is
-// SameSite=Lax, so without it any *.reimake.com page could open a shell here.
+// SameSite=Lax, so without it any other page on the same parent domain could open a shell here.
 //   start:  pm2 start sessions.pm2.config.js && pm2 save
 const path = require("path");
 

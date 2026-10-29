@@ -40,11 +40,11 @@ def test_validate_id_rejects_anything_but_8_hex():
 # ── create / load / save ────────────────────────────────────────────────────
 def test_create_assigns_fresh_uuid_and_unique_id(tmp_path):
     L = lib.empty()
-    a = lib.create(L, "ImmAppeal деплой", cwd="/home/ubuntu/pr", now=100)
-    b = lib.create(L, "Налоги", cwd="/home/ubuntu/pr", now=101)
+    a = lib.create(L, "API deploy", cwd="/home/ubuntu/pr", now=100)
+    b = lib.create(L, "Taxes", cwd="/home/ubuntu/pr", now=101)
     assert a["id"] != b["id"] and lib.valid_id(a["id"])
     assert a["id"] == lib.id_from_uuid(a["uuid"])
-    assert a["name"] == "ImmAppeal деплой" and a["created"] == 100 and a["last_used"] == 100
+    assert a["name"] == "API deploy" and a["created"] == 100 and a["last_used"] == 100
     assert a["archived"] is False
 
 
@@ -67,10 +67,10 @@ def test_blank_name_gets_a_dated_default():
 def test_save_and_load_roundtrip(tmp_path):
     p = tmp_path / "library.json"
     L = lib.empty()
-    lib.create(L, "Тема один", cwd="/", now=1, uuid=U1)
+    lib.create(L, "Topic one ☕", cwd="/", now=1, uuid=U1)
     lib.save(str(p), L)
     assert lib.load(str(p)) == L
-    assert json.loads(p.read_text())["sessions"][0]["name"] == "Тема один"   # utf-8, readable
+    assert json.loads(p.read_text())["sessions"][0]["name"] == "Topic one ☕"   # utf-8, readable
 
 
 def test_load_missing_file_is_empty(tmp_path):
@@ -90,11 +90,11 @@ def test_update_is_atomic_read_modify_write(tmp_path):
 def test_rename_archive_touch():
     L = lib.empty()
     lib.create(L, "a", cwd="/", now=1, uuid=U1)
-    lib.rename(L, "aaaaaaaa", "  новое имя ")
+    lib.rename(L, "aaaaaaaa", "  new name ")
     lib.touch(L, "aaaaaaaa", now=50)
     lib.archive(L, "aaaaaaaa")
     e = lib.find(L, "aaaaaaaa")
-    assert e["name"] == "новое имя" and e["last_used"] == 50 and e["archived"] is True
+    assert e["name"] == "new name" and e["last_used"] == 50 and e["archived"] is True
     lib.archive(L, "aaaaaaaa", archived=False)
     assert lib.find(L, "aaaaaaaa")["archived"] is False
 
@@ -113,20 +113,20 @@ def test_unknown_id_raises_keyerror():
 # ── search / resolve / order ────────────────────────────────────────────────
 def _lib3():
     L = lib.empty()
-    lib.create(L, "ImmAppeal деплой", cwd="/", now=10, uuid=U1)
-    lib.create(L, "Налоги 2026", cwd="/", now=20, uuid=U2)
-    lib.create(L, "Старая тема", cwd="/", now=5, uuid="cccccccc-0000-0000-0000-000000000000")
+    lib.create(L, "API deploy", cwd="/", now=10, uuid=U1)
+    lib.create(L, "Café taxes 2026", cwd="/", now=20, uuid=U2)
+    lib.create(L, "Old topic", cwd="/", now=5, uuid="cccccccc-0000-0000-0000-000000000000")
     lib.archive(L, "cccccccc")
     return L
 
 
-def test_search_by_name_case_insensitive_cyrillic_and_id_prefix():
+def test_search_by_name_case_insensitive_non_ascii_and_id_prefix():
     L = _lib3()
-    assert [e["id"] for e in lib.search(L, "НАЛОГ")] == ["bbbbbbbb"]
-    assert [e["id"] for e in lib.search(L, "immappeal")] == ["aaaaaaaa"]
+    assert [e["id"] for e in lib.search(L, "CAFÉ TAX")] == ["bbbbbbbb"]
+    assert [e["id"] for e in lib.search(L, "api deploy")] == ["aaaaaaaa"]
     assert [e["id"] for e in lib.search(L, "aaaa")] == ["aaaaaaaa"]
-    assert lib.search(L, "старая") == []                       # archived hidden
-    assert [e["id"] for e in lib.search(L, "старая", include_archived=True)] == ["cccccccc"]
+    assert lib.search(L, "old") == []                       # archived hidden
+    assert [e["id"] for e in lib.search(L, "old", include_archived=True)] == ["cccccccc"]
     assert len(lib.search(L, "")) == 2
 
 
@@ -134,16 +134,16 @@ def test_resolve_prefers_exact_id_then_prefix_then_name():
     L = _lib3()
     assert [e["id"] for e in lib.resolve(L, "bbbbbbbb")] == ["bbbbbbbb"]
     assert [e["id"] for e in lib.resolve(L, "bbbb")] == ["bbbbbbbb"]
-    assert [e["id"] for e in lib.resolve(L, "деплой")] == ["aaaaaaaa"]
-    assert lib.resolve(L, "нет такого") == []
+    assert [e["id"] for e in lib.resolve(L, "deploy")] == ["aaaaaaaa"]
+    assert lib.resolve(L, "no such thing") == []
 
 
 def test_resolve_in_the_archive_only_when_asked():
     L = _lib3()
-    assert lib.resolve(L, "старая") == []                      # archived hidden by default
-    assert [e["id"] for e in lib.resolve(L, "старая", archived=True)] == ["cccccccc"]
+    assert lib.resolve(L, "old") == []                      # archived hidden by default
+    assert [e["id"] for e in lib.resolve(L, "old", archived=True)] == ["cccccccc"]
     assert [e["id"] for e in lib.resolve(L, "cccc", archived=True)] == ["cccccccc"]
-    assert lib.resolve(L, "налоги", archived=True) == []       # live ones are not in the archive
+    assert lib.resolve(L, "taxes", archived=True) == []       # live ones are not in the archive
 
 
 def test_display_order_active_first_then_recent():
@@ -187,16 +187,16 @@ def test_migrate_from_slots(tmp_path):
     by = {e["id"]: e for e in L["sessions"]}
     assert by["aaaaaaaa"]["name"] == "app - PIPE, news" and by["aaaaaaaa"]["legacy_slot"] == 2
     assert by["aaaaaaaa"]["last_used"] == 90
-    assert by["bbbbbbbb"]["name"] == "терминал 8"
+    assert by["bbbbbbbb"]["name"] == "terminal 8"
     assert [r for r in report if r["slot"] == 9][0]["skipped"]
     assert len(L["sessions"]) == 2
 
 
 def test_migrate_is_idempotent_merge():
     L = lib.empty()
-    lib.create(L, "уже есть", cwd="/", now=1, uuid=U1)
-    L2 = lib.merge(L, {"sessions": [dict(lib.find(L, "aaaaaaaa"), name="другое")]})
-    assert len(L2["sessions"]) == 1 and lib.find(L2, "aaaaaaaa")["name"] == "уже есть"
+    lib.create(L, "already here", cwd="/", now=1, uuid=U1)
+    L2 = lib.merge(L, {"sessions": [dict(lib.find(L, "aaaaaaaa"), name="other")]})
+    assert len(L2["sessions"]) == 1 and lib.find(L2, "aaaaaaaa")["name"] == "already here"
 
 
 # ── a corrupt registry is never silently replaced ──────────────────────────
@@ -227,12 +227,12 @@ def test_update_on_corrupt_registry_raises_and_keeps_the_file(tmp_path):
 def test_update_keeps_a_backup_of_the_previous_file(tmp_path):
     p = str(tmp_path / "library.json")
     with lib.update(p) as L:
-        lib.create(L, "первая", cwd="/", now=1, uuid=U1)
+        lib.create(L, "first", cwd="/", now=1, uuid=U1)
     before = open(p, encoding="utf-8").read()
     with lib.update(p) as L:
-        lib.rename(L, "aaaaaaaa", "вторая")
+        lib.rename(L, "aaaaaaaa", "second")
     assert open(p + ".bak", encoding="utf-8").read() == before
-    assert lib.find(lib.load(p), "aaaaaaaa")["name"] == "вторая"
+    assert lib.find(lib.load(p), "aaaaaaaa")["name"] == "second"
 
 
 # ── eviction order: the later of last_used and last screen output ──────────
@@ -289,9 +289,9 @@ def test_delete_removes_only_that_entry():
 
 def test_cwd_slug_matches_claude_project_dir_names():
     assert lib.cwd_slug("/home/ubuntu/pr") == "-home-ubuntu-pr"
-    assert lib.cwd_slug("/home/ubuntu/pr/Светлота 💡").startswith("-home-ubuntu-pr-")
+    assert lib.cwd_slug("/home/ubuntu/pr/Café 💡").startswith("-home-ubuntu-pr-Caf-")
     # UTF-16 code units, as Claude Code's regex sees them: 💡 is two
-    assert lib.cwd_slug("/home/ubuntu/pr/Светлота 💡 (Rus)") == "-home-ubuntu-pr--------------Rus-"
+    assert lib.cwd_slug("/home/ubuntu/pr/Café 💡 (v2)") == "-home-ubuntu-pr-Caf------v2-"
 
 
 def test_trash_transcript_finds_a_long_cwds_folder(tmp_path, monkeypatch):
@@ -645,16 +645,16 @@ def test_trashed_entries_leave_every_listing_search_and_resolve():
     ids = lambda es: [e["id"] for e in es]                 # noqa: E731
     assert ids(lib.display_order(L, set())) == ["aaaaaaaa"]
     assert ids(lib.display_order(L, {"bbbbbbbb"}, include_archived=True)) == ["aaaaaaaa"]
-    assert lib.search(L, "налоги") == [] and lib.search(L, "старая", include_archived=True) == []
+    assert lib.search(L, "taxes") == [] and lib.search(L, "old", include_archived=True) == []
     assert ids(lib.search(L, "", include_archived=True)) == ["aaaaaaaa"]
-    assert lib.resolve(L, "налоги") == [] and lib.resolve(L, "bbbbbbbb") == []
-    assert lib.resolve(L, "старая", archived=True) == []
+    assert lib.resolve(L, "taxes") == [] and lib.resolve(L, "bbbbbbbb") == []
+    assert lib.resolve(L, "old", archived=True) == []
     # the trash itself: only the trashed ones, the most recently trashed first
     assert ids(lib.display_order(L, set(), trashed=True)) == ["bbbbbbbb", "cccccccc"]
     lib.untrash(L, "cccccccc")
     # created last, so its place is on top (the list goes by place, not by activity)
     assert ids(lib.display_order(L, set(), include_archived=True)) == ["cccccccc", "aaaaaaaa"]
-    assert ids(lib.resolve(L, "старая", archived=True)) == ["cccccccc"]
+    assert ids(lib.resolve(L, "old", archived=True)) == ["cccccccc"]
 
 
 def test_switch_to_a_trashed_conversation_takes_it_out_of_the_trash():

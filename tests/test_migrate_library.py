@@ -158,16 +158,16 @@ def test_dry_run_table_lists_every_slot_with_id_size_date_name_action(mig):
         assert sid(mig.uuids[n]) in line
         assert AGENTS[str(n)]["project"] in line
         assert time.strftime("%Y-%m-%d", time.localtime(mig.mtimes[n])) in line
-        assert "в реестр" in line
-    assert "20 КБ" in out and "49 КБ" in out
+        assert "to registry" in line
+    assert "20 KB" in out and "49 KB" in out
 
 
 def test_dry_run_skips_missing_and_tiny_transcripts(mig):
     out = mig.migrate().stdout
     l10 = next(l for l in out.splitlines() if l.split() and l.split()[0] == "10")
     l4 = next(l for l in out.splitlines() if l.split() and l.split()[0] == "4")
-    assert "пропуск" in l10 and "нет переписки" in l10
-    assert "пропуск" in l4 and "< 10 КБ" in l4
+    assert "skip" in l10 and "no transcript" in l10
+    assert "skip" in l4 and "< 10 KB" in l4
 
 
 def test_dry_run_reports_a_running_legacy_terminal_as_staying(mig):
@@ -176,10 +176,10 @@ def test_dry_run_reports_a_running_legacy_terminal_as_staying(mig):
     out = mig.migrate().stdout
     l2 = next(l for l in out.splitlines() if l.split() and l.split()[0] == "2")
     l1 = next(l for l in out.splitlines() if l.split() and l.split()[0] == "1")
-    assert "работает — остаётся claude-terminal-2 до выгрузки" in l2
-    assert "работает — остаётся claude-terminal до выгрузки" in l1
+    assert "running — stays claude-terminal-2 until unloaded" in l2
+    assert "running — stays claude-terminal until unloaded" in l1
     l3 = next(l for l in out.splitlines() if l.split() and l.split()[0] == "3")
-    assert "работает" not in l3
+    assert "running" not in l3
 
 
 # ── apply: registry ────────────────────────────────────────────────────────
@@ -196,12 +196,12 @@ def test_apply_writes_migrated_entries_with_transcript_mtime_as_last_used(mig):
 
 
 def test_apply_merges_into_an_existing_registry_without_overwriting(mig):
-    mig.add("моя тема", uuid="aaaaaaaa-1111-4111-8111-111111111111", cwd=str(mig.work))
-    mig.add("переименована", uuid=U2, cwd=str(mig.work))
+    mig.add("my topic", uuid="aaaaaaaa-1111-4111-8111-111111111111", cwd=str(mig.work))
+    mig.add("renamed", uuid=U2, cwd=str(mig.work))
     assert mig.migrate("--apply").returncode == 0
     got = {e["id"]: e for e in mig.reg()["sessions"]}
-    assert got["aaaaaaaa"]["name"] == "моя тема"
-    assert got[sid(U2)]["name"] == "переименована"       # existing entry wins
+    assert got["aaaaaaaa"]["name"] == "my topic"
+    assert got[sid(U2)]["name"] == "renamed"       # existing entry wins
     assert sid(U1) in got and sid(U3) in got
 
 
@@ -234,7 +234,7 @@ def test_apply_does_not_rename_or_restart_a_running_legacy_terminal(mig):
     pids = mig.tmux("list-panes", "-a", "-F", "#{session_name} #{pane_pid}").stdout
     r = mig.migrate("--apply")
     assert r.returncode == 0, r.stderr
-    assert "работает — остаётся claude-terminal-2 до выгрузки" in r.stdout
+    assert "running — stays claude-terminal-2 until unloaded" in r.stdout
     assert mig.tmux("list-panes", "-a", "-F", "#{session_name} #{pane_pid}").stdout == pids
     assert not mig.has(f"cs-{sid(U2)}")
     assert len(mig.calls()) == 1                          # no second claude started
