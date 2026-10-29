@@ -29,10 +29,10 @@ CYRILLIC = re.compile(r"[Ѐ-ӿ]")
 
 def _env(tmp_path, **extra):
     env = dict(os.environ)
-    env.pop("AGENTDECK_BOARD_URL", None)
+    env.pop("AGENTKENNEL_BOARD_URL", None)
     env["TRACKER_STATE"] = str(tmp_path / "state.json")
-    env["AGENTDECK_BOARD_MARKS"] = str(tmp_path / "board-marks")
-    env["AGENTDECK_STOP_MARKS"] = str(tmp_path / "stop-marks")
+    env["AGENTKENNEL_BOARD_MARKS"] = str(tmp_path / "board-marks")
+    env["AGENTKENNEL_STOP_MARKS"] = str(tmp_path / "stop-marks")
     env.update({k: str(v) for k, v in extra.items()})
     return env
 
@@ -86,14 +86,14 @@ def test_board_message_uses_repo_tracker_path(tmp_path):
 
 
 def test_board_tracker_path_from_env(tmp_path):
-    p = run_hook(BOARD_HOOK, edit(), tmp_path, AGENTDECK_TRACKER="/opt/board/tracker.py")
+    p = run_hook(BOARD_HOOK, edit(), tmp_path, AGENTKENNEL_TRACKER="/opt/board/tracker.py")
     assert "/opt/board" in p.stderr
 
 
 def test_board_url_shown_only_when_set(tmp_path):
     p = run_hook(BOARD_HOOK, edit(), tmp_path)
     assert "Board:" not in p.stderr
-    p = run_hook(BOARD_HOOK, edit(), tmp_path, AGENTDECK_BOARD_URL="https://board.example/tasks/")
+    p = run_hook(BOARD_HOOK, edit(), tmp_path, AGENTKENNEL_BOARD_URL="https://board.example/tasks/")
     assert "Board: https://board.example/tasks/" in p.stderr
 
 
@@ -148,7 +148,7 @@ def test_board_unwritable_marker_dir_fails_open(tmp_path):
     blocker = tmp_path / "file"
     blocker.write_text("x")
     p = run_hook(BOARD_HOOK, bash("NO_BOARD=1 true"), tmp_path,
-                 AGENTDECK_BOARD_MARKS=blocker / "sub")
+                 AGENTKENNEL_BOARD_MARKS=blocker / "sub")
     assert p.returncode == 0
 
 
@@ -192,7 +192,7 @@ def test_stop_blocks_with_own_active_task_and_no_wake(tmp_path):
 def test_stop_message_includes_board_url_when_set(tmp_path):
     board(tmp_path, [{"id": "mine-1", "status": "active"}])
     own(tmp_path)
-    r = decision(tmp_path, stop(), AGENTDECK_BOARD_URL="https://board.example/tasks/")
+    r = decision(tmp_path, stop(), AGENTKENNEL_BOARD_URL="https://board.example/tasks/")
     assert "Board: https://board.example/tasks/" in r["reason"]
 
 
@@ -325,7 +325,7 @@ def test_stop_unwritable_marker_dir_fails_open(tmp_path):
     board(tmp_path, [{"id": "mine-1", "status": "active"}])
     blocker = tmp_path / "file"
     blocker.write_text("x")
-    p = run_hook(STOP_HOOK, stop(), tmp_path, AGENTDECK_STOP_MARKS=blocker / "sub")
+    p = run_hook(STOP_HOOK, stop(), tmp_path, AGENTKENNEL_STOP_MARKS=blocker / "sub")
     assert p.returncode == 0 and p.stdout.strip() == ""
 
 

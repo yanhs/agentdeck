@@ -18,9 +18,9 @@ Exempt paths (bookkeeping, not project work): temp directories and ~/.claude/ (t
 own memory and settings; also lets a broken guard be repaired).
 
 Configuration (environment):
-  AGENTDECK_TRACKER      path to tracker.py (default: tasks-dashboard/tracker.py in this repo)
-  AGENTDECK_BOARD_URL    board URL shown in the message (optional; omitted when unset)
-  AGENTDECK_BOARD_MARKS  per-session marker directory (default: $TMPDIR/claude-board-marks)
+  AGENTKENNEL_TRACKER      path to tracker.py (default: tasks-dashboard/tracker.py in this repo)
+  AGENTKENNEL_BOARD_URL    board URL shown in the message (optional; omitted when unset)
+  AGENTKENNEL_BOARD_MARKS  per-session marker directory (default: $TMPDIR/claude-board-marks)
 
 Any internal error fails OPEN: a broken guard must never wedge the session.
 """
@@ -31,14 +31,16 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
 
 
 def tracker_path() -> str:
-    return os.environ.get("AGENTDECK_TRACKER") or os.path.join(REPO, "tasks-dashboard", "tracker.py")
+    return envcompat.get("TRACKER") or os.path.join(REPO, "tasks-dashboard", "tracker.py")
 
 
 def mark_dir() -> str:
-    return os.environ.get("AGENTDECK_BOARD_MARKS") or os.path.join(
+    return envcompat.get("BOARD_MARKS") or os.path.join(
         tempfile.gettempdir(), "claude-board-marks")
 
 
@@ -68,7 +70,7 @@ def block_message(path: str) -> str:
         "",
         "Then keep it moving as you go: python3 tracker.py set <id> <item> active|done|blocked",
     ]
-    url = os.environ.get("AGENTDECK_BOARD_URL", "").strip()
+    url = envcompat.get("BOARD_URL", "").strip()
     if url:
         lines += ["", f"Board: {url}"]
     lines += [

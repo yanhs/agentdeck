@@ -18,14 +18,15 @@ Only added lines are scanned; a line that removes a secret is welcome.
 
 What counts as a secret: private key blocks, Telegram bot tokens, Anthropic, GitHub, AWS
 and Slack keys, and this server's public IPv4 address. The address set is the union of
-  AGENTDECK_PUBLIC_IPS        comma list (environment)
-  AGENTDECK_PUBLIC_IPS_FILE   one address per line, '#' comments allowed
-                              (default ~/.claude/agentdeck-public-ips; never expires; lets
+  AGENTKENNEL_PUBLIC_IPS        comma list (environment)
+  AGENTKENNEL_PUBLIC_IPS_FILE   one address per line, '#' comments allowed
+                              (default ~/.claude/agentkennel-public-ips, or the earlier
+                              ~/.claude/agentdeck-public-ips; never expires; lets
                               a sandbox that only sees private interfaces know the host's
                               address)
   the global IPv4 addresses on this machine's interfaces (`ip -4 -o addr`, fallback
-  `hostname -I`), cached in AGENTDECK_SECRETS_CACHE (default
-  ~/.cache/agentdeck/public-ipv4) for a day. No network request is ever made.
+  `hostname -I`), cached in AGENTKENNEL_SECRETS_CACHE (default
+  ~/.cache/agentkennel/public-ipv4) for a day. No network request is ever made.
 
 Findings are printed masked (first 4 characters + last 2, or 203.0.x.x for an address);
 the full value is never printed. Escape hatch for a false positive: the visible prefix
@@ -39,6 +40,9 @@ import json
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
 
 FAST_RE = re.compile(r"\bgit\b.*?\b(?:commit|push)\b", re.S)
 OVERRIDE_RE = re.compile(r"(?<![\w-])SECRETS_OK=1(?!\w)")
@@ -114,13 +118,19 @@ def probe_interfaces() -> list:
 
 
 def cache_path() -> str:
-    return os.environ.get("AGENTDECK_SECRETS_CACHE") or os.path.join(
-        os.path.expanduser("~"), ".cache", "agentdeck", "public-ipv4")
+    return envcompat.get("SECRETS_CACHE") or os.path.join(
+        os.path.expanduser("~"), ".cache", "agentkennel", "public-ipv4")
 
 
-def ips_file_path() -> str:
-    return os.environ.get("AGENTDECK_PUBLIC_IPS_FILE") or os.path.join(
-        os.path.expanduser("~"), ".claude", "agentdeck-public-ips")
+def ips_file_paths() -> list:
+    """AGENTKENNEL_PUBLIC_IPS_FILE, else ~/.claude/agentkennel-public-ips and the file's
+    name before v2.1.0, ~/.claude/agentdeck-public-ips (compat: both are read)."""
+    configured = envcompat.get("PUBLIC_IPS_FILE")
+    if configured:
+        return [configured]
+    claude = os.path.join(os.path.expanduser("~"), ".claude")
+    return [os.path.join(claude, "agentkennel-public-ips"),
+            os.path.join(claude, "agentdeck-public-ips")]   # compat: the old name
 
 
 def discover_global_ipv4(cache=None, now=None, probe=None) -> set:
@@ -161,13 +171,14 @@ def read_ip_file(path) -> set:
 
 
 def env_ips() -> set:
-    raw = os.environ.get("AGENTDECK_PUBLIC_IPS", "")
+    raw = envcompat.get("PUBLIC_IPS", "")
     return {t for t in raw.replace(",", " ").split() if _valid_ipv4(t)}
 
 
 def public_ips() -> set:
     """Every address treated as "this server's public IP": env + known-IPs file + interfaces."""
-    return env_ips() | read_ip_file(ips_file_path()) | discover_global_ipv4()
+    files = set().union(*(read_ip_file(f) for f in ips_file_paths()))
+    return env_ips() | files | discover_global_ipv4()
 
 
 # -- detection -----------------------------------------------------------------------------

@@ -33,9 +33,9 @@ Details:
 Configuration (environment):
   TRACKER_STATE          board state file (default: tasks-dashboard/state.json in this repo,
                          the same default tracker.py uses)
-  AGENTDECK_TRACKER      path to tracker.py shown in the message (default: next to the state)
-  AGENTDECK_BOARD_URL    board URL shown in the message (optional; omitted when unset)
-  AGENTDECK_STOP_MARKS   per-session marker directory (default: $TMPDIR/claude-stop-marks)
+  AGENTKENNEL_TRACKER      path to tracker.py shown in the message (default: next to the state)
+  AGENTKENNEL_BOARD_URL    board URL shown in the message (optional; omitted when unset)
+  AGENTKENNEL_STOP_MARKS   per-session marker directory (default: $TMPDIR/claude-stop-marks)
 """
 import json
 import os
@@ -45,6 +45,8 @@ import tempfile
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO)
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
 WAKE_TTL = 600          # seconds a wake marker counts as fresh
 MAX_BLOCKS = 2          # consecutive blocks before the stop is let through
 WAKE_TOOLS = ("CronCreate", "ScheduleWakeup", "Monitor", "Agent", "Task", "Workflow", "TaskCreate")
@@ -62,11 +64,11 @@ def state_path() -> str:
 
 
 def tracker_path() -> str:
-    return os.environ.get("AGENTDECK_TRACKER") or os.path.join(REPO, "tasks-dashboard", "tracker.py")
+    return envcompat.get("TRACKER") or os.path.join(REPO, "tasks-dashboard", "tracker.py")
 
 
 def mark_dir() -> str:
-    return os.environ.get("AGENTDECK_STOP_MARKS") or os.path.join(
+    return envcompat.get("STOP_MARKS") or os.path.join(
         tempfile.gettempdir(), "claude-stop-marks")
 
 
@@ -87,7 +89,7 @@ def block_message(tasks: list) -> str:
         "",
         f"Open tasks: {', '.join(tasks[:6])}",
     ]
-    url = os.environ.get("AGENTDECK_BOARD_URL", "").strip()
+    url = envcompat.get("BOARD_URL", "").strip()
     if url:
         lines.append(f"Board: {url}")
     return "\n".join(lines)

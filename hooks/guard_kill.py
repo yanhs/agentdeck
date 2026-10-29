@@ -42,8 +42,9 @@ to a shell, `sudo`, `env VAR=..`, `timeout N`, `nohup`, `nice`, `setsid`, `bash 
 `eval`, `for p in $(...)`, `... | while read p`, assignments in the same command.
 tmux kill-server/kill-session/kill-window/kill-pane is blocked only on the LIVE socket (the
 default socket, the socket from $TMUX); on your own one (-L, -S, your own TMUX_TMPDIR) it is
-allowed. systemctl stop/restart/kill/... is blocked for agentdeck-* and for any unit whose
-cgroup holds a tmux server or a Claude process.
+allowed. systemctl stop/restart/kill/... is blocked for agentkennel-* (and agentdeck-*, the
+same units' names before v2.1.0) and for any unit whose cgroup holds a tmux server or a
+Claude process.
 
 `kill -0 PID` is let through: signal 0 delivers nothing, it is a liveness check.
 `pkill -0` / `killall -0` by pattern are not: they rehearse the same -9, look at the matches

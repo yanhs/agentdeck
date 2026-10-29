@@ -1,7 +1,7 @@
 """hooks/install_guards.py — turns the guard hooks on (or off) in a Claude Code settings file.
 
 The Docker entrypoint runs it on every start so the agents in the container have the task
-board guards by default (opt-out: AGENTDECK_GUARDS=0). The settings file lives in a
+board guards by default (opt-out: AGENTKENNEL_GUARDS=0). The settings file lives in a
 persisted volume the user may have edited, so the merge must be idempotent, keep every other
 key and every hook the user added, and never overwrite a file it cannot parse.
 
@@ -70,7 +70,7 @@ def test_installs_into_a_missing_file_same_shape_as_the_example(tmp_path):
     for ev, groups in ex["hooks"].items():
         assert [g.get("matcher") for g in s["hooks"][ev]] == [g.get("matcher") for g in groups]
     assert len(guard_commands(s)) == len(commands(ex))
-    assert not any("/path/to/agentdeck" in c for c in commands(s))
+    assert not any("/path/to/agentkennel" in c for c in commands(s))
     for c in guard_commands(s):
         script = c.split()[-1]
         assert os.path.isfile(script), c          # points at the real hook scripts
@@ -185,7 +185,7 @@ def test_an_existing_claude_md_gets_the_services_rule_once(tmp_path):
         run(tmp_path, "--claude-md", str(md), "--services-dir", "/home/u/projects/.services")
     text = md.read_text()
     assert text.startswith("my own rules\n")
-    assert text.count("<!-- agentdeck-services -->") == 1
+    assert text.count("<!-- agentkennel-services -->") == 1
     assert "/home/u/projects/.services/<name>.sh" in text
 
 
@@ -197,7 +197,7 @@ def test_a_new_claude_md_says_where_the_agent_runs(tmp_path):
     r = run(tmp_path, "--claude-md", str(md))
     assert r.returncode == 0, r.stderr
     text = md.read_text()
-    assert "<!-- agentdeck-environment -->" in text
+    assert "<!-- agentkennel-environment -->" in text
     assert "same terminals" in text                       # web and Telegram: one terminal
     assert "password" in text and "stops nothing" in text
     assert "claude --resume" in text                      # restart / reopen: same conversation
@@ -206,14 +206,14 @@ def test_a_new_claude_md_says_where_the_agent_runs(tmp_path):
 
 
 def test_a_new_claude_md_says_agentkennel(tmp_path):
-    """The brand is AgentKennel (29.10.2026); the <!-- agentdeck-... --> marks stay."""
+    """The brand is AgentKennel (29.10.2026); the <!-- agentkennel-... --> marks stay."""
     md = tmp_path / "CLAUDE.md"
     r = run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
     assert r.returncode == 0, r.stderr
     text = md.read_text()
     assert text.startswith("# Working rules (AgentKennel)\n")
     assert "an AgentKennel terminal" in text and "AgentDeck" not in text
-    assert "<!-- agentdeck-environment -->" in text and "<!-- agentdeck-safety -->" in text
+    assert "<!-- agentkennel-environment -->" in text and "<!-- agentkennel-safety -->" in text
 
 
 def test_a_claude_md_with_the_new_header_gets_the_blocks_once(tmp_path):
@@ -222,11 +222,11 @@ def test_a_claude_md_with_the_new_header_gets_the_blocks_once(tmp_path):
     for _ in range(2):
         run(tmp_path, "--claude-md", str(md))
     text = md.read_text()
-    assert text.count("<!-- agentdeck-environment -->") == 1
-    assert text.count("<!-- agentdeck-safety -->") == 1
+    assert text.count("<!-- agentkennel-environment -->") == 1
+    assert text.count("<!-- agentkennel-safety -->") == 1
 
 
-def test_a_claude_md_agentdeck_wrote_earlier_gets_the_environment_note_once(tmp_path):
+def test_a_claude_md_agentkennel_wrote_earlier_gets_the_environment_note_once(tmp_path):
     """Sandboxes and servers set up before the note have our file without it (headed
     AgentDeck, the product's name before 29.10.2026).
     A person's own CLAUDE.md is still never touched (test_claude_md_written_only_when_missing)."""
@@ -236,10 +236,10 @@ def test_a_claude_md_agentdeck_wrote_earlier_gets_the_environment_note_once(tmp_
         run(tmp_path, "--claude-md", str(md))
     text = md.read_text()
     assert text.startswith("# Working rules (AgentDeck)\n")
-    assert text.count("<!-- agentdeck-environment -->") == 1
+    assert text.count("<!-- agentkennel-environment -->") == 1
 
 
-SAFETY_MARK = "<!-- agentdeck-safety -->"
+SAFETY_MARK = "<!-- agentkennel-safety -->"
 
 
 def test_a_new_claude_md_carries_the_safety_rules(tmp_path):
@@ -259,10 +259,10 @@ def test_a_new_claude_md_carries_the_safety_rules(tmp_path):
                   "on a copy", "you checked the result"):                     # risky, done
         assert words in safety, words
     assert text.isascii() and len(text.splitlines()) < MAX_MD_LINES
-    assert "tracker.py add-task" in text and "<!-- agentdeck-environment -->" in text
+    assert "tracker.py add-task" in text and "<!-- agentkennel-environment -->" in text
 
 
-def test_a_claude_md_agentdeck_wrote_earlier_gets_the_safety_rules_once(tmp_path):
+def test_a_claude_md_agentkennel_wrote_earlier_gets_the_safety_rules_once(tmp_path):
     md = tmp_path / "CLAUDE.md"
     md.write_text("# Working rules (AgentDeck)\n\n## Put multi-step work on the task board\n")
     for _ in range(2):
@@ -270,7 +270,7 @@ def test_a_claude_md_agentdeck_wrote_earlier_gets_the_safety_rules_once(tmp_path
     text = md.read_text()
     assert text.startswith("# Working rules (AgentDeck)\n")
     assert text.count(SAFETY_MARK) == 1
-    assert text.count("<!-- agentdeck-environment -->") == 1
+    assert text.count("<!-- agentkennel-environment -->") == 1
 
 
 def test_a_persons_own_claude_md_gets_no_safety_rules(tmp_path):
@@ -281,7 +281,7 @@ def test_a_persons_own_claude_md_gets_no_safety_rules(tmp_path):
     assert SAFETY_MARK not in md.read_text()
 
 
-TDD_MARK = "<!-- agentdeck-tdd -->"
+TDD_MARK = "<!-- agentkennel-tdd -->"
 
 
 def test_a_new_claude_md_tells_the_agents_to_test_first(tmp_path):
@@ -299,11 +299,11 @@ def test_a_new_claude_md_tells_the_agents_to_test_first(tmp_path):
                   "Skip only for docs, config values and one-off commands"):
         assert words in tdd, words
     assert text.isascii() and len(text.splitlines()) < MAX_MD_LINES
-    for mark in (SAFETY_MARK, "<!-- agentdeck-environment -->", "<!-- agentdeck-services -->"):
+    for mark in (SAFETY_MARK, "<!-- agentkennel-environment -->", "<!-- agentkennel-services -->"):
         assert text.count(mark) == 1, mark
 
 
-def test_a_claude_md_agentdeck_wrote_earlier_gets_test_first_once(tmp_path):
+def test_a_claude_md_agentkennel_wrote_earlier_gets_test_first_once(tmp_path):
     """Sandboxes and servers set up before 2.0.2, including ones that already got the
     safety block from 2.0.1."""
     md = tmp_path / "CLAUDE.md"
@@ -352,7 +352,7 @@ def test_installed_command_blocks_then_allows(tmp_path):
                     for c in [h["command"] for h in g["hooks"]])
     bash_cmd = next(c for g in s["hooks"]["PreToolUse"] if g.get("matcher") == "Bash"
                     for c in [h["command"] for h in g["hooks"]] if "guard_task_board" in c)
-    env = dict(os.environ, AGENTDECK_BOARD_MARKS=str(tmp_path / "m"))
+    env = dict(os.environ, AGENTKENNEL_BOARD_MARKS=str(tmp_path / "m"))
 
     def sh(cmd, payload):
         return subprocess.run(["sh", "-c", cmd], input=json.dumps(payload),
@@ -405,11 +405,11 @@ def test_check_fails_when_only_part_of_the_set_is_installed(tmp_path):
 
 def test_installed_hold_command_writes_the_marker_for_the_panes_session(tmp_path):
     """The installed command, run the way claude runs it inside a cs-<id> pane
-    (AGENTDECK_SESSION exported by library_cli.pane_command), holds that session."""
+    (AGENTKENNEL_SESSION exported by library_cli.pane_command), holds that session."""
     run(tmp_path, "--tracker-state", str(tmp_path / "state.json"))
     cmd = next(c for c in commands(settings(tmp_path), "PostToolUse") if "hold_on_timer" in c)
     reg = tmp_path / "reg" / "library.json"
-    env = dict(os.environ, AGENTDECK_SESSION="abcdef12", AGENTDECK_LIBRARY=str(reg))
+    env = dict(os.environ, AGENTKENNEL_SESSION="abcdef12", AGENTKENNEL_LIBRARY=str(reg))
     r = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=30,
                        input=json.dumps({"hook_event_name": "PostToolUse",
                                          "tool_name": "ScheduleWakeup",
@@ -525,7 +525,7 @@ def test_installed_kill_guard_blocks_a_pattern_kill_that_hits_others(tmp_path):
         os.kill(pid, signal.SIGKILL)                      # the PID we saved
 
 
-LINKS_MARK = "<!-- agentdeck-links -->"
+LINKS_MARK = "<!-- agentkennel-links -->"
 
 
 def test_a_new_claude_md_puts_links_on_the_last_line(tmp_path):
@@ -542,12 +542,12 @@ def test_a_new_claude_md_puts_links_on_the_last_line(tmp_path):
                   "no period, bracket, quote or more text", "one per line"):
         assert words in links, words
     assert text.isascii() and len(text.splitlines()) < MAX_MD_LINES
-    for mark in (TDD_MARK, SAFETY_MARK, "<!-- agentdeck-environment -->",
-                 "<!-- agentdeck-services -->"):
+    for mark in (TDD_MARK, SAFETY_MARK, "<!-- agentkennel-environment -->",
+                 "<!-- agentkennel-services -->"):
         assert text.count(mark) == 1, mark
 
 
-def test_a_claude_md_agentdeck_wrote_earlier_gets_the_links_rule_once(tmp_path):
+def test_a_claude_md_agentkennel_wrote_earlier_gets_the_links_rule_once(tmp_path):
     md = tmp_path / "CLAUDE.md"
     md.write_text("# Working rules (AgentDeck)\n\n" + TDD_MARK + "\n## Test first\n")
     for _ in range(2):
@@ -561,3 +561,42 @@ def test_a_persons_own_claude_md_gets_no_links_rule(tmp_path):
     md.write_text("my own rules\n")
     run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
     assert LINKS_MARK not in md.read_text()
+
+
+# ── marks written before v2.1.0 (<!-- agentdeck-… -->) still count ──────────────────
+OLD_MARKS = ("<!-- agentdeck-environment -->", "<!-- agentdeck-safety -->",
+             "<!-- agentdeck-tdd -->", "<!-- agentdeck-links -->", "<!-- agentdeck-services -->")
+NEW_MARKS = tuple(m.replace("agentdeck", "agentkennel") for m in OLD_MARKS)
+
+
+def test_a_new_claude_md_carries_the_new_marks(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    text = md.read_text()
+    for mark in NEW_MARKS:
+        assert text.count(mark) == 1, mark
+    assert "agentdeck" not in text
+
+
+@pytest.mark.parametrize("header", ["# Working rules (AgentDeck)", "# Working rules (AgentKennel)"])
+def test_old_marks_count_as_present_and_no_block_is_added_twice(tmp_path, header):
+    """A CLAUDE.md the old version wrote has every block under its old mark: the new
+    version adds none of them again."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text(header + "\n\n" + "".join(f"{m}\n## block\n\n" for m in OLD_MARKS))
+    before = md.read_text()
+    for _ in range(2):
+        r = run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+        assert r.returncode == 0, r.stderr
+    assert md.read_text() == before
+    assert not any(m in md.read_text() for m in NEW_MARKS)
+
+
+def test_an_old_mark_line_alone_still_opts_out(tmp_path):
+    """The person deleted the safety block and kept its (old) mark line: it stays out."""
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Working rules (AgentDeck)\n\n<!-- agentdeck-safety -->\n")
+    run(tmp_path, "--claude-md", str(md))
+    text = md.read_text()
+    assert "## Safety" not in text and "<!-- agentkennel-safety -->" not in text
+    assert text.count("<!-- agentkennel-environment -->") == 1      # missing ones still come

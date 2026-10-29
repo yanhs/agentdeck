@@ -62,9 +62,9 @@ def commit_file(repo, name, text, msg="change"):
 
 def run_hook(command, cwd, tmp_path, tool="Bash", raw=None, **env_extra):
     env = dict(os.environ)
-    env["AGENTDECK_PUBLIC_IPS"] = IP
-    env["AGENTDECK_SECRETS_CACHE"] = str(tmp_path / "cache" / "public-ipv4")
-    env["AGENTDECK_PUBLIC_IPS_FILE"] = str(tmp_path / "no-known-ips")
+    env["AGENTKENNEL_PUBLIC_IPS"] = IP
+    env["AGENTKENNEL_SECRETS_CACHE"] = str(tmp_path / "cache" / "public-ipv4")
+    env["AGENTKENNEL_PUBLIC_IPS_FILE"] = str(tmp_path / "no-known-ips")
     env.update({k: str(v) for k, v in env_extra.items()})
     payload = {"session_id": "s1", "tool_name": tool, "cwd": str(cwd),
                "tool_input": {"command": command}}
@@ -260,7 +260,7 @@ def test_ip_matched_as_whole_token_only(repo, tmp_path):
 def test_no_public_ip_known_skips_ip_check(repo, tmp_path):
     (repo / "a.txt").write_text(f"host = {IP}\n")
     git(repo, "add", "a.txt")
-    p = run_hook("git commit -m x", repo, tmp_path, AGENTDECK_PUBLIC_IPS="")
+    p = run_hook("git commit -m x", repo, tmp_path, AGENTKENNEL_PUBLIC_IPS="")
     assert p.returncode == 0, p.stderr
 
 
@@ -417,18 +417,18 @@ def test_public_ips_is_union_of_env_file_and_discovery(tmp_path, monkeypatch):
     ip_file = tmp_path / "known-ips"
     ip_file.write_text("# host address, written by the host\n198.51.100.9  # vps\n\n"
                        "junk-line\n")
-    monkeypatch.setenv("AGENTDECK_PUBLIC_IPS", f"{IP}, 8.8.8.8")
-    monkeypatch.setenv("AGENTDECK_PUBLIC_IPS_FILE", str(ip_file))
-    monkeypatch.setenv("AGENTDECK_SECRETS_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("AGENTKENNEL_PUBLIC_IPS", f"{IP}, 8.8.8.8")
+    monkeypatch.setenv("AGENTKENNEL_PUBLIC_IPS_FILE", str(ip_file))
+    monkeypatch.setenv("AGENTKENNEL_SECRETS_CACHE", str(tmp_path / "cache"))
     monkeypatch.setattr(mod, "probe_interfaces", lambda: ["10.1.1.1", "8.8.4.4"])
     assert mod.public_ips() == {IP, "8.8.8.8", "198.51.100.9", "8.8.4.4"}
 
 
 def test_public_ips_missing_file_is_fine(tmp_path, monkeypatch):
     mod = load_module()
-    monkeypatch.delenv("AGENTDECK_PUBLIC_IPS", raising=False)
-    monkeypatch.setenv("AGENTDECK_PUBLIC_IPS_FILE", str(tmp_path / "no-such-file"))
-    monkeypatch.setenv("AGENTDECK_SECRETS_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("AGENTKENNEL_PUBLIC_IPS", raising=False)
+    monkeypatch.setenv("AGENTKENNEL_PUBLIC_IPS_FILE", str(tmp_path / "no-such-file"))
+    monkeypatch.setenv("AGENTKENNEL_SECRETS_CACHE", str(tmp_path / "cache"))
     monkeypatch.setattr(mod, "probe_interfaces", lambda: ["10.1.1.1"])
     assert mod.public_ips() == set()
 
@@ -438,8 +438,8 @@ def test_ip_from_known_ips_file_blocks_commit(repo, tmp_path):
     ip_file.write_text(f"# this server\n{IP}\n")
     (repo / "a.txt").write_text(f"host = {IP}\n")
     git(repo, "add", "a.txt")
-    p = run_hook("git commit -m x", repo, tmp_path, AGENTDECK_PUBLIC_IPS="",
-                 AGENTDECK_PUBLIC_IPS_FILE=ip_file)
+    p = run_hook("git commit -m x", repo, tmp_path, AGENTKENNEL_PUBLIC_IPS="",
+                 AGENTKENNEL_PUBLIC_IPS_FILE=ip_file)
     assert blocked(p), p.stderr
     assert "public IP" in p.stderr and "203.0.x.x" in p.stderr
 

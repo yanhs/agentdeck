@@ -3,7 +3,7 @@
 When Claude inside a library session sets a timer (ScheduleWakeup, CronCreate,
 Monitor), the session must stay loaded until the timer fires: unloading it
 (LRU at the limit, or idle_reaper) would kill the timer with the process. The
-hook writes a hold marker for $AGENTDECK_SESSION; outside a library session it
+hook writes a hold marker for $AGENTKENNEL_SESSION; outside a library session it
 does nothing, and it never fails the tool call.
 """
 import json
@@ -28,10 +28,10 @@ def hold_file(reg, sid="aaaaaaaa"):
 
 
 def run(reg, payload, session="aaaaaaaa"):
-    env = {k: v for k, v in os.environ.items() if k != "AGENTDECK_SESSION"}
-    env["AGENTDECK_LIBRARY"] = reg
+    env = {k: v for k, v in os.environ.items() if k not in ("AGENTKENNEL_SESSION", "AGENTDECK_SESSION")}
+    env["AGENTKENNEL_LIBRARY"] = reg
     if session is not None:
-        env["AGENTDECK_SESSION"] = session
+        env["AGENTKENNEL_SESSION"] = session
     data = payload if isinstance(payload, str) else json.dumps(payload)
     return subprocess.run([sys.executable, HOOK], input=data, capture_output=True,
                           text=True, env=env, timeout=30)
@@ -91,7 +91,7 @@ def test_a_later_hold_is_not_shortened(reg):
 
 
 # ── one number per terminal: the hold goes to the conversation live now ─────
-# AGENTDECK_SESSION is exported once, when the pane starts. After Claude's consent
+# AGENTKENNEL_SESSION is exported once, when the pane starts. After Claude's consent
 # relaunch, /clear or /resume the terminal's number is the new conversation's
 # (convo_sync renames it); the hook payload's session_id is that conversation.
 UB = "b2b2b2b2-2222-4222-8222-222222222222"
@@ -114,7 +114,7 @@ def test_a_malformed_payload_session_falls_back_to_the_pane_variable(reg, bad):
 
 
 def test_payload_session_outside_a_library_pane_is_a_no_op(reg):
-    # a Claude that AgentKennel did not start (no AGENTDECK_SESSION) holds nothing
+    # a Claude that AgentKennel did not start (no AGENTKENNEL_SESSION) holds nothing
     r = run(reg, {"session_id": UB, "tool_name": "CronCreate", "tool_input": {}}, session=None)
     assert r.returncode == 0
     assert not os.path.exists(os.path.dirname(reg))

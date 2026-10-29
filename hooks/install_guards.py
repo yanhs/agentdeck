@@ -5,10 +5,10 @@ The set: guard_task_board.py + guard_dont_stop.py (the board), and hold_on_timer
 (PostToolUse on ScheduleWakeup/CronCreate/Monitor: a terminal waiting on its own timer
 stays loaded — idle_reaper skips it while the hold marker is fresh; the terminal is
 identified by the conversation in the hook's payload, which is the terminal's number,
-and $AGENTDECK_SESSION, exported in every cs-<id> pane, marks a library terminal).
+and $AGENTKENNEL_SESSION, exported in every cs-<id> pane, marks a library terminal).
 
 The hooks block comes from hooks/settings.example.json (one source), with
-/path/to/agentdeck replaced by the real repo path. The merge is idempotent and keeps
+/path/to/agentkennel replaced by the real repo path. The merge is idempotent and keeps
 everything else in the file: other keys, and every hook that is not one of ours. A file
 that is not valid JSON is left untouched (with a warning) — never overwritten.
 
@@ -35,7 +35,7 @@ A guard the work folder's own .claude/settings.json or settings.local.json alrea
 (a hook command with the same file name) is left out: the agents run there and would get
 both, and one command blocked twice. --check counts it as installed.
 
-The Docker entrypoint runs this on every start (opt-out: AGENTDECK_GUARDS=0).
+The Docker entrypoint runs this on every start (opt-out: AGENTKENNEL_GUARDS=0).
 """
 import argparse
 import json
@@ -75,7 +75,7 @@ Otherwise close or park the task on the board.
 # What the agents must know about where they run. 27.10.2026 a sandbox agent, asked
 # whether changing the password and opening the web would stop the first terminal,
 # answered "I can't tell how your platform works". Every fact below is AgentKennel's.
-ENV_MARK = "<!-- agentdeck-environment -->"
+ENV_MARK = "<!-- agentkennel-environment -->"
 ENV_MD = """\
 {mark}
 ## Where you run: an AgentKennel terminal
@@ -92,7 +92,7 @@ OWN_HEADERS = ("# Working rules (AgentKennel)", "# Working rules (AgentDeck)")
 # What never happens without the person. 28.10.2026 an agent committed a server's IP and
 # Telegram ids into a public repo; 26.09 a `pkill -f` pattern closed every terminal. The
 # guard hooks (guard_secrets, guard_kill, guard_email) hold the same lines in code.
-SAFETY_MARK = "<!-- agentdeck-safety -->"
+SAFETY_MARK = "<!-- agentkennel-safety -->"
 SAFETY_MD = """\
 {mark}
 ## Safety: what never happens without the person
@@ -112,7 +112,7 @@ SAFETY_MD = """\
 """
 # Test before code. 28.10.2026 the owner asked why his agents write tests first: his own
 # CLAUDE.md says "TDD always", AgentKennel's agents were never told. Now they are.
-TDD_MARK = "<!-- agentdeck-tdd -->"
+TDD_MARK = "<!-- agentkennel-tdd -->"
 TDD_MD = """\
 {mark}
 ## Test first
@@ -125,7 +125,7 @@ one-off commands.
 # Links last. The person reads replies in Telegram or a terminal, and both glue the next
 # character to an address - "(https://x.y/z)." stops opening. The owner's own agents have
 # had this rule since 26.09.2026; on 28.10 he asked for it in every AgentKennel.
-LINKS_MARK = "<!-- agentdeck-links -->"
+LINKS_MARK = "<!-- agentkennel-links -->"
 LINKS_MD = """\
 {mark}
 ## Links go last
@@ -138,7 +138,13 @@ address and the link stops opening). Several links: one per line, all at the ver
 OWN_BLOCKS = ((ENV_MARK, ENV_MD), (SAFETY_MARK, SAFETY_MD), (TDD_MARK, TDD_MD),
               (LINKS_MARK, LINKS_MD))
 
-SERVICES_MARK = "<!-- agentdeck-services -->"
+
+def has_mark(text: str, mark: str) -> bool:
+    """The block's mark is in the file, under its name or its name before v2.1.0
+    (compat: <!-- agentdeck-... --> in a CLAUDE.md the earlier version wrote)."""
+    return mark in text or mark.replace("<!-- agentkennel-", "<!-- agentdeck-", 1) in text
+
+SERVICES_MARK = "<!-- agentkennel-services -->"
 SERVICES_MD = """\
 {mark}
 ## Programs that must keep running: make them services
@@ -150,6 +156,9 @@ State: `curl -s localhost:9876/status`; `curl -X POST localhost:9876/stop/<name>
 (also start, restart). Delete the file to remove it. At most 10 services.
 When you add, stop or remove a service, tell the user in one line what and why.
 """
+
+
+PLACEHOLDER = "/path/to/agentkennel/hooks"     # in settings.example.json
 
 
 def template(hooks_dir: str, tracker_state: str, skip=()) -> dict:
@@ -164,7 +173,7 @@ def template(hooks_dir: str, tracker_state: str, skip=()) -> dict:
             for h in g["hooks"]:
                 if os.path.basename(h["command"].split()[-1]) in skip:
                     continue
-                cmd = h["command"].replace("/path/to/agentdeck/hooks", hooks_dir)
+                cmd = h["command"].replace(PLACEHOLDER, hooks_dir)
                 hs.append(dict(h, command=prefix + cmd))
             if hs:
                 out.setdefault(event, []).append(dict(g, hooks=hs))
@@ -247,7 +256,7 @@ def installed(data: dict, hooks_dir: str, skip=()) -> bool:
 
 def write_json(path: str, data: dict) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = path + ".agentdeck-tmp"
+    tmp = path + ".agentkennel-tmp"
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
         f.write("\n")
@@ -302,14 +311,14 @@ def main(argv=None) -> int:
         # once, and only into the file AgentKennel wrote — a person's own CLAUDE.md is theirs
         for mark, block in OWN_BLOCKS:
             text = open(a.claude_md).read()
-            if text.startswith(OWN_HEADERS) and mark not in text:
+            if text.startswith(OWN_HEADERS) and not has_mark(text, mark):
                 with open(a.claude_md, "a") as f:
                     f.write(("\n" if not text.endswith("\n\n") else "")
                             + block.format(mark=mark))
     if a.claude_md and a.services_dir and not a.remove:
         # once, also into the user's own CLAUDE.md (keep the mark line to opt out)
         text = open(a.claude_md).read() if os.path.exists(a.claude_md) else ""
-        if SERVICES_MARK not in text:
+        if not has_mark(text, SERVICES_MARK):
             block = SERVICES_MD.format(mark=SERVICES_MARK, dir=a.services_dir.rstrip("/"))
             with open(a.claude_md, "a") as f:
                 f.write(("\n" if text and not text.endswith("\n\n") else "") + block)

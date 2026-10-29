@@ -2229,7 +2229,9 @@ SC_LONG_ARG = {"type", "property", "signal", "host", "machine", "lines", "output
                "check-inhibitors", "image-policy"}
 UNIT_SUFFIX = re.compile(r"\.(service|socket|target|scope|slice|mount|automount|swap|timer|"
                          r"path|device)$")
-HARD_PATTERNS = ("agentdeck-*",)            # AgentKennel's own units: always protected
+# AgentKennel's own units: always protected (compat: agentdeck-* are the same units
+# before v2.1.0, and an upgraded server may still have the old ones running)
+HARD_PATTERNS = ("agentkennel-*", "agentdeck-*")
 
 
 def protected_units():
@@ -2318,7 +2320,7 @@ def check_units(verb, units, dyn, now, ctx, label):
             found = True
         if globby:
             prefix = re.split(r"[*?\[]", u, 1)[0]
-            if "agentdeck-".startswith(prefix):
+            if any(p[:-1].startswith(prefix) for p in HARD_PATTERNS):
                 found = True
         if found:
             ctx.report.units.append((label, u, hit))

@@ -736,25 +736,25 @@ def test_tmux_shell_command_is_inspected(fake_tmux, outside):
 # ==========================================================================================
 
 @pytest.mark.parametrize("cmd", [
-    "systemctl --user stop agentdeck-sessions.service",
-    "systemctl restart agentdeck-web",
-    "sudo systemctl kill -s KILL agentdeck-web",
-    "systemctl stop 'agentdeck-*'",
+    "systemctl --user stop agentkennel-sessions.service",
+    "systemctl restart agentkennel-web",
+    "sudo systemctl kill -s KILL agentkennel-web",
+    "systemctl stop 'agentkennel-*'",
     "systemctl --user stop 'agent*'",
     "sudo systemctl isolate rescue.target",
-    "sudo systemctl disable --now agentdeck-web",
+    "sudo systemctl disable --now agentkennel-web",
 ])
 def test_systemctl_protected_blocked(cmd):
     assert blocked(cmd), cmd
 
 
 @pytest.mark.parametrize("cmd", [
-    "systemctl status agentdeck-web",
+    "systemctl status agentkennel-web",
     "systemctl --user daemon-reload",
     "sudo systemctl restart nginx",
-    "systemctl is-active agentdeck-web",
-    "sudo systemctl disable agentdeck-web",
-    "journalctl -u agentdeck-web -n 20",
+    "systemctl is-active agentkennel-web",
+    "sudo systemctl disable agentkennel-web",
+    "journalctl -u agentkennel-web -n 20",
 ])
 def test_systemctl_harmless_allowed(cmd):
     assert not blocked(cmd), cmd
@@ -844,7 +844,7 @@ def test_message_shape(outside):
     "t=$(systemctl show \"$u\" -p Type --value 2>/dev/null); echo $t; done",
     "if true; then p=$(systemctl --user show x -p MainPID --value); echo $p; fi",
     # a command in a variable, built in the same command - on its own socket
-    "for i in 1 2; do S=agentdeck-test-q$i; T=\"env -u TMUX tmux -L $S\"; "
+    "for i in 1 2; do S=agentkennel-test-q$i; T=\"env -u TMUX tmux -L $S\"; "
     "$T new-session -d -s x 'cat'; $T kill-server; done",
     # $PWD is the working directory of the call
     "export TMUX_TMPDIR=$PWD/tmx && mkdir -p tmx && unset TMUX; tmux kill-server",
@@ -867,7 +867,7 @@ def test_cd_is_followed(tmp_path, outside):
     # an unknown command name without signal marks is no reason to block
     "ENV=$(systemctl --user show x -p Environment --value); env $ENV timeout 600 some-tool migrate",
     # $RANDOM in the name of our own socket: it can never be the live one ("default")
-    "S=agentdeck-test-r$RANDOM; T=\"env -u TMUX tmux -L $S\"; "
+    "S=agentkennel-test-r$RANDOM; T=\"env -u TMUX tmux -L $S\"; "
     "$T new-session -d -s x; $T kill-server",
     # kill -0 sends nothing, even when the PID is computed at run time
     "PID=$(systemctl --user show x -p MainPID --value); kill -0 $PID && echo alive",
@@ -1099,9 +1099,9 @@ def test_monitor_websocket_ignored():
 # --- 12.4. service stops a unit just like systemctl ------------------------------------------
 
 @pytest.mark.parametrize("cmd", [
-    "sudo service agentdeck-web stop",
-    "service agentdeck-web restart",
-    "sudo service agentdeck-web --full-restart",
+    "sudo service agentkennel-web stop",
+    "service agentkennel-web restart",
+    "sudo service agentkennel-web --full-restart",
 ])
 def test_service_on_protected_unit_blocked(cmd):
     assert blocked(cmd), cmd

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Claude Code PostToolUse hook: a timer set inside a library session holds it.
 
-When Claude in a topic-session (tmux cs-<id>, env AGENTDECK_SESSION=<id>) sets a
+When Claude in a topic-session (tmux cs-<id>, env AGENTKENNEL_SESSION=<id>) sets a
 timer, the session must stay loaded until the timer fires — unloading it (LRU
 eviction at the limit, or idle_reaper) kills the claude process and the timer
 with it. This hook writes the hold marker `.sessions/hold-<id>`
@@ -12,11 +12,11 @@ with it. This hook writes the hold marker `.sessions/hold-<id>`
     Monitor          6 hours
 
 <id> is the conversation live NOW — the hook payload's session_id (first 8 hex).
-AGENTDECK_SESSION is exported once, when the pane starts: after Claude's consent
+AGENTKENNEL_SESSION is exported once, when the pane starts: after Claude's consent
 relaunch, /clear or /resume the terminal's number is the new conversation's
 (convo_sync renames it), so the variable is the old number then. It is only the
 fallback when the payload has no usable session_id, and it tells a library pane
-from any other Claude: outside a library session (no or bad AGENTDECK_SESSION) the
+from any other Claude: outside a library session (no or bad AGENTKENNEL_SESSION) the
 hook does nothing. It never fails the tool call: every error ends in exit 0. Wired in by
 hooks/install_guards.py (PostToolUse, matcher ScheduleWakeup|CronCreate|Monitor;
 see hooks/settings.example.json) — on by default in Docker.
@@ -28,6 +28,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
 
 SLACK = 600
 DEFAULT_HOLD = 6 * 3600
@@ -57,7 +58,7 @@ def session_of(event, pane):
 
 def main():
     import library  # noqa: E402  (cheap; only reached with a session id)
-    pane = os.getenv("AGENTDECK_SESSION", "")
+    pane = envcompat.get("SESSION", "")
     if not library.valid_id(pane):
         return
     try:
