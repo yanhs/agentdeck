@@ -8,7 +8,7 @@ All notable changes to AgentDeck. Newest first.
 - **📎 File: give an agent any file.** The top-bar button (was 📎 Image) opens the file picker — several files at once — and you can also drop files onto the terminal. Each file uploads to a private folder on the server (`.sessions/uploads/<date>/`, folder 0700, files 0600, 100 MB per file; `AGENTDECK_UPLOAD_DIR`, `AGENTDECK_UPLOAD_MAX_MB`), keeps its name (made safe to type: `договор аренды.docx` → `договор_аренды.docx`), and its path is typed into the open terminal and copied to the clipboard. A path, not a link: the agent reads the file where it is, and nothing is published on the web. Screenshots still paste with Ctrl+V / ⌘V.
 
 ### Upgrading
-- Your own nginx in front (not Caddy): add `location = /api/upload` from `nginx/agents-subdomain.conf` (`client_max_body_size 101m; proxy_request_buffering off`). Docker and `install.sh` (Caddy) need nothing.
+- Your own nginx in front (not Caddy): add `location = /api/upload` from `nginx/agents-subdomain.conf` (`client_max_body_size 101m; proxy_request_buffering off`), and `client_max_body_size 0;` inside `location = /__auth` — the login probe runs for every request with its body size, and nginx's default 1 MB there refused any larger upload or pasted screenshot with a 500. Docker and `install.sh` (Caddy) need nothing.
 
 ## v2.0.4 — Only the setup link sets the password
 

@@ -373,3 +373,15 @@ def test_the_image_has_git_for_the_agents_and_the_secrets_guard():
     df = (ROOT / "Dockerfile").read_text()
     apt = re.search(r"apt-get install[^\n]*\n([^\n]*\n)*?[^\n]*rm -rf /var/lib/apt", df)
     assert apt and re.search(r"\bgit\b", apt.group(0)), apt and apt.group(0)
+
+
+def test_nginx_auth_probe_has_no_body_limit_and_upload_route():
+    """The auth_request probe is a subrequest of EVERY request, body size included:
+    with nginx's default 1m there, an upload or a pasted screenshot above 1 MB was a
+    413 → 500 before its own location ever saw it (live, 29.10.2026)."""
+    src = NGINX.read_text()
+    probe = re.search(r"location = /__auth \{(.*?)\}", src, re.S).group(1)
+    assert re.search(r"client_max_body_size\s+0;", probe)
+    up = re.search(r"location = /api/upload \{(.*?)\}", src, re.S).group(1)
+    assert "proxy_pass http://127.0.0.1:3047;" in up            # no trailing / : path kept
+    assert re.search(r"client_max_body_size\s+101m;", up) and "proxy_request_buffering off" in up
