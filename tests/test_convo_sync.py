@@ -72,6 +72,14 @@ def children(pid):
     return out
 
 
+def cmdline(pid):
+    # a child can exit between children() and this read (the pane's `sleep 0.3`)
+    try:
+        return open(f"/proc/{pid}/cmdline", "rb").read()
+    except OSError:
+        return b""
+
+
 class World:
     def __init__(self, tmp_path, monkeypatch):
         self.tmp = tmp_path
@@ -252,7 +260,7 @@ def test_two_files_on_one_pane_newest_start_wins(w, capfd):
     # the child (started later) the live one
     pane = w.start("cs-" + A, "bash", "-c", "sleep 0.3; sleep 600 & wait")
     kid = wait_for(lambda: children(pane) and [
-        c for c in children(pane) if b"600" in open(f"/proc/{c}/cmdline", "rb").read()])[0]
+        c for c in children(pane) if b"600" in cmdline(c)])[0]
     w.pidfile(pane, UA)
     w.pidfile(kid, UB)
     assert int(start_time(kid)) > int(start_time(pane))
