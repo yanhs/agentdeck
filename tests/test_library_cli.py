@@ -202,7 +202,7 @@ def _mod():
 def test_slug_matches_claude_project_dirs():
     m = _mod()
     assert m.slug("/home/ubuntu/pr") == "-home-ubuntu-pr"
-    assert m.slug("/home/ubuntu/pr/Appeals/dev/web.next") == "-home-ubuntu-pr-Appeals-dev-web-next"
+    assert m.slug("/home/ubuntu/pr/Acme/dev/web.next") == "-home-ubuntu-pr-Acme-dev-web-next"
     assert m.slug("/tmp/claude-1000/-home-ubuntu-pr/x") == "-tmp-claude-1000--home-ubuntu-pr-x"
 
 

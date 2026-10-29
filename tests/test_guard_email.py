@@ -24,6 +24,7 @@ HOOK = os.path.join(REPO, "hooks", "guard_email.py")
 NON_ASCII = re.compile(r"[^\x00-\x7F]")
 # the author's own domain, spelled in parts so the repo itself never contains it
 OWNER_DOMAIN = "re" + "imake"
+OWNER_PRODUCT = "imm" + "appeal"          # the author's own product, same reason
 
 
 def run_raw(raw):
@@ -441,5 +442,5 @@ def test_hook_source_and_output_are_ascii_and_neutral():
     for text in (src, out):
         assert not NON_ASCII.search(text)
         low = text.lower()
-        for word in ("immappeal", OWNER_DOMAIN, "/home/ubuntu", "_send_mail", "invite-mail"):
+        for word in (OWNER_PRODUCT, OWNER_DOMAIN, "/home/ubuntu", "_send_mail", "invite-mail"):
             assert word not in low, word

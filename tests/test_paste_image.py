@@ -32,10 +32,10 @@ def test_save_paste_image_writes_file_and_returns_path_url(tmp_path, monkeypatch
     assert res["path"] == str(tmp_path / "paste_abcd1234.png")
     assert os.path.exists(res["path"])
     assert open(res["path"], "rb").read() == data
-    # public URL is the configured base (never the deprecated yanhs.stream)
+    # the public URL is the configured base + the file name, and nothing else
     assert res["url"].endswith("/paste_abcd1234.png")
     assert res["url"].startswith("https://files.example.com/tgimg/")
-    assert "yanhs.stream" not in res["url"]
+    assert res["url"] == "https://files.example.com/tgimg/paste_abcd1234.png"
 
 
 def test_save_paste_image_rejects_non_image(tmp_path):

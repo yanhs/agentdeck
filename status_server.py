@@ -55,7 +55,7 @@ PROJECT_MAP = {
     "my-app": "My App",
     "docs-site": "Docs Site",
     "terminal": "Terminal",
-    "orchestra": "Agent Orchestra",
+    "api-server": "API Server",
 }
 
 ANSI_RE = re.compile(r'\x1b[\[\(][0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b.|\x0f|\x0e')

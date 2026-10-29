@@ -61,7 +61,7 @@ expect() {  # expect "name" cmd...
   if "$@"; then pass "$name"; else fail "$name"; fi
 }
 
-# other containers (immappeal-*, sparkaide-*, 3x-ui, …) must all still be there afterwards;
+# the server's other containers (whatever else runs there) must all still be there afterwards;
 # parallel runs of this harness (agentkennel-install-test-*) are left out of the comparison
 docker ps -a --format '{{.Names}}' | { grep -v "^agentkennel-install-test-" || true; } | sort > "$WORK/ps-before"
 

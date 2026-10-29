@@ -89,7 +89,7 @@ def test_dry_run_still_refuses_unknown_ids(deck):
 
 # ── the real thing: ensure + attach ─────────────────────────────────────────
 def test_opens_the_topic_and_attaches_a_tab(deck):
-    e = deck.add("ImmAppeal", uuid=U1)
+    e = deck.add("Acme", uuid=U1)
     tab = subprocess.Popen(["script", "-qfc", f"bash {SCRIPT} {e['id']}", "/dev/null"],
                            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, env=deck.env)

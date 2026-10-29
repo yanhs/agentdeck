@@ -34,7 +34,7 @@ API_PAYLOAD = {
           "project": "app - news, seo, encription, magiclink",
           "task": "go ahead and check the regulations via the eCFR API", "locked": True},
     "3": {"active": False, "working": False, "path": "terminal3",
-          "project": "Instagram infuencers", "task": "", "locked": True},
+          "project": "Creator partnerships", "task": "", "locked": True},
     "4": {"active": False, "working": False, "path": "terminal4",
           "project": "Term - TG", "task": "", "locked": True},
     "5": {"active": True, "working": False, "path": "terminal5",

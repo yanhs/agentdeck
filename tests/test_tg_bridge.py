@@ -744,7 +744,7 @@ def test_public_url_uses_the_configured_base(monkeypatch):
     monkeypatch.setattr(tb, "TGFILES_URL", "https://files.example.com/tgfiles/")
     u = tb._public_url("tok_file.pdf")
     assert u == "https://files.example.com/tgfiles/tok_file.pdf"
-    assert "yanhs.stream" not in u           # the deprecated host must never appear
+    assert u.startswith(tb.TGFILES_URL)     # only the configured base, never another host
 
 
 def test_public_url_without_a_base_is_the_local_path(monkeypatch, tmp_path):
@@ -900,7 +900,8 @@ def test_on_file_saves_and_replies_with_link(monkeypatch, tmp_path):
     asyncio.run(tb.on_file(Upd(), None))
     assert saved["dest"].endswith("abcd1234_report.txt")     # uuid4().hex[:8] = "abcd1234"
     assert any("https://files.example.com/tgfiles/abcd1234_report.txt" in r for r in replies)
-    assert all("yanhs.stream" not in r for r in replies)
+    links = [u for r in replies for u in re.findall(r"https?://\S+", r)]
+    assert links and all(u.startswith("https://files.example.com/tgfiles/") for u in links)
 
 
 def test_on_file_with_caption_delivers_path_to_terminal(monkeypatch, tmp_path):
@@ -2457,13 +2458,13 @@ def test_a_newer_pick_drops_the_older_picks_re_read(world, monkeypatch, tmp_path
 
 def test_archive_search_reaches_a_terminal_hidden_by_the_cap(world, monkeypatch):
     monkeypatch.setattr(tb, "TOPIC_BUTTONS_MAX", 1)
-    world.add("Appeals", uuid=U1, last_used=10, archived=True)       # hidden by the cap
+    world.add("Invoices", uuid=U1, last_used=10, archived=True)       # hidden by the cap
     world.add("Newer one", uuid=U3, last_used=30, archived=True)
-    world.add("Appeals 2", uuid=U2, last_used=20)                   # a live name-alike
+    world.add("Invoices 2", uuid=U2, last_used=20)                   # a live name-alike
     text, markup = run_cmd(tb.cmd_archive, [])[-1]
     assert _callbacks(markup) == ["arch:c0ffee00"] and "/archive <" in text
-    text, markup = run_cmd(tb.cmd_archive, ["appeals"])[-1]
-    assert _callbacks(markup) == ["arch:aaaa1111"]            # the archived one, not "Appeals 2"
+    text, markup = run_cmd(tb.cmd_archive, ["invoices"])[-1]
+    assert _callbacks(markup) == ["arch:aaaa1111"]            # the archived one, not "Invoices 2"
     assert tb.get_current(CHAT) is None and world.ensured() == []
     assert _is_archived(world, "aaaa1111") is True            # a search restores nothing
     text, markup = run_cmd(tb.cmd_archive, ["no such thing"])[-1]

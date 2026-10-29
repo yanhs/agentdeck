@@ -46,7 +46,7 @@ def make_state(now: datetime) -> dict:
     tasks = [
         {
             "id": "pipeline-quality", "title": "Improve brief pipeline quality",
-            "agent": "claude · appeals", "status": "active", "activity": "working",
+            "agent": "claude · acme", "status": "active", "activity": "working",
             "session": "5e1f00ab",
             "created": ago(hours=3), "updated": ago(minutes=5),
             "items": [
@@ -58,8 +58,8 @@ def make_state(now: datetime) -> dict:
             ],
         },
         {
-            "id": "svetlota-fonts", "title": "Svetlota font loading",
-            "agent": "claude · svetlota", "status": "active",
+            "id": "storefront-fonts", "title": "Storefront font loading",
+            "agent": "claude · storefront", "status": "active",
             "created": ago(days=1), "updated": ago(hours=1),
             "items": [{"title": "Measure CLS", "status": "active", "note": "", "updated": ago(hours=1)}],
         },
@@ -76,15 +76,15 @@ def make_state(now: datetime) -> dict:
             "created": ago(days=3), "updated": ago(hours=6), "items": [],
         },
         {
-            "id": "yacht-landing", "title": "Yacht landing copy",
-            "agent": "claude · yacht", "status": "paused",
+            "id": "bakery-landing", "title": "Bakery landing copy",
+            "agent": "claude · bakery", "status": "paused",
             "created": ago(days=4), "updated": ago(days=1), "items": [],
         },
     ]
     for i in range(120):
         tasks.append({
             "id": f"done-{i:03d}", "title": f"Archived job number {i:03d}",
-            "agent": "claude · terminal" if i % 2 else "claude · appeals",
+            "agent": "claude · terminal" if i % 2 else "claude · acme",
             "status": "done",
             "created": ago(days=10, minutes=i * 7 + 90),
             "updated": ago(days=10, minutes=i * 7),
@@ -217,9 +217,9 @@ def test_done_collapsed_and_paginated(page):
 
 
 @pytest.mark.parametrize("query,expect", [
-    ("font loading", {"svetlota-fonts"}),           # title
+    ("font loading", {"storefront-fonts"}),           # title
     ("vpn-cert", {"vpn-cert"}),                      # id
-    ("svetlota", {"svetlota-fonts"}),                # agent
+    ("storefront", {"storefront-fonts"}),                # agent
     ("citation auditor", {"pipeline-quality"}),      # step title
     ("zebrafish", {"pipeline-quality"}),             # step note
     ("oauth consent", {"gmail-sync"}),               # activity note
@@ -276,10 +276,10 @@ def test_agent_filter_derived_from_data(page):
 def test_sort(page):
     # default: recently updated first
     assert page.input_value("#sort") == "updated"
-    assert group_ids(page, "active") == ["pipeline-quality", "svetlota-fonts"]
+    assert group_ids(page, "active") == ["pipeline-quality", "storefront-fonts"]
     page.select_option("#sort", "title")
     page.wait_for_timeout(100)
-    assert group_ids(page, "active") == ["pipeline-quality", "svetlota-fonts"]  # I < S
+    assert group_ids(page, "active") == ["pipeline-quality", "storefront-fonts"]  # I < S
     assert group_ids(page, "blocked") == ["gmail-sync", "vpn-cert"]           # G < R
     page.select_option("#sort", "created")
     page.wait_for_timeout(100)
@@ -304,7 +304,7 @@ def test_session_id_shown_next_to_agent(page):
     assert sess.inner_text().strip() == "5e1f00ab"
     assert "session" in (sess.get_attribute("title") or "").lower()
     # a task recorded before this change has no id: nothing, not "undefined"
-    assert page.locator('.task[data-id="svetlota-fonts"] .t-sess').count() == 0
+    assert page.locator('.task[data-id="storefront-fonts"] .t-sess').count() == 0
     row.locator(".task-row").click()
     det = row.locator(".task-detail")
     assert "5e1f00ab" in det.inner_text()
@@ -348,7 +348,7 @@ def test_sse_update_keeps_state(page, board):
     st = make_state(datetime.now(timezone.utc))
     st["tasks"][0]["items"].append({"title": "Fresh step from SSE", "status": "todo", "note": "",
                                      "updated": iso(datetime.now(timezone.utc))})
-    st["tasks"][1]["title"] = "Svetlota font loading v2"
+    st["tasks"][1]["title"] = "Storefront font loading v2"
     board.write(st)
     page.wait_for_function("document.body.innerText.includes('Fresh step from SSE')", timeout=8000)
 
@@ -358,19 +358,19 @@ def test_sse_update_keeps_state(page, board):
     assert page.locator('section.group[data-group="done"] .group-head').get_attribute("aria-expanded") == "true"
     assert page.input_value("#sort") == "title"
     assert abs(page.evaluate("window.scrollY") - y0) < 5
-    assert "v2" in page.locator('.task[data-id="svetlota-fonts"]').inner_text()
+    assert "v2" in page.locator('.task[data-id="storefront-fonts"]').inner_text()
 
 
 def test_sse_update_keeps_search_and_focus(page, board):
-    page.fill("#q", "svetlota")
+    page.fill("#q", "storefront")
     page.wait_for_timeout(100)
     st = make_state(datetime.now(timezone.utc))
-    st["tasks"][1]["title"] = "Svetlota renamed live"
+    st["tasks"][1]["title"] = "Storefront renamed live"
     board.write(st)
     page.wait_for_function("document.body.innerText.includes('renamed live')", timeout=8000)
-    assert page.input_value("#q") == "svetlota"
+    assert page.input_value("#q") == "storefront"
     assert page.evaluate("document.activeElement.id") == "q"
-    assert visible_ids(page) == ["svetlota-fonts"]
+    assert visible_ids(page) == ["storefront-fonts"]
 
 
 def test_desktop_toolbar_is_one_line(page):
@@ -730,12 +730,12 @@ def test_non_hex_session_is_not_a_link(browser, board):
     try:
         pg.goto(board.url)
         pg.wait_for_selector(".task")
-        s = pg.locator('.task[data-id="svetlota-fonts"] .t-sess')
+        s = pg.locator('.task[data-id="storefront-fonts"] .t-sess')
         assert s.inner_text() == "not-hex!"
         assert not s.get_attribute("title").startswith("Open this terminal")
         s.click()
         pg.wait_for_timeout(200)
         assert pg.url.startswith(board.url)
-        assert _expanded(pg, "svetlota-fonts") == "true"         # plain row click
+        assert _expanded(pg, "storefront-fonts") == "true"         # plain row click
     finally:
         ctx.close()
