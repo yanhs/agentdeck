@@ -20,8 +20,8 @@ import pytest
 GUESTS = Path(__file__).resolve().parents[1]
 SOURCE = GUESTS / "install.sh"          # read-only: copied into each sandbox
 BASH = shutil.which("bash")
-UNITS = ("agentdeck-guest-turnstile.service", "agentdeck-guest-tgrelay.service",
-         "agentdeck-guest-sitegate.service")
+UNITS = ("agentkennel-guest-turnstile.service", "agentkennel-guest-tgrelay.service",
+         "agentkennel-guest-sitegate.service")
 NET_UNITS = ("sbx-firewall.service", "sbx-firewall.timer")
 
 HARMLESS = ("cat", "grep", "sed", "awk", "tr", "cut", "head", "tail", "sort", "wc",
@@ -44,7 +44,7 @@ BODIES = {
     "systemctl": 'case "$*" in *is-active*) case "$*" in *--user*) l="${FAKE_USER_ACTIVE:-}";;'
                  ' *) l="${FAKE_ACTIVE:-}";; esac; for u in $l; do case "$*" in *"$u"*) exit 0;;'
                  ' esac; done; exit 3;; esac; exit 0',
-    "python3": 'case "$*" in *image-tag*) echo agentdeck-guest:v9.9.9;; esac; exit 0',
+    "python3": 'case "$*" in *image-tag*) echo agentkennel-guest:v9.9.9;; esac; exit 0',
     **{n: "exit 0" for n in ("nginx", "certbot", "iptables")},
 }
 GUARD = """#!{bash}
@@ -191,7 +191,7 @@ def test_firewall_unit_runs_the_checkouts_script(box):
 
 def test_percent_in_a_path_is_escaped_for_systemd(box):
     r = box.lib('GUESTS_DIR="/srv/a%b/guests" GUESTS_USER=u GUESTS_HOME=/h '
-                'render_unit agentdeck-guest-turnstile.service')
+                'render_unit agentkennel-guest-turnstile.service')
     assert '"/srv/a%%b/guests/turnstile/turnstile.py"' in r.stdout
 
 
@@ -222,7 +222,7 @@ def test_check_reports_docker_missing(box):
     assert not changes(box.calls())
 
 
-def test_check_needs_agentdeck_itself(box):
+def test_check_needs_agentkennel_itself(box):
     (box.repo / "services_keeper.py").unlink()
     r = box.run("--check")
     assert r.returncode == 1 and "AgentKennel" in r.stdout + r.stderr
@@ -237,7 +237,7 @@ def test_check_mentions_missing_settings(box):
 def test_refuses_next_to_the_same_services_running_as_user_units(box):
     """A setup from before 2.0 runs them with systemctl --user: a second copy as system
     units would fight it for the same ports."""
-    r = box.run("--yes", FAKE_USER_ACTIVE="agentdeck-guest-turnstile.service")
+    r = box.run("--yes", FAKE_USER_ACTIVE="agentkennel-guest-turnstile.service")
     assert r.returncode != 0 and "--user" in r.stdout + r.stderr
     assert not changes(box.calls())
 
@@ -270,15 +270,15 @@ def test_full_install(box):
     calls = box.calls()
     written = sorted(p.name for p in box.systemd.iterdir())
     assert written == sorted(UNITS + NET_UNITS)
-    text = (box.systemd / "agentdeck-guest-tgrelay.service").read_text()
+    text = (box.systemd / "agentkennel-guest-tgrelay.service").read_text()
     assert f'"{box.guests}/tgrelay/tgrelay.py"' in text and "User=tester" in text
     # network + firewall before the services that bind to its gateway
     i_fw = calls.index("systemctl enable -q --now sbx-firewall.timer")
     assert "systemctl start sbx-firewall.service" in calls
     # the image: AgentKennel of this checkout, then the guest image on top
-    i_base = calls.index(f"docker build -t agentdeck:v9.9.9 {box.repo}")
-    i_guest = calls.index(f"docker build -t agentdeck-guest:v9.9.9 --build-arg "
-                          f"BASE=agentdeck:v9.9.9 {box.guests}/image")
+    i_base = calls.index(f"docker build -t agentkennel:v9.9.9 {box.repo}")
+    i_guest = calls.index(f"docker build -t agentkennel-guest:v9.9.9 --build-arg "
+                          f"BASE=agentkennel:v9.9.9 {box.guests}/image")
     i_svc = calls.index("systemctl enable -q " + " ".join(UNITS))
     assert "systemctl restart " + " ".join(UNITS) in calls
     assert i_fw < i_svc and i_base < i_guest < i_svc
@@ -293,9 +293,9 @@ def test_first_install_writes_the_settings_file_and_waits_for_it(box):
     assert env.read_text() == (box.guests / ".env.example").read_text()
     calls = box.calls()
     # units are written, but nothing that needs the bot token is started yet
-    assert (box.systemd / "agentdeck-guest-tgrelay.service").exists()
-    assert not any(c.startswith("systemctl enable -q agentdeck-guest") for c in calls)
-    assert not any(c.startswith("systemctl restart agentdeck-guest") for c in calls)
+    assert (box.systemd / "agentkennel-guest-tgrelay.service").exists()
+    assert not any(c.startswith("systemctl enable -q agentkennel-guest") for c in calls)
+    assert not any(c.startswith("systemctl restart agentkennel-guest") for c in calls)
     assert "GUEST_BOT_TOKEN" in r.stdout and "install.sh" in r.stdout
 
 
@@ -320,3 +320,38 @@ def test_docker_down_stops_before_any_change(box):
     r = box.run("--yes", FAKE_DOCKER="down")
     assert r.returncode != 0
     assert not changes(box.calls())
+
+
+# ── v2.1.0: agentdeck-guest-* became agentkennel-guest-* ──────────────────────────────
+OLD_UNITS = tuple(u.replace("agentkennel-guest-", "agentdeck-guest-") for u in UNITS)
+
+
+def test_the_old_names_running_as_user_units_also_refuse(box):
+    """The owner's server runs the services as user units under their old names."""
+    r = box.run("--yes", FAKE_USER_ACTIVE="agentdeck-guest-tgrelay.service")
+    assert r.returncode != 0 and "--user" in r.stdout + r.stderr
+    assert not changes(box.calls())
+
+
+def test_system_units_under_the_old_names_are_moved(box):
+    box.fill_env()
+    for u in OLD_UNITS:
+        (box.systemd / u).write_text("[Unit]\n")
+    r = box.run("--yes", SUDO="")
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = box.calls()
+    for u in OLD_UNITS:
+        assert not (box.systemd / u).exists(), u
+        assert f"systemctl disable --now -q {u}" in calls, u
+    for u in UNITS:
+        assert (box.systemd / u).exists(), u
+    i_old = max(calls.index(f"systemctl disable --now -q {u}") for u in OLD_UNITS)
+    assert i_old < calls.index("systemctl restart " + " ".join(UNITS))
+    assert "moved" in r.stdout
+
+
+def test_nothing_to_move_on_a_fresh_server(box):
+    box.fill_env()
+    r = box.run("--yes", SUDO="")
+    assert r.returncode == 0
+    assert not [c for c in box.calls() if "agentdeck-" in c and "is-active" not in c]

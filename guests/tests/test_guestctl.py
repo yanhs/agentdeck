@@ -10,7 +10,7 @@ import guestctl as gc  # noqa: E402
 
 def args():
     return gc.container_args("anna", port=18101, secret="sbx-PASS", password="pw-1",
-                             image="agentdeck-guest:latest", public_key="anna-k3y")
+                             image="agentkennel-guest:latest", public_key="anna-k3y")
 
 
 def pairs(argv, flag):
@@ -83,7 +83,7 @@ def test_next_ip_takes_the_lowest_free_address():
 
 def test_dashboard_knows_its_public_address():
     env = dict(e.split("=", 1) for e in pairs(args(), "-e"))
-    assert env["AGENTDECK_ORIGIN"] == "https://sb-anna.example.test"
+    assert env["AGENTKENNEL_ORIGIN"] == "https://sb-anna.example.test"
 
 
 def test_dashboard_vhost_points_at_the_localhost_port_only():
@@ -147,11 +147,11 @@ def test_process_limit_leaves_room():
     assert pairs(args(), "--pids-limit") == ["4096"]
 
 
-def test_new_guests_get_the_image_of_this_agentdeck_version(monkeypatch):
-    """agentdeck-guest:<version> is built from this repo by install.sh (its keeper is the
+def test_new_guests_get_the_image_of_this_agentkennel_version(monkeypatch):
+    """agentkennel-guest:<version> is built from this repo by install.sh (its keeper is the
     core services_keeper.py); GUEST_IMAGE in guests/.env picks another one."""
     monkeypatch.setattr(gc, "repo_version", lambda: "v2.0.0")
-    assert gc.default_image() == "agentdeck-guest:v2.0.0"
+    assert gc.default_image() == "agentkennel-guest:v2.0.0"
     monkeypatch.setenv("GUEST_IMAGE", "my-guest:1")
     assert gc.default_image() == "my-guest:1"
 
@@ -415,7 +415,7 @@ def test_services_check():
     up = gc.check_services(lambda unit: True)
     assert up["ok"]
     half = gc.check_services(lambda unit: "tgrelay" not in unit)
-    assert not half["ok"] and "agentdeck-guest-tgrelay" in half["detail"]
+    assert not half["ok"] and "agentkennel-guest-tgrelay" in half["detail"]
     assert "install.sh" in half["fix"]
 
 
@@ -425,7 +425,7 @@ def test_unit_active_asks_the_system_then_the_user_manager():
     def run(argv, **kw):
         calls.append(argv)
         return type("R", (), {"returncode": 0 if "--user" in argv else 3})()
-    assert gc.unit_active("agentdeck-guest-turnstile.service", run=run)
+    assert gc.unit_active("agentkennel-guest-turnstile.service", run=run)
     assert calls[0][:2] == ["systemctl", "is-active"] and "--user" in calls[1]
 
 
@@ -490,10 +490,10 @@ def test_the_sandbox_knows_the_servers_public_ip():
     argv = gc.container_args("anna", port=1, secret="s", password="p", image="i",
                              public_key="k", public_ips="203.0.113.7")
     env = dict(e.split("=", 1) for e in pairs(argv, "-e"))
-    assert env["AGENTDECK_PUBLIC_IPS"] == "203.0.113.7"
+    assert env["AGENTKENNEL_PUBLIC_IPS"] == "203.0.113.7"
     argv = gc.container_args("anna", port=1, secret="s", password="p", image="i",
                              public_key="k", public_ips="")
-    assert not any(e.startswith("AGENTDECK_PUBLIC_IPS=") for e in pairs(argv, "-e"))
+    assert not any(e.startswith("AGENTKENNEL_PUBLIC_IPS=") for e in pairs(argv, "-e"))
 
 
 def test_host_public_ips_come_from_the_secrets_guard(monkeypatch):
@@ -504,3 +504,68 @@ def test_host_public_ips_come_from_the_secrets_guard(monkeypatch):
     broken = types.SimpleNamespace(discover_global_ipv4=lambda: 1 / 0)
     monkeypatch.setitem(sys.modules, "guard_secrets", broken)
     assert gc.host_public_ips() == ""                     # never stops a guest's sandbox
+
+
+# ── v2.1.0: AGENTKENNEL_* names; containers made earlier carry AGENTDECK_* ───────────
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("env_name", ["AGENTDECK_PASSWORD", "AGENTKENNEL_PASSWORD"])
+def test_recreate_reads_the_password_under_either_name(monkeypatch, env_name):
+    """A sandbox created before v2.1.0 has AGENTDECK_PASSWORD in `docker inspect`; a new
+    one has AGENTKENNEL_PASSWORD. Either is carried into the new container."""
+    import json as _json
+    monkeypatch.setattr(gc, "_registry", lambda: {"anna": {"port": 18101, "telegram_id": 2,
+                                                           "public_key": "anna-k3y",
+                                                           "image": "agentdeck-guest:v2.0.5",
+                                                           "ip": "172.31.250.11"}})
+    monkeypatch.setattr(gc, "_save_registry", lambda reg: None)
+    monkeypatch.setattr(gc, "live_terminals", lambda name: [])
+    monkeypatch.setattr(gc, "_public_folder", lambda key: None)
+    monkeypatch.setattr(gc, "_wait_running", lambda name: None)
+    monkeypatch.setattr(gc, "public_base_url", lambda: "https://sbx.example.test/f")
+    monkeypatch.setattr(gc, "host_public_ips", lambda: "")
+    monkeypatch.setattr(gc.time, "sleep", lambda s: None)
+    monkeypatch.setattr(gc.subprocess, "run", lambda *a, **k: None)
+    calls = []
+
+    class R:
+        stdout = _json.dumps(["ANTHROPIC_AUTH_TOKEN=sbx-PASS", f"{env_name}=pw-1", "X=1"])
+
+    def docker(*argv, check=True):
+        calls.append(argv)
+        return R()
+    monkeypatch.setattr(gc, "_docker", docker)
+    args = type("A", (), {"name": "anna", "image": None, "force": False})()
+    assert gc.cmd_recreate(args) == 0
+    run = next(a for a in calls if a[:1] == ("run",))
+    env = dict(e.split("=", 1) for e in pairs(list(run), "-e"))
+    assert env["AGENTKENNEL_PASSWORD"] == "pw-1" and env["AGENTDECK_PASSWORD"] == "pw-1"
+    assert run[-1] == "agentdeck-guest:v2.0.5"     # the image it had: no rollout here
+
+
+def test_new_containers_get_both_names():
+    """New code reads the new name; an older image inside (until a rollout) the old one."""
+    env = dict(e.split("=", 1) for e in pairs(args(), "-e"))
+    for name in ("PASSWORD", "SITE", "ORIGIN"):
+        assert env[f"AGENTKENNEL_{name}"] == env[f"AGENTDECK_{name}"], name
+    argv = gc.container_args("anna", port=1, secret="s", password="p", image="i",
+                             public_key="k", public_ips="203.0.113.7")
+    env = dict(e.split("=", 1) for e in pairs(argv, "-e"))
+    assert env["AGENTKENNEL_PUBLIC_IPS"] == env["AGENTDECK_PUBLIC_IPS"] == "203.0.113.7"
+
+
+def test_the_guest_image_has_the_new_name(monkeypatch):
+    monkeypatch.setattr(gc, "repo_version", lambda: "v2.1.0")
+    monkeypatch.delenv("GUEST_IMAGE", raising=False)
+    assert gc.default_image() == "agentkennel-guest:v2.1.0"
+
+
+def test_services_check_accepts_the_old_unit_names():
+    """The owner's server still runs agentdeck-guest-* (user units from before v2.1.0)."""
+    up = gc.check_services(lambda unit: unit.startswith("agentdeck-guest-"))
+    assert up["ok"], up
+    up = gc.check_services(lambda unit: unit.startswith("agentkennel-guest-"))
+    assert up["ok"], up
+    down = gc.check_services(lambda unit: "tgrelay" not in unit)
+    assert not down["ok"] and "agentkennel-guest-tgrelay" in down["detail"]

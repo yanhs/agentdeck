@@ -11,12 +11,14 @@
 #   1. guests/.env from .env.example, once (never overwritten) — fill it in;
 #   2. the sandbox network "sbx" + its firewall: sbx-firewall.service, re-applied by
 #      sbx-firewall.timer (boot + every 2 minutes; net/sbx-firewall.sh);
-#   3. the images: agentdeck:<version> from this checkout, agentdeck-guest:<version> on top;
+#   3. the images: agentkennel:<version> from this checkout, agentkennel-guest:<version> on top;
 #   4. systemd units that run as you, from this checkout:
-#        agentdeck-guest-turnstile   Claude turnstile   (172.31.250.1:8790)
-#        agentdeck-guest-tgrelay     Telegram turnstile (172.31.250.1:8792)
-#        agentdeck-guest-sitegate    site gate          (172.31.250.1:8794)
+#        agentkennel-guest-turnstile   Claude turnstile   (172.31.250.1:8790)
+#        agentkennel-guest-tgrelay     Telegram turnstile (172.31.250.1:8792)
+#        agentkennel-guest-sitegate    site gate          (172.31.250.1:8794)
 #      started once guests/.env names the domain and the bot; until then only written.
+#      The same units under their names before v2.1.0 (agentdeck-guest-*) are stopped,
+#      disabled and removed first; the guests' containers are Docker's and keep running.
 #
 # Test-only env: GUESTS_SYSTEMD_DIR (default /etc/systemd/system), SUDO (default sudo),
 # GUESTS_SOURCE_ONLY=1 (load the functions, run nothing).
@@ -24,7 +26,9 @@ set -Eeuo pipefail
 
 SYSTEMD_DIR="${GUESTS_SYSTEMD_DIR:-/etc/systemd/system}"
 SUDO="${SUDO-sudo}"
-SERVICE_UNITS="agentdeck-guest-turnstile.service agentdeck-guest-tgrelay.service agentdeck-guest-sitegate.service"
+SERVICE_UNITS="agentkennel-guest-turnstile.service agentkennel-guest-tgrelay.service agentkennel-guest-sitegate.service"
+# compat: the same services under their names before v2.1.0 (moved by setup_services)
+OLD_SERVICE_UNITS="${SERVICE_UNITS//agentkennel-guest-/agentdeck-guest-}"
 NET_UNITS="sbx-firewall.service sbx-firewall.timer"
 YES=0
 CHECK=0
@@ -77,7 +81,7 @@ sd_esc() { local v="${1//%/%%}"; printf '%s' "$v"; }   # systemd: % -> %%
 unit_template() {
   case "$1" in
     sbx-firewall.service|sbx-firewall.timer) printf '%s\n' "$TEMPLATES/net/$1" ;;
-    agentdeck-guest-*.service) printf '%s\n' "$TEMPLATES/systemd/$1" ;;
+    agentkennel-guest-*.service) printf '%s\n' "$TEMPLATES/systemd/$1" ;;
     *) return 1 ;;
   esac
 }
@@ -151,7 +155,7 @@ preflight() {
   # a setup from before 2.0 runs the same services as user units: a second copy would
   # fight it for the same ports
   local u
-  for u in $SERVICE_UNITS; do
+  for u in $SERVICE_UNITS $OLD_SERVICE_UNITS; do
     if systemctl --user is-active --quiet "$u" 2>/dev/null; then
       problem "$u already runs as a user unit (systemctl --user) — stop and disable those first"
       break
@@ -206,13 +210,30 @@ build_image() {
   tag="$(python3 "$GUESTS_DIR/guestctl.py" image-tag)"
   [ -n "$tag" ] || die "guestctl.py image-tag printed nothing"
   version="${tag##*:}"
-  docker build -t "agentdeck:$version" "$REPO_DIR"
-  docker build -t "$tag" --build-arg "BASE=agentdeck:$version" "$GUESTS_DIR/image"
+  docker build -t "agentkennel:$version" "$REPO_DIR"
+  docker build -t "$tag" --build-arg "BASE=agentkennel:$version" "$GUESTS_DIR/image"
   say "image: $tag"
+}
+
+# a setup from before v2.1.0 has the same services as agentdeck-guest-* system units:
+# stop, disable and remove them so the new names can take the ports
+move_old_units() {
+  local u moved=()
+  for u in $OLD_SERVICE_UNITS; do
+    [ -e "$SYSTEMD_DIR/$u" ] || continue
+    $SUDO systemctl disable --now -q "$u" 2>/dev/null || true
+    $SUDO rm -f "$SYSTEMD_DIR/$u"
+    moved+=("$u")
+  done
+  [ "${#moved[@]}" -gt 0 ] || return 0
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl reset-failed ${moved[*]} 2>/dev/null || true
+  say "moved the services to their new names: ${moved[*]//agentdeck-guest-/} (agentdeck-guest-* → agentkennel-guest-*)"
 }
 
 setup_services() {
   local u ready=1
+  move_old_units
   GUESTS_USER="$(id -un)"
   GUESTS_HOME="$(getent passwd "$GUESTS_USER" | cut -d: -f6)"
   GUESTS_HOME="${GUESTS_HOME:-$HOME}"

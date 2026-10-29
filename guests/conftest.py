@@ -10,6 +10,8 @@ _KEYS = ("GUESTS_DOMAIN", "GUEST_BOT_TOKEN", "OWNER_TG_ID", "SERVER_IP", "CF_TOK
          "CF_ZONE", "GUESTS_NOTIFY_CMD", "GUEST_IMAGE", "GUESTS_LANG", "SITEGATE_SERVER_IP")
 for _k in _KEYS:
     os.environ.pop(_k, None)
+for _k in [k for k in os.environ if k.startswith(("AGENTKENNEL_", "AGENTDECK_"))]:
+    del os.environ[_k]          # the live terminal's own settings, under either name
 
 _ENV = os.path.join(tempfile.mkdtemp(prefix="guests-env-"), ".env")
 with open(_ENV, "w") as _f:
@@ -17,4 +19,4 @@ with open(_ENV, "w") as _f:
 os.environ["GUESTS_ENV_FILE"] = _ENV
 # never the owner's real bot ("Your bot": <AgentKennel>/.sessions/telegram.json): alerts in
 # tests must have nowhere real to go
-os.environ["AGENTDECK_TG_CONF"] = os.path.join(os.path.dirname(_ENV), "no-telegram.json")
+os.environ["AGENTKENNEL_TG_CONF"] = os.path.join(os.path.dirname(_ENV), "no-telegram.json")

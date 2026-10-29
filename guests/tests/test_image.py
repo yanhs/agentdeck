@@ -13,9 +13,9 @@ def code(path):
             if line.strip() and not line.strip().startswith("#")]
 
 
-def test_guest_image_builds_from_the_agentdeck_image():
+def test_guest_image_builds_from_the_agentkennel_image():
     lines = code(GUESTS / "image" / "Dockerfile")
-    assert lines[0].startswith("ARG BASE=agentdeck:")
+    assert lines[0].startswith("ARG BASE=agentkennel:")
     assert lines[1] == "FROM ${BASE}"
 
 

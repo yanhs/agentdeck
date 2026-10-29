@@ -53,7 +53,7 @@ class Recorder:
 def http_status(url):
     # a browser-like agent: Cloudflare answers "error 1010" (403) to Python-urllib, which
     # made both address checks blind on the first run
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (agentdeck-e2e)"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (agentkennel-e2e)"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return r.status

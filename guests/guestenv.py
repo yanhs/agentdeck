@@ -13,7 +13,7 @@ call, so a changed .env is picked up without a restart of the command that reads
     CF_ZONE            the Cloudflare zone (default: GUESTS_DOMAIN)
     GUESTS_NOTIFY_CMD  how to tell the owner something: a bash command, the text is "$1"
                        (default: a message from the guest bot to OWNER_TG_ID)
-    GUEST_IMAGE        the sandbox image (default agentdeck-guest:<AgentKennel version>)
+    GUEST_IMAGE        the sandbox image (default agentkennel-guest:<AgentKennel version>)
     GUESTS_LANG        language of everything guests and the owner read: en (default) | ru
 """
 
@@ -22,12 +22,15 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable, Dict, Mapping, Optional
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))   # the checkout: envcompat.py
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
 KEYS = ("GUESTS_DOMAIN", "GUEST_BOT_TOKEN", "OWNER_TG_ID", "SERVER_IP", "CF_TOKEN_FILE",
         "CF_ZONE", "GUESTS_NOTIFY_CMD", "GUEST_IMAGE", "GUESTS_LANG")
 # Cloudflare answers "error 1010" to Python-urllib's own User-Agent
@@ -95,7 +98,7 @@ def _post(url: str, data: Dict, timeout: float) -> Dict:
 
 def admin_bot_conf() -> Path:
     """AgentKennel's own Telegram settings ("Your bot"): <AgentKennel>/.sessions/telegram.json."""
-    return Path(os.environ.get("AGENTDECK_TG_CONF")
+    return Path(envcompat.get("TG_CONF")
                 or Path(__file__).resolve().parent.parent / ".sessions" / "telegram.json")
 
 

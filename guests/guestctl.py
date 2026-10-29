@@ -37,19 +37,22 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "turnstile"))
 import guestenv  # noqa: E402
+import envcompat  # noqa: E402  (on the path via guestenv: AGENTKENNEL_*, then AGENTDECK_*)
 from texts import t as _t  # noqa: E402
 import turnstile as ts  # noqa: E402
 
 GW = "172.31.250.1"
-IMAGE_NAME = "agentdeck-guest"  # tag = the AgentKennel version (install.sh builds it)
+IMAGE_NAME = "agentkennel-guest"  # tag = the AgentKennel version (install.sh builds it)
 PORT_BASE = 18100
 DATA = HERE / "turnstile" / "data"
 REGISTRY = DATA / "sandboxes.json"
 PUBLIC_ROOT = str(HERE / "public")  # host side of each guest's /work/public
 SERVICES_MAX = 10  # services one sandbox may run (keeper + the agent's rule read it)
 DEFAULT_LIMIT = 20_000_000  # weighted tokens per day (my default; change with `limit`)
-UNITS = ("agentdeck-guest-turnstile.service", "agentdeck-guest-tgrelay.service",
-         "agentdeck-guest-sitegate.service")
+UNITS = ("agentkennel-guest-turnstile.service", "agentkennel-guest-tgrelay.service",
+         "agentkennel-guest-sitegate.service")
+# compat: the same services under their names before v2.1.0 (setups not moved yet)
+UNIT_PREFIXES = ("agentkennel-guest-", "agentdeck-guest-")
 
 
 def repo_version() -> str:
@@ -188,10 +191,11 @@ def container_args(name: str, port: int, secret: str, password: str, image: str,
         "ANTHROPIC_MODEL": "opus",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "TG_BRIDGE_API_BASE": f"http://{GW}:8792",
-        "AGENTDECK_PASSWORD": password,
-        "AGENTDECK_SITE": ":8765",
+        # both names (envcompat.both): an image from before v2.1.0 reads the old ones
+        **envcompat.both("PASSWORD", password),
+        **envcompat.both("SITE", ":8765"),
         "TZ": "America/Los_Angeles",
-        "AGENTDECK_ORIGIN": f"https://{dashboard_host(name)}",
+        **envcompat.both("ORIGIN", f"https://{dashboard_host(name)}"),
         "PUBLIC_DIR": "/work/public",
         "PUBLIC_URL": f"{public_base_url()}/{public_key}",
         "SERVICES_MAX": str(SERVICES_MAX),
@@ -202,7 +206,7 @@ def container_args(name: str, port: int, secret: str, password: str, image: str,
     }
     public_ips = host_public_ips() if public_ips is None else public_ips
     if public_ips:  # a commit with the server's IP is blocked in the sandbox too
-        env["AGENTDECK_PUBLIC_IPS"] = public_ips
+        env.update(envcompat.both("PUBLIC_IPS", public_ips))
     for key, value in env.items():
         argv += ["-e", f"{key}={value}"]
     for volume, target in (("claude", "/root/.claude"), ("sessions", "/app/.sessions"),
@@ -356,7 +360,10 @@ def cmd_recreate(a) -> int:
     if open_now and not getattr(a, "force", False):
         raise SystemExit(_t("ctl_recreate_busy", name=a.name, n=len(open_now)))
     env = _container_env(a.name)
-    secret, password = env["ANTHROPIC_AUTH_TOKEN"], env["AGENTDECK_PASSWORD"]
+    # a container made before v2.1.0 has only AGENTDECK_PASSWORD (envcompat reads either)
+    secret, password = env["ANTHROPIC_AUTH_TOKEN"], envcompat.get("PASSWORD", env=env)
+    if not password:
+        raise SystemExit(f"sbx-{a.name} has no dashboard password in its environment")
     public_key = info.get("public_key") or new_public_key(a.name)
     _public_folder(public_key)
     image = a.image or info.get("image") or default_image()
@@ -651,7 +658,9 @@ def unit_active(unit: str, run=subprocess.run) -> bool:
 
 def check_services(is_active=unit_active) -> dict:
     title = "Guest services"
-    down = [u.removesuffix(".service") for u in UNITS if not is_active(u)]
+    new, old = UNIT_PREFIXES
+    down = [u.removesuffix(".service") for u in UNITS
+            if not (is_active(u) or is_active(u.replace(new, old, 1)))]
     if not down:
         return _check("services", title, True, "turnstile, Telegram relay and site gate running")
     return _check("services", title, False, "not running: " + ", ".join(down),

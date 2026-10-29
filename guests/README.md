@@ -1,11 +1,11 @@
-# AgentDeck guests
+# AgentKennel guests
 
 An optional module: other people work on your server, each in a sandbox of their own, on
 your Claude subscription with a daily limit, through one shared Telegram bot. Off until
 you set it up.
 
-- **A sandbox per person.** Each guest gets their own AgentDeck in a Docker container
-  (image `agentdeck-guest:<version>`): own terminals, files and services, a dashboard at
+- **A sandbox per person.** Each guest gets their own AgentKennel in a Docker container
+  (image `agentkennel-guest:<version>`): own terminals, files and services, a dashboard at
   `https://sb-<name>.<domain>` with its own password. Guests can't see each other or your
   server: the `sbx` network lets a sandbox reach the internet and the three gates below,
   nothing else on the host or in private ranges.
@@ -17,7 +17,7 @@ you set it up.
   sandbox a Bot API of its own: a guest's agent writes only to that guest's chat.
 - **You decide in your own bot.** Someone new writes `/start` to the guest bot; it only
   records the request (it is open to everyone, so it can't create anything). Your own
-  AgentDeck bot — the one on the dashboard's Telegram page — asks you "… Let them in?"
+  AgentKennel bot — the one on the dashboard's Telegram page — asks you "… Let them in?"
   with buttons; on "yes" the sandbox is made and the person gets the address and password
   through the guest bot. Spend warnings come to your bot too.
 - **Files and sites.** A guest's agent hands out files as links (`https://sbx.<domain>/f/…`)
@@ -26,14 +26,14 @@ you set it up.
 
 ## Set up
 
-You need AgentDeck installed from a checkout (this folder lives inside it), Docker that
+You need AgentKennel installed from a checkout (this folder lives inside it), Docker that
 your user may use, systemd, and — for web addresses — nginx and certbot.
 
 1. **Settings.** `cp guests/.env.example guests/.env` (the installer does it on the first
    run) and fill in:
    - `GUESTS_DOMAIN` — guests' addresses live under it;
    - `GUEST_BOT_TOKEN` — a new bot from @BotFather, used only for guests;
-   - `OWNER_TG_ID` — your Telegram id: the owner of your own AgentDeck bot (the dashboard's
+   - `OWNER_TG_ID` — your Telegram id: the owner of your own AgentKennel bot (the dashboard's
      Guests wizard fills it in from there); requests to join go to that bot;
    - `GUESTS_LANG` — `en` (default) or `ru`: the bot, invitations, alerts and the rules
      written for the guests' agents;
@@ -45,8 +45,8 @@ your user may use, systemd, and — for web addresses — nginx and certbot.
    (`CLAUDE_CODE_OAUTH_TOKEN=…`, from `claude setup-token`).
 2. **Install.** `guests/install.sh` (`--check` only checks, `--yes` asks nothing). It sets up
    the sandbox network and firewall, builds the guest image from this checkout and starts
-   the services `agentdeck-guest-turnstile`, `agentdeck-guest-tgrelay` and
-   `agentdeck-guest-sitegate`. Running it again upgrades.
+   the services `agentkennel-guest-turnstile`, `agentkennel-guest-tgrelay` and
+   `agentkennel-guest-sitegate`. Running it again upgrades.
 3. **Check.** `python3 guests/guestctl.py doctor` — Docker, bot, owner, domain, services.
 4. **Shared files address (once).** `python3 guests/guestctl.py files-web`.
 

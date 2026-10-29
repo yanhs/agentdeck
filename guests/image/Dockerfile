@@ -3,7 +3,7 @@
 # to the dashboard. A separate name keeps the guests' containers apart from your own
 # AgentKennel container and lets the guests module add to the image later.
 # guests/install.sh builds both:
-#   docker build -t agentdeck:<version> .
-#   docker build -t agentdeck-guest:<version> --build-arg BASE=agentdeck:<version> guests/image
-ARG BASE=agentdeck:latest
+#   docker build -t agentkennel:<version> .
+#   docker build -t agentkennel-guest:<version> --build-arg BASE=agentkennel:<version> guests/image
+ARG BASE=agentkennel:latest
 FROM ${BASE}
