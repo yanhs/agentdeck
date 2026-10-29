@@ -51,7 +51,7 @@ tmux: AGENTDECK_TMUX_SOCKET=<name> -> `tmux -L <name>` (tests use their own
 server). Queries go through list-sessions / list-windows -F only: tmux 3.2a
 crashes the whole server on `display-message -t =<name>` (no trailing colon)
 with a window/time format. Targets are exact: `=name` for sessions, `=name:`
-for panes. Every call carries `-f <repo>/tmux.conf` (AgentDeck's mouse/copy
+for panes. Every call carries `-f <repo>/tmux.conf` (AgentKennel's mouse/copy
 settings, then the user's ~/.tmux.conf); a server started without it gets it
 once from ensure / shell-ensure. A new pane runs `bin/pane <id|shell>`, and tmux is
 called from `/` — nothing else on the command line and no topic folder as the working
@@ -91,9 +91,9 @@ USAGE = ("usage: library_cli.py ensure <id> | active | pane-cmd <id> | pane-is-c
 
 
 # ── tmux ────────────────────────────────────────────────────────────────────
-# AgentDeck's tmux settings (mouse selection, copy on release into the buffer the
+# AgentKennel's tmux settings (mouse selection, copy on release into the buffer the
 # dashboard reads, scrollback). tmux reads -f only when that command starts the
-# server. AgentDeck starts one with -f /dev/null and sources the file right away
+# server. AgentKennel starts one with -f /dev/null and sources the file right away
 # (hold_server: no path on the server's command line); every other call carries -f
 # too, for a server that comes up another way. A server someone else started gets
 # it once from ensure_tmux_conf().
@@ -196,7 +196,7 @@ def _new_session(name, arg, folder):
 
 def ensure_tmux_conf(run=None):
     """Source tmux.conf into a running server that has not read it (started
-    without our -f: by hand, by an older AgentDeck). Once per server: the file
+    without our -f: by hand, by an older AgentKennel). Once per server: the file
     sets TMUX_CONF_MARK. No server running: nothing — hold_server() sources it
     into the one it starts. Show-options, not display-message (see the module
     docstring).

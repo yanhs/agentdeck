@@ -232,7 +232,7 @@ def test_services_live_in_the_work_folder(tmp_path, monkeypatch):
 
 
 def test_without_a_work_folder_set_it_is_agentdecks_default(monkeypatch):
-    """Same as library_cli.WORKDIR: the folder above the AgentDeck checkout (a manual
+    """Same as library_cli.WORKDIR: the folder above the AgentKennel checkout (a manual
     start.sh has no AGENTDECK_WORKDIR; /work does not exist there)."""
     monkeypatch.delenv("SERVICES_DIR", raising=False)
     monkeypatch.delenv("AGENTDECK_WORKDIR", raising=False)

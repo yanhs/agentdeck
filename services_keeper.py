@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""AgentDeck services keeper.
+"""AgentKennel services keeper.
 
 A *service* is a program that must outlive a terminal and a conversation: a Tailscale
 link, a published site's server, a bot. The agent puts a start script into
-``<work folder>/.services/<name>.sh``; this keeper (started with AgentDeck — a systemd
+``<work folder>/.services/<name>.sh``; this keeper (started with AgentKennel — a systemd
 unit on a host install, the entrypoint in Docker — independent of any terminal) runs it, writes its output to ``<name>.log``, restarts it after a crash (with a
 growing pause), stops it — with all its child processes — when the file is removed or
 renamed to ``<name>.sh.off``. At most ``max_services`` (env SERVICES_MAX, set by
@@ -267,7 +267,7 @@ def telegram_view(services: Optional[Dict], now: Optional[float] = None):
     refresh = [("🔄 Refresh", "svc:refresh:")]
     if services is None:
         return ("The services keeper isn't running, so the list is unavailable. It starts "
-                "with AgentDeck: the agentdeck-services unit on a server, the entrypoint in "
+                "with AgentKennel: the agentdeck-services unit on a server, the entrypoint in "
                 "Docker.", [refresh])
     if not services:
         return ("No services yet.\n\nA service is a program that keeps running without an "
@@ -365,7 +365,7 @@ def make_server(bind: str, port: int, keeper: Keeper) -> ThreadingHTTPServer:
 
 def work_folder() -> Path:
     """Where terminals start — the same rule as library_cli.WORKDIR: AGENTDECK_WORKDIR,
-    else the folder above this AgentDeck checkout (Docker sets /work)."""
+    else the folder above this AgentKennel checkout (Docker sets /work)."""
     return Path(os.environ.get("AGENTDECK_WORKDIR")
                 or Path(__file__).resolve().parent.parent)
 

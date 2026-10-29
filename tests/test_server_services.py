@@ -1,4 +1,4 @@
-"""Browser contract for the Services block of web/server.html (AgentDeck 2.0).
+"""Browser contract for the Services block of web/server.html (AgentKennel 2.0).
 
 The page's /api/server and /api/services are faked by page.route() (see
 test_server_page.py for the static site and the browser). Screenshots go to

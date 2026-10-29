@@ -8,7 +8,7 @@ live session registry still exists and stop the run loudly if a test deleted it.
 A new pane's start is left in <the pane launcher's checkout>/.sessions/launch/
 (library_cli.LAUNCHER, bin/pane). The run points AGENTDECK_LAUNCHER at a copy of the
 launcher in a throwaway checkout, so nothing a test starts is ever written into this
-checkout's own .sessions (a live AgentDeck may run from it)."""
+checkout's own .sessions (a live AgentKennel may run from it)."""
 import os
 import shutil
 import tempfile

@@ -1,11 +1,11 @@
-"""AgentDeck's own tmux settings: `tmux.conf` at the repo root.
+"""AgentKennel's own tmux settings: `tmux.conf` at the repo root.
 
 Selecting text in a dashboard terminal needs tmux's mouse mode, and the
 dashboard's copy (web/index.html enableClipboardCopy -> /api/tmux-buffer) needs
 tmux to copy the selection into its buffer when the mouse button is released.
 A fresh install had none of that (it lived only in the author's ~/.tmux.conf).
 
-A tmux server AgentDeck starts gets the file via `source-file` right after it
+A tmux server AgentKennel starts gets the file via `source-file` right after it
 comes up, before the first real pane (library_cli.hold_server: the server itself is
 started with -f /dev/null, so no path lands on its command line); every other tmux
 call carries `-f <repo>/tmux.conf` (library_cli.tmux_argv — tmux reads -f only when
