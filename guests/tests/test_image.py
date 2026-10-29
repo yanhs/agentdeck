@@ -1,4 +1,4 @@
-"""The guest image is the AgentDeck image of the same version: the core entrypoint runs the
+"""The guest image is the AgentKennel image of the same version: the core entrypoint runs the
 services keeper, and nothing of the guests module (bot token, passes, usage, the guests'
 public files) can end up inside a sandbox."""
 

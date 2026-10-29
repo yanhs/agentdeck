@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AgentDeck guests — set the module up on a server where AgentDeck is installed.
+# AgentKennel guests — set the module up on a server where AgentKennel is installed.
 # Other people work on your server, each in a Docker sandbox of their own, on your Claude
 # subscription with a daily limit, through one shared Telegram bot (see guests/README.md).
 #
@@ -46,7 +46,7 @@ usage() {
   cat <<EOF
 Usage: guests/install.sh [--check] [--yes]
 
-Sets up the AgentDeck guests module on this server: the sandbox network and firewall,
+Sets up the AgentKennel guests module on this server: the sandbox network and firewall,
 the guest image, and the three host services (Claude turnstile, Telegram turnstile,
 site gate). Running it again upgrades / repairs; nothing is duplicated.
 
@@ -136,9 +136,9 @@ check_docker() {
 preflight() {
   PROBLEMS=()
   if [ -f "$REPO_DIR/Dockerfile" ] && [ -f "$REPO_DIR/services_keeper.py" ]; then
-    ok "AgentDeck checkout: $REPO_DIR"
+    ok "AgentKennel checkout: $REPO_DIR"
   else
-    problem "AgentDeck itself: $REPO_DIR has no Dockerfile / services_keeper.py (guests/ lives inside an AgentDeck checkout)"
+    problem "AgentKennel itself: $REPO_DIR has no Dockerfile / services_keeper.py (guests/ lives inside an AgentKennel checkout)"
   fi
   command -v systemctl >/dev/null 2>&1 && ok "systemd" || problem "systemd (systemctl) — the services run under it"
   check_docker

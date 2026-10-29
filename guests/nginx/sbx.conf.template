@@ -1,4 +1,4 @@
-# AgentDeck guests — sbx.@DOMAIN@: files guests hand out by link.
+# AgentKennel guests — sbx.@DOMAIN@: files guests hand out by link.
 # Template: `guestctl.py files-web` fills in @DOMAIN@ / @PUBLIC_ROOT@, gets the certificate
 # and enables it (guests/nginx/sites/, symlinked into /etc/nginx/sites-enabled).
 server {

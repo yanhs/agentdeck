@@ -1,7 +1,7 @@
 """Invitations — two sides, two bots (decision 27.10.2026, docs/PLAN-2.0.md).
 
 The guest bot is open to everyone, so it may only *record* a request: RequestBook.ask().
-The admin's own bot (AgentDeck's Telegram bridge, tg_bridge.py) is where "Let in?" is
+The admin's own bot (AgentKennel's Telegram bridge, tg_bridge.py) is where "Let in?" is
 asked and answered: Desk.announcements() / Desk.decide() — and only this side can run
 guestctl. The person hears back through the guest bot (Desk.tell_guest).
 

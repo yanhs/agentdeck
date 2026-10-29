@@ -1,7 +1,7 @@
 # Template: guests/install.sh fills in @USER@ / @HOME@ / @GUESTS_DIR@ and writes it to
 # /etc/systemd/system. Settings come from @GUESTS_DIR@/.env (read by the program itself).
 [Unit]
-Description=AgentDeck guests: site gate (<site>-<guest>.<domain> on request)
+Description=AgentKennel guests: site gate (<site>-<guest>.<domain> on request)
 After=network-online.target docker.service sbx-firewall.service
 Wants=network-online.target
 

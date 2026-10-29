@@ -86,7 +86,7 @@ def test_a_failing_notify_command_raises():
 
 
 def test_notify_goes_to_the_admins_own_bot(tmp_path):
-    """Decision 27.10: warnings go to the admin's own bot (AgentDeck's Telegram page)."""
+    """Decision 27.10: warnings go to the admin's own bot (AgentKennel's Telegram page)."""
     conf = tmp_path / "telegram.json"
     conf.write_text(json.dumps({"enabled": True, "token": "9:ADMIN", "owner": 42}))
     posts = []

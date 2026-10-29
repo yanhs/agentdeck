@@ -13,7 +13,7 @@ call, so a changed .env is picked up without a restart of the command that reads
     CF_ZONE            the Cloudflare zone (default: GUESTS_DOMAIN)
     GUESTS_NOTIFY_CMD  how to tell the owner something: a bash command, the text is "$1"
                        (default: a message from the guest bot to OWNER_TG_ID)
-    GUEST_IMAGE        the sandbox image (default agentdeck-guest:<AgentDeck version>)
+    GUEST_IMAGE        the sandbox image (default agentdeck-guest:<AgentKennel version>)
     GUESTS_LANG        language of everything guests and the owner read: en (default) | ru
 """
 
@@ -31,7 +31,7 @@ HERE = Path(__file__).resolve().parent
 KEYS = ("GUESTS_DOMAIN", "GUEST_BOT_TOKEN", "OWNER_TG_ID", "SERVER_IP", "CF_TOKEN_FILE",
         "CF_ZONE", "GUESTS_NOTIFY_CMD", "GUEST_IMAGE", "GUESTS_LANG")
 # Cloudflare answers "error 1010" to Python-urllib's own User-Agent
-USER_AGENT = "AgentDeck-guests/2.0 (+https://github.com/yanhs/agentdeck)"
+USER_AGENT = "AgentKennel-guests/2.0 (+https://github.com/yanhs/agentkennel)"
 
 
 def env_file() -> Path:
@@ -94,7 +94,7 @@ def _post(url: str, data: Dict, timeout: float) -> Dict:
 
 
 def admin_bot_conf() -> Path:
-    """AgentDeck's own Telegram settings ("Your bot"): <AgentDeck>/.sessions/telegram.json."""
+    """AgentKennel's own Telegram settings ("Your bot"): <AgentKennel>/.sessions/telegram.json."""
     return Path(os.environ.get("AGENTDECK_TG_CONF")
                 or Path(__file__).resolve().parent.parent / ".sessions" / "telegram.json")
 
@@ -112,7 +112,7 @@ def _admin_bot(path: Optional[Path] = None) -> Optional[Dict]:
 def notify_owner(text: str, settings: Optional[Mapping[str, str]] = None,
                  run: Callable = subprocess.run, post: Callable = _post,
                  admin_conf: Optional[Path] = None) -> None:
-    """Tell the owner: GUESTS_NOTIFY_CMD if set, else the owner's own bot (AgentDeck's
+    """Tell the owner: GUESTS_NOTIFY_CMD if set, else the owner's own bot (AgentKennel's
     Telegram page, when its owner is OWNER_TG_ID), else the guest bot -> OWNER_TG_ID.
     Raises when it could not (the callers log it; a guest's request never waits on it)."""
     s = load() if settings is None else settings

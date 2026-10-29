@@ -1,5 +1,5 @@
 """Invitations, decision 27.10.2026: the guest bot (open to everyone) only records a
-request; the admin's OWN bot (AgentDeck's Telegram bridge) asks "Let in?", creates the
+request; the admin's OWN bot (AgentKennel's Telegram bridge) asks "Let in?", creates the
 sandbox and tells the person — through the guest bot — their address and password.
 
 guests/invites.py: RequestBook (requests.json, shared by the two processes under a file
