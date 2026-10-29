@@ -51,7 +51,7 @@ docker compose logs agentkennel | grep setup   # the one-time link that sets the
 > touch the host. [Safety](#-safety-what-agents-never-do-without-you) lists what they never
 > do without you.
 
-**Latest: v2.1.0** — the internal names follow the new name; since 2.0: 📎 File uploads, a
+**Latest: v2.1.1** — your own names on the Server page; v2.1.0: the internal names follow the new name; since 2.0: 📎 File uploads, a
 one-time setup link for the first password, services that outlive a terminal, safety guards
 → [CHANGELOG](CHANGELOG.md)
 

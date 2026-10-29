@@ -2,6 +2,13 @@
 
 All notable changes to AgentKennel (formerly AgentDeck). Newest first.
 
+## v2.1.1 — your own names on the Server page
+
+### Changed
+- **The Server page names your services from your own file.** The built-in names now cover AgentKennel's own units (`agentkennel-status`, `-tasks`, `-sessions`, `-caddy`, `-services`, `-reaper`, the Telegram bridge) and common ones (nginx, PostgreSQL, MariaDB, PHP-FPM, ttyd, Postfix, Docker, containerd, Tailscale). To name your own services and containers, write `~/.config/agentkennel/server-names.json` (or point `AGENTKENNEL_SERVER_NAMES` at a file): its entries are merged over the built-in ones; a broken file is ignored with one line in the log. The format is in [docs/configuration.md](docs/configuration.md).
+- **Everything AgentKennel prints is in English**, including the slot-migration tool (`migrate_library.py`); a migrated slot without a label is named `terminal N`.
+- Tests and examples use made-up data.
+
 ## v2.1.0 — internal names follow the new name
 
 ### What changed
