@@ -37,4 +37,6 @@ tests/test_launch_script_gate.py
 docker-compose.https.yml
 
 # written by install.sh in a folder it cloned itself (lets --uninstall --purge delete it)
+.agentkennel-managed
+# compat: the same marker, written before v2.1.0
 .agentdeck-managed

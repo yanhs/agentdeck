@@ -16,7 +16,7 @@ ctx = ssl._create_unverified_context() if "--insecure" in sys.argv else None
 jar = http.cookiejar.CookieJar()
 op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar),
                                  urllib.request.HTTPSHandler(context=ctx))
-op.addheaders = [("User-Agent", "Mozilla/5.0 agentdeck-upload-check")]
+op.addheaders = [("User-Agent", "Mozilla/5.0 agentkennel-upload-check")]
 fails = 0
 def check(name, ok, info=""):
     global fails

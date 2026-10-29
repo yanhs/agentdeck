@@ -122,8 +122,8 @@ class Box:
         self.log.write_text("")
         # the box's ports, fixed for its lifetime; never the host's real 80/443 (a web
         # server may listen there)
-        self.ports = {k: str(free_port()) for k in ("AGENTDECK_PORT", "AGENTDECK_HTTP_PORT",
-                                                    "AGENTDECK_HTTPS_PORT", "AGENTDECK_ALT_PORT")}
+        self.ports = {k: str(free_port()) for k in ("AGENTKENNEL_PORT", "AGENTKENNEL_HTTP_PORT",
+                                                    "AGENTKENNEL_HTTPS_PORT", "AGENTKENNEL_ALT_PORT")}
         for name, body in BODIES.items():
             self._exe(self.bin / name, SHIM.format(bash=BASH, name=name, body=body))
         realpath = shutil.which("realpath")
@@ -151,9 +151,9 @@ class Box:
         e = {"PATH": f"{self.bin}:{self.sys}", "HOME": str(self.home),
              "TMPDIR": str(self.root / "tmp"), "TMUX_TMPDIR": str(self.root / "tmux"),
              "SHIM_LOG": str(self.log), "SANDBOX": str(self.root), "LANG": "C.UTF-8",
-             "AGENTDECK_SYSTEMD_DIR": str(self.root / "systemd"),
-             "AGENTDECK_OS_RELEASE": self.os_release("ubuntu-24.04"),
-             "AGENTDECK_PUBLIC_IP": "203.0.113.7", **self.ports}
+             "AGENTKENNEL_SYSTEMD_DIR": str(self.root / "systemd"),
+             "AGENTKENNEL_OS_RELEASE": self.os_release("ubuntu-24.04"),
+             "AGENTKENNEL_PUBLIC_IP": "203.0.113.7", **self.ports}
         e.update({k: str(v) for k, v in extra.items()})
         return e
 
@@ -168,8 +168,8 @@ class Box:
         return self._run([BASH, str(self.script), *shlex.split(args)], extra)
 
     def lib(self, code: str, **extra):
-        """`code` with the copy's functions loaded (AGENTDECK_SOURCE_ONLY=1, no main)."""
-        return self._run([BASH, "-c", f'AGENTDECK_SOURCE_ONLY=1 . "{self.script}"\n{code}'],
+        """`code` with the copy's functions loaded (AGENTKENNEL_SOURCE_ONLY=1, no main)."""
+        return self._run([BASH, "-c", f'AGENTKENNEL_SOURCE_ONLY=1 . "{self.script}"\n{code}'],
                          extra)
 
     def calls(self) -> list[str]:
@@ -223,7 +223,7 @@ def test_sandbox_catches_an_unshimmed_command(box):
 
 
 def test_sandbox_refuses_writes_outside(box):
-    r = subprocess.run([BASH, "-c", "rm -f /etc/hostname-agentdeck-test-none"],
+    r = subprocess.run([BASH, "-c", "rm -f /etc/hostname-agentkennel-test-none"],
                        capture_output=True, text=True, env=box.env())
     assert r.returncode == 99
     with pytest.raises(AssertionError, match="outside the sandbox"):
@@ -254,7 +254,7 @@ def test_help_says_agentkennel_and_the_renamed_repo(box):
 
 
 def test_default_repo_is_agentkennel(box):
-    r = box.lib('echo "$REPO_URL"', AGENTDECK_REPO_URL="")
+    r = box.lib('echo "$REPO_URL"', AGENTKENNEL_REPO_URL="")
     assert r.stdout.strip() == "https://github.com/yanhs/agentkennel.git", r.stdout
 
 
@@ -270,18 +270,18 @@ def test_unknown_flag_is_refused(box):
                                         ("ubuntu-24.04", "ubuntu 24.04"),
                                         ("debian-12", "debian 12")])
 def test_supported_os_detected(box, key, expect):
-    r = box.lib("detect_os", AGENTDECK_OS_RELEASE=box.os_release(key))
+    r = box.lib("detect_os", AGENTKENNEL_OS_RELEASE=box.os_release(key))
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == expect
 
 
 @pytest.mark.parametrize("key", ["debian-11", "ubuntu-20.04", "fedora-40", "alpine", "mint"])
 def test_unsupported_os_rejected(box, key):
-    assert box.lib("detect_os", AGENTDECK_OS_RELEASE=box.os_release(key)).returncode != 0
+    assert box.lib("detect_os", AGENTKENNEL_OS_RELEASE=box.os_release(key)).returncode != 0
 
 
 def test_missing_os_release_rejected(box):
-    assert box.lib("detect_os", AGENTDECK_OS_RELEASE=box.root / "nope").returncode != 0
+    assert box.lib("detect_os", AGENTKENNEL_OS_RELEASE=box.root / "nope").returncode != 0
 
 
 @pytest.mark.parametrize("arch,asset", [("x86_64", "ttyd.x86_64"), ("amd64", "ttyd.x86_64"),
@@ -306,7 +306,7 @@ def test_unknown_arch_has_no_asset(box, arch):
 # ── preflight refusals change nothing ───────────────────────────────────────────
 @pytest.mark.parametrize("key", ["fedora-40", "debian-11", "alpine"])
 def test_unsupported_os_refuses_cleanly(box, key):
-    r = box.run("--yes", AGENTDECK_OS_RELEASE=box.os_release(key))
+    r = box.run("--yes", AGENTKENNEL_OS_RELEASE=box.os_release(key))
     assert r.returncode != 0
     out = r.stdout + r.stderr
     assert "not supported" in out
@@ -326,18 +326,18 @@ def test_root_is_refused_without_override(box):
     r = box.run("--yes", FAKE_UID="0")
     assert r.returncode != 0
     out = r.stdout + r.stderr
-    assert "AGENTDECK_ALLOW_ROOT=1" in out and "root" in out
+    assert "AGENTKENNEL_ALLOW_ROOT=1" in out and "root" in out
     assert not changes(box.calls())
 
 
 def test_root_allowed_with_override(box):
-    r = box.run("--yes --check", FAKE_UID="0", AGENTDECK_ALLOW_ROOT="1")
+    r = box.run("--yes --check", FAKE_UID="0", AGENTKENNEL_ALLOW_ROOT="1")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "preflight ok" in r.stdout
 
 
 def test_check_mode_passes_and_changes_nothing(box):
-    r = box.run("--yes --check", AGENTDECK_OS_RELEASE=box.os_release("debian-12"))
+    r = box.run("--yes --check", AGENTKENNEL_OS_RELEASE=box.os_release("debian-12"))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "preflight ok" in r.stdout
     assert changes(box.calls()) == []
@@ -376,8 +376,8 @@ def test_https_bad_domain_refused(box, bad):
 
 
 def test_https_without_ip_refused(box):
-    # the curl shim fails every lookup; no AGENTDECK_PUBLIC_IP
-    assert box.lib("https_site ''", AGENTDECK_PUBLIC_IP="").returncode != 0
+    # the curl shim fails every lookup; no AGENTKENNEL_PUBLIC_IP
+    assert box.lib("https_site ''", AGENTKENNEL_PUBLIC_IP="").returncode != 0
 
 
 def listener():
@@ -399,8 +399,8 @@ def test_port_busy_probe(box):
 def test_https_refuses_busy_port(box):
     s, busy = listener()
     try:
-        r = box.run("--yes --check --https example.org", AGENTDECK_HTTP_PORT=busy,
-                    AGENTDECK_HTTPS_PORT=free_port())
+        r = box.run("--yes --check --https example.org", AGENTKENNEL_HTTP_PORT=busy,
+                    AGENTKENNEL_HTTPS_PORT=free_port())
     finally:
         s.close()
     assert r.returncode != 0
@@ -412,7 +412,7 @@ def test_https_refuses_busy_port(box):
 def test_plain_mode_refuses_busy_dashboard_port(box):
     s, busy = listener()
     try:
-        r = box.run("--yes --check --http", AGENTDECK_PORT=busy)
+        r = box.run("--yes --check --http", AGENTKENNEL_PORT=busy)
     finally:
         s.close()
     assert r.returncode != 0
@@ -422,12 +422,12 @@ def test_plain_mode_refuses_busy_dashboard_port(box):
 def test_rerun_our_own_caddy_on_the_port_is_not_busy(box):
     """A re-run finds the dashboard port taken by OUR running Caddy — that is fine."""
     s, port = listener()
-    (box.root / "systemd" / "agentdeck-caddy.service").write_text(
-        f"[Service]\nEnvironment=AGENTDECK_SITE=:{port}\n")
+    (box.root / "systemd" / "agentkennel-caddy.service").write_text(
+        f"[Service]\nEnvironment=AGENTKENNEL_SITE=:{port}\n")
     try:
-        ok = box.run("--yes --check --http", AGENTDECK_PORT=port,
-                     FAKE_ACTIVE="agentdeck-caddy.service")
-        stopped = box.run("--yes --check --http", AGENTDECK_PORT=port)
+        ok = box.run("--yes --check --http", AGENTKENNEL_PORT=port,
+                     FAKE_ACTIVE="agentkennel-caddy.service")
+        stopped = box.run("--yes --check --http", AGENTKENNEL_PORT=port)
     finally:
         s.close()
     assert ok.returncode == 0, ok.stdout + ok.stderr
@@ -435,13 +435,13 @@ def test_rerun_our_own_caddy_on_the_port_is_not_busy(box):
 
 
 # ── systemd units ────────────────────────────────────────────────────────────────
-UNITS = ("agentdeck-status.service", "agentdeck-tasks.service",
-         "agentdeck-sessions.service", "agentdeck-caddy.service",
-         "agentdeck-reaper.service", "agentdeck-reaper.timer",
-         "agentdeck-services.service")
+UNITS = ("agentkennel-status.service", "agentkennel-tasks.service",
+         "agentkennel-sessions.service", "agentkennel-caddy.service",
+         "agentkennel-reaper.service", "agentkennel-reaper.timer",
+         "agentkennel-services.service")
 
-UNIT_ENV = {"AGENTDECK_DIR": "/home/tester/agentdeck", "AGENTDECK_USER": "tester",
-            "AGENTDECK_HOME": "/home/tester", "AGENTDECK_SITE": ":8765"}
+UNIT_ENV = {"AGENTKENNEL_DIR": "/home/tester/agentkennel", "AGENTKENNEL_USER": "tester",
+            "AGENTKENNEL_HOME": "/home/tester", "AGENTKENNEL_SITE": ":8765"}
 
 
 def render(box, name, **extra):
@@ -458,16 +458,16 @@ def test_unit_list(box):
 def test_services_run_as_the_user_in_the_repo(box, name):
     u = render(box, name)
     assert "User=tester" in u
-    assert "WorkingDirectory=/home/tester/agentdeck" in u
+    assert "WorkingDirectory=/home/tester/agentkennel" in u
     assert "Environment=HOME=/home/tester" in u
-    assert "TRACKER_STATE=/home/tester/agentdeck/.sessions/tasks-state.json" in u
-    assert "EnvironmentFile=-/home/tester/agentdeck/.env" in u
+    assert "TRACKER_STATE=/home/tester/agentkennel/.sessions/tasks-state.json" in u
+    assert "EnvironmentFile=-/home/tester/agentkennel/.env" in u
     assert "LANG=C.UTF-8" in u
 
 
 @pytest.mark.parametrize("name", UNITS)
 def test_unit_descriptions_say_agentkennel(box, name):
-    # the brand changed; the unit FILE names (agentdeck-*) stay: installs depend on them
+    # the brand changed; the unit FILE names (agentkennel-*) stay: installs depend on them
     desc = [l for l in render(box, name).splitlines() if l.startswith("Description=")]
     assert desc and desc[0].startswith("Description=AgentKennel "), desc
 
@@ -476,33 +476,33 @@ def test_unit_descriptions_say_agentkennel(box, name):
 def test_agents_get_a_tmux_server_of_their_own(box, name):
     # every tmux call of the stack (and of the agents) goes to this folder's server,
     # so nothing AgentKennel does can reach the user's own tmux sessions
-    assert "Environment=TMUX_TMPDIR=/home/tester/agentdeck/.sessions/tmux" in render(box, name)
+    assert "Environment=TMUX_TMPDIR=/home/tester/agentkennel/.sessions/tmux" in render(box, name)
 
 
-@pytest.mark.parametrize("name", ["agentdeck-status.service", "agentdeck-tasks.service",
-                                  "agentdeck-sessions.service", "agentdeck-caddy.service"])
+@pytest.mark.parametrize("name", ["agentkennel-status.service", "agentkennel-tasks.service",
+                                  "agentkennel-sessions.service", "agentkennel-caddy.service"])
 def test_long_running_services_restart_and_start_at_boot(box, name):
     u = render(box, name)
     assert "Restart=always" in u
     assert "WantedBy=multi-user.target" in u
 
 
-@pytest.mark.parametrize("name", ["agentdeck-status.service", "agentdeck-sessions.service"])
+@pytest.mark.parametrize("name", ["agentkennel-status.service", "agentkennel-sessions.service"])
 def test_restarting_a_service_never_kills_the_agents(box, name):
     assert "KillMode=process" in render(box, name)
 
 
 def test_sessions_unit_runs_the_one_ttyd(box):
-    u = render(box, "agentdeck-sessions.service")
+    u = render(box, "agentkennel-sessions.service")
     line = next(l for l in u.splitlines() if l.startswith("ExecStart="))
     for part in ("/usr/local/bin/ttyd", "-W", "-a", "-O", "-i lo", "-p 3031",
-                 "--base-path /sess", "/home/tester/agentdeck/open-session.sh"):
+                 "--base-path /sess", "/home/tester/agentkennel/open-session.sh"):
         assert part in line, part
 
 
 def test_caddy_unit_site_and_low_ports(box):
-    u = render(box, "agentdeck-caddy.service", AGENTDECK_SITE="1-2-3-4.sslip.io")
-    assert "Environment=AGENTDECK_SITE=1-2-3-4.sslip.io" in u
+    u = render(box, "agentkennel-caddy.service", AGENTKENNEL_SITE="1-2-3-4.sslip.io")
+    assert "Environment=AGENTKENNEL_SITE=1-2-3-4.sslip.io" in u
     assert "AmbientCapabilities=CAP_NET_BIND_SERVICE" in u
     assert "/usr/local/bin/caddy run" in u
     assert "XDG_DATA_HOME=/home/tester/.local/share" in u
@@ -512,61 +512,61 @@ def test_services_unit_runs_the_keeper(box):
     """2.0: programs that must outlive a terminal (Tailscale, a site, a bot) live in
     <work folder>/.services; the keeper is a unit of its own, so it starts at boot and
     keeps them up without any terminal open."""
-    u = render(box, "agentdeck-services.service")
+    u = render(box, "agentkennel-services.service")
     line = next(l for l in u.splitlines() if l.startswith("ExecStart="))
-    assert "/home/tester/agentdeck/services_keeper.py" in line
+    assert "/home/tester/agentkennel/services_keeper.py" in line
     assert "Restart=always" in u and "WantedBy=multi-user.target" in u
     assert "SERVICES_BIND" not in u          # the API stays on 127.0.0.1 (keeper default)
-    assert "agentdeck-services.service" in box.lib("echo $RUN_UNITS").stdout.split()
+    assert "agentkennel-services.service" in box.lib("echo $RUN_UNITS").stdout.split()
 
 
 def test_reaper_is_a_timer_every_minute(box):
-    t = render(box, "agentdeck-reaper.timer")
+    t = render(box, "agentkennel-reaper.timer")
     assert "OnUnitActiveSec=1min" in t
     assert "WantedBy=timers.target" in t
-    s = render(box, "agentdeck-reaper.service")
+    s = render(box, "agentkennel-reaper.service")
     assert "Type=oneshot" in s and "idle_reaper.py" in s
 
 
 def test_paths_with_spaces_are_quoted(box):
-    u = render(box, "agentdeck-sessions.service", AGENTDECK_DIR="/home/t/my deck")
+    u = render(box, "agentkennel-sessions.service", AGENTKENNEL_DIR="/home/t/my deck")
     assert '"/home/t/my deck/open-session.sh"' in u
 
 
 def test_unit_writing_is_idempotent(box):
     sysd = box.root / "systemd"
-    code = 'write_unit agentdeck-status.service; echo "changed=${CHANGED_UNITS[*]}"'
+    code = 'write_unit agentkennel-status.service; echo "changed=${CHANGED_UNITS[*]}"'
     env = {**UNIT_ENV, "SUDO": ""}
     r1 = box.lib(code, **env)
     assert r1.returncode == 0, r1.stderr
-    assert "changed=agentdeck-status.service" in r1.stdout
-    f = sysd / "agentdeck-status.service"
+    assert "changed=agentkennel-status.service" in r1.stdout
+    f = sysd / "agentkennel-status.service"
     first, mtime = f.read_text(), f.stat().st_mtime_ns
     r2 = box.lib(code, **env)
     assert r2.returncode == 0, r2.stderr
     assert r2.stdout.strip().endswith("changed=")
     assert f.read_text() == first and f.stat().st_mtime_ns == mtime
-    r3 = box.lib(code, **{**env, "AGENTDECK_USER": "other"})
-    assert "changed=agentdeck-status.service" in r3.stdout
+    r3 = box.lib(code, **{**env, "AGENTKENNEL_USER": "other"})
+    assert "changed=agentkennel-status.service" in r3.stdout
     assert "User=other" in f.read_text()
 
 
 # ── the install record ───────────────────────────────────────────────────────────
 def conf_path(box):
-    return box.home / ".config" / "agentdeck" / "install.env"
+    return box.home / ".config" / "agentkennel" / "install.env"
 
 
 def test_prepare_data_records_the_install(box):
     d = box.root / "deck"
     d.mkdir()
-    (d / ".agentdeck-managed").write_text("x")
+    (d / ".agentkennel-managed").write_text("x")
     r = box.lib(f'DIR="{d}"; SITE=":8765"; prepare_data')
     assert r.returncode == 0, r.stderr
     conf = conf_path(box).read_text()
-    assert f"AGENTDECK_DIR={d}\n" in conf
-    assert "AGENTDECK_MANAGED=1\n" in conf
-    assert f"AGENTDECK_TMUX_TMPDIR={d}/.sessions/tmux\n" in conf
-    assert "AGENTDECK_SITE=:8765\n" in conf
+    assert f"AGENTKENNEL_DIR={d}\n" in conf
+    assert "AGENTKENNEL_MANAGED=1\n" in conf
+    assert f"AGENTKENNEL_TMUX_TMPDIR={d}/.sessions/tmux\n" in conf
+    assert "AGENTKENNEL_SITE=:8765\n" in conf
     assert (d / ".sessions" / "tmux").is_dir()
     assert (d / ".sessions" / "tasks-state.json").exists()
 
@@ -574,7 +574,7 @@ def test_prepare_data_records_the_install(box):
 def test_a_clone_is_recorded_as_not_managed(box):
     r = box.lib(f'DIR="{box.repo}"; SITE=":8765"; prepare_data')
     assert r.returncode == 0, r.stderr
-    assert "AGENTDECK_MANAGED=0\n" in conf_path(box).read_text()
+    assert "AGENTKENNEL_MANAGED=0\n" in conf_path(box).read_text()
 
 
 # ── uninstall / purge: only what the installer recorded ──────────────────────────
@@ -583,12 +583,12 @@ def record(box, d, managed=True, marker=True, tmuxdir=None):
     (d / ".sessions").mkdir(exist_ok=True)
     (d / ".sessions" / "library.json").write_text("{}")
     if marker:
-        (d / ".agentdeck-managed").write_text("x")
+        (d / ".agentkennel-managed").write_text("x")
     tmuxdir = tmuxdir if tmuxdir is not None else d / ".sessions" / "tmux"
     Path(tmuxdir).mkdir(parents=True, exist_ok=True)
     conf_path(box).parent.mkdir(parents=True, exist_ok=True)
-    conf_path(box).write_text(f"AGENTDECK_DIR={d}\nAGENTDECK_MANAGED={1 if managed else 0}\n"
-                              f"AGENTDECK_TMUX_TMPDIR={tmuxdir}\nAGENTDECK_SITE=:8765\n")
+    conf_path(box).write_text(f"AGENTKENNEL_DIR={d}\nAGENTKENNEL_MANAGED={1 if managed else 0}\n"
+                              f"AGENTKENNEL_TMUX_TMPDIR={tmuxdir}\nAGENTKENNEL_SITE=:8765\n")
 
 
 def tmux_calls(box):
@@ -604,7 +604,7 @@ def test_uninstall_without_a_record_touches_no_tmux_and_deletes_nothing(box):
 
 
 def test_uninstall_stops_only_the_recorded_tmux_server(box):
-    d = box.home / "agentdeck"
+    d = box.home / "agentkennel"
     record(box, d)
     r = box.run("--uninstall --yes")
     assert r.returncode == 0, r.stdout + r.stderr
@@ -615,7 +615,7 @@ def test_uninstall_stops_only_the_recorded_tmux_server(box):
 
 @pytest.mark.parametrize("bad", ["/tmp", "HOME", "/home/x/.sessions/other"])
 def test_uninstall_ignores_a_tmux_dir_it_did_not_make(box, bad):
-    d = box.home / "agentdeck"
+    d = box.home / "agentkennel"
     tdir = str(box.home) if bad == "HOME" else bad
     record(box, d, tmuxdir=box.root / "unused")
     text = conf_path(box).read_text().replace(f"={box.root}/unused", f"={tdir}")
@@ -626,7 +626,7 @@ def test_uninstall_ignores_a_tmux_dir_it_did_not_make(box, bad):
 
 
 def test_purge_deletes_the_folder_the_installer_cloned(box):
-    d = box.home / "agentdeck"
+    d = box.home / "agentkennel"
     record(box, d)
     r = box.run("--uninstall --purge --yes")
     assert r.returncode == 0, r.stdout + r.stderr
@@ -637,7 +637,7 @@ def test_purge_deletes_the_folder_the_installer_cloned(box):
 
 @pytest.mark.parametrize("case", ["no-record", "not-managed", "no-marker", "home", "clone"])
 def test_purge_refuses_anything_else_and_changes_nothing(box, case):
-    d = box.home / "agentdeck"
+    d = box.home / "agentkennel"
     if case == "not-managed":
         record(box, d, managed=False)
     elif case == "no-marker":
@@ -649,7 +649,7 @@ def test_purge_refuses_anything_else_and_changes_nothing(box, case):
         (box.repo / ".sessions").mkdir()
         (box.repo / ".sessions" / "library.json").write_text("{}")
         conf_path(box).parent.mkdir(parents=True)
-        conf_path(box).write_text(f"AGENTDECK_DIR={box.repo}\nAGENTDECK_MANAGED=0\n")
+        conf_path(box).write_text(f"AGENTKENNEL_DIR={box.repo}\nAGENTKENNEL_MANAGED=0\n")
     r = box.run("--uninstall --purge --yes")
     assert r.returncode != 0
     assert "--purge" in r.stderr and "nothing was changed" in r.stderr
@@ -684,7 +684,7 @@ def out_of(r):
 
 
 def P(box, key):
-    return box.ports[f"AGENTDECK_{key}"]
+    return box.ports[f"AGENTKENNEL_{key}"]
 
 
 SELF_SIGNED = ("self-signed certificate", "your browser will warn once",
@@ -708,15 +708,15 @@ def test_default_is_https_on_sslip_when_ports_free(box):
     assert changes(box.calls()) == []
 
 
-def test_default_uses_a_domain_from_agentdeck_site(box):
-    r = box.run("--yes --check", AGENTDECK_SITE="deck.example.org")
+def test_default_uses_a_domain_from_agentkennel_site(box):
+    r = box.run("--yes --check", AGENTKENNEL_SITE="deck.example.org")
     assert r.returncode == 0, out_of(r)
     assert "https://deck.example.org" in r.stdout
     assert SSLIP not in r.stdout
 
 
-def test_default_with_a_bad_agentdeck_site_is_refused(box):
-    r = box.run("--yes --check", AGENTDECK_SITE="http://x.org/path")
+def test_default_with_a_bad_agentkennel_site_is_refused(box):
+    r = box.run("--yes --check", AGENTKENNEL_SITE="http://x.org/path")
     assert r.returncode != 0
     assert "not a domain name" in r.stderr
     assert changes(box.calls()) == []
@@ -733,7 +733,7 @@ def test_port_443_busy_keeps_a_trusted_certificate_on_another_port(box):
 def test_alt_port_busy_takes_the_next_free_one(box):
     s, alt = listener()
     try:
-        r = box.run("--yes --check", AGENTDECK_ALT_PORT=alt,
+        r = box.run("--yes --check", AGENTKENNEL_ALT_PORT=alt,
                     FAKE_SS_BUSY=f"{P(box, 'HTTPS_PORT')}:apache2")
     finally:
         s.close()
@@ -754,7 +754,7 @@ def test_port_80_busy_gives_self_signed_https_and_names_the_program(box):
 def test_port_80_busy_without_a_visible_program(box):
     s, busy = listener()
     try:
-        r = box.run("--yes --check", AGENTDECK_HTTP_PORT=busy)
+        r = box.run("--yes --check", AGENTKENNEL_HTTP_PORT=busy)
     finally:
         s.close()
     assert r.returncode == 0, out_of(r)
@@ -776,7 +776,7 @@ def test_explicit_https_with_port_443_busy_uses_the_alt_port(box):
 
 
 def test_no_public_ip_gives_self_signed_and_says_how_to_use_a_domain(box):
-    r = box.run("--yes --check", AGENTDECK_PUBLIC_IP="")
+    r = box.run("--yes --check", AGENTKENNEL_PUBLIC_IP="")
     assert r.returncode == 0, out_of(r)
     out = r.stdout
     assert "public IPv4" in out and "--https your-domain.com" in out
@@ -789,7 +789,7 @@ def test_no_public_ip_gives_self_signed_and_says_how_to_use_a_domain(box):
 def test_self_signed_needs_the_dashboard_port(box):
     s, busy = listener()
     try:
-        r = box.run("--yes --check", AGENTDECK_PORT=busy,
+        r = box.run("--yes --check", AGENTKENNEL_PORT=busy,
                     FAKE_SS_BUSY=f"{P(box, 'HTTP_PORT')}:nginx")
     finally:
         s.close()
@@ -809,8 +809,8 @@ def test_http_flag_forces_plain_http_and_warns(box):
 
 def write_conf(box, site, why=""):
     conf_path(box).parent.mkdir(parents=True, exist_ok=True)
-    conf_path(box).write_text(f"AGENTDECK_DIR={box.repo}\nAGENTDECK_MANAGED=0\n"
-                              f"AGENTDECK_SITE={site}\n" + (f"AGENTDECK_WHY={why}\n" if why else ""))
+    conf_path(box).write_text(f"AGENTKENNEL_DIR={box.repo}\nAGENTKENNEL_MANAGED=0\n"
+                              f"AGENTKENNEL_SITE={site}\n" + (f"AGENTKENNEL_WHY={why}\n" if why else ""))
 
 
 def test_rerun_keeps_http_only_when_it_was_asked_for(box):
@@ -820,6 +820,16 @@ def test_rerun_keeps_http_only_when_it_was_asked_for(box):
     assert SSLIP not in r.stdout
     assert "HTTP only" in r.stdout and "last install" in r.stdout
     assert "install.sh --https" in r.stdout
+
+
+def test_a_second_rerun_still_keeps_http(box):
+    """A re-run that kept --http records WHY=kept; the run after it must keep http too
+    (it used to read kept as "never asked for" and moved the install to HTTPS)."""
+    write_conf(box, f":{P(box, 'PORT')}", why="kept")
+    r = box.run("--yes --check")
+    assert r.returncode == 0, out_of(r)
+    assert SSLIP not in r.stdout
+    assert "HTTP only" in r.stdout and "last install" in r.stdout
 
 
 def test_rerun_of_an_old_plain_http_install_moves_to_https(box):
@@ -866,18 +876,18 @@ def caddy_site_blocks():
 
 
 def test_caddy_serves_one_site_only():
-    # the one site is AGENTDECK_SITE: nothing else could serve :8765 in plain http
-    assert caddy_site_blocks() == ["{$AGENTDECK_SITE::8765} {"]
+    # the one site is AGENTKENNEL_SITE: nothing else could serve :8765 in plain http
+    assert caddy_site_blocks() == ["{$AGENTKENNEL_SITE::8765} {"]
 
 
 def test_caddyfile_imports_the_installers_global_options():
-    head = (ROOT / "Caddyfile").read_text().split("{$AGENTDECK_SITE", 1)[0]
-    assert 'import "{$AGENTDECK_CADDY_GLOBAL:/dev/null}"' in head
+    head = (ROOT / "Caddyfile").read_text().split("{$AGENTKENNEL_SITE", 1)[0]
+    assert 'import "{$AGENTKENNEL_CADDY_GLOBAL:/dev/null}"' in head
 
 
 def test_caddy_unit_points_at_the_global_options_file(box):
-    u = render(box, "agentdeck-caddy.service", AGENTDECK_SITE=SSLIP)
-    assert ("Environment=AGENTDECK_CADDY_GLOBAL=/home/tester/agentdeck/.sessions/"
+    u = render(box, "agentkennel-caddy.service", AGENTKENNEL_SITE=SSLIP)
+    assert ("Environment=AGENTKENNEL_CADDY_GLOBAL=/home/tester/agentkennel/.sessions/"
             "caddy-global.caddy") in u
 
 
@@ -915,8 +925,8 @@ def test_https_modes_never_serve_the_dashboard_port_in_clear(box):
     for site in (SSLIP, f"{SSLIP}:8443"):
         addr, _ = caddy_view(box, site)
         assert ":8765" not in addr
-        u = render(box, "agentdeck-caddy.service", AGENTDECK_SITE=addr)
-        assert ":8765" not in u.replace("AGENTDECK_CADDY_GLOBAL", "")
+        u = render(box, "agentkennel-caddy.service", AGENTKENNEL_SITE=addr)
+        assert ":8765" not in u.replace("AGENTKENNEL_CADDY_GLOBAL", "")
 
 
 def test_plain_http_only_as_asked(box):
@@ -925,11 +935,11 @@ def test_plain_http_only_as_asked(box):
 
 
 def test_test_only_ca_switches(box):
-    _, conf = caddy_view(box, SSLIP, AGENTDECK_TLS_INTERNAL=1)
+    _, conf = caddy_view(box, SSLIP, AGENTKENNEL_TLS_INTERNAL=1)
     assert "local_certs" in conf and "skip_install_trust" in conf
-    _, conf = caddy_view(box, SSLIP, AGENTDECK_ACME_CA="https://127.0.0.1:9/directory")
+    _, conf = caddy_view(box, SSLIP, AGENTKENNEL_ACME_CA="https://127.0.0.1:9/directory")
     assert "acme_ca https://127.0.0.1:9/directory" in conf
-    _, conf = caddy_view(box, f"{SSLIP}:8443", AGENTDECK_ACME_CA="https://127.0.0.1:9/directory")
+    _, conf = caddy_view(box, f"{SSLIP}:8443", AGENTKENNEL_ACME_CA="https://127.0.0.1:9/directory")
     assert "dir https://127.0.0.1:9/directory" in conf and "disable_tlsalpn_challenge" in conf
 
 
@@ -941,8 +951,8 @@ JOURNAL = ('{"level":"error","logger":"tls.obtain","msg":"could not get certific
 def bring_up(box, site, pre="", **extra):
     code = (f'DIR="{box.repo}"; CLAUDE=/usr/bin/claude; NODE_DIR=/usr/bin; SITE="{site}"; '
             f'SELF_IP={IP}; SUDO=""; {pre} bring_up; echo "SITE_NOW=$SITE"; finish')
-    defaults = {"FAKE_CURL_HTTP": "308", "FAKE_CURL_LOCAL_HTTPS": "200", "AGENTDECK_CERT_WAIT": "2",
-                "AGENTDECK_CERT_POLL": "1", "FAKE_JOURNAL": JOURNAL}
+    defaults = {"FAKE_CURL_HTTP": "308", "FAKE_CURL_LOCAL_HTTPS": "200", "AGENTKENNEL_CERT_WAIT": "2",
+                "AGENTKENNEL_CERT_POLL": "1", "FAKE_JOURNAL": JOURNAL}
     return box.lib(code, **{**defaults, **extra})
 
 
@@ -963,9 +973,9 @@ def test_certificate_issued_keeps_https(box):
     assert f"Dashboard: https://{SSLIP} — HTTPS is on (free certificate from Let's Encrypt" in out
     assert "renewed automatically" in out
     assert "Plain http is off, so your password never travels unencrypted" in out
-    assert f"AGENTDECK_SITE={SSLIP}\n" in conf_path(box).read_text()
-    caddy = (box.root / "systemd" / "agentdeck-caddy.service").read_text()
-    assert f"AGENTDECK_SITE={SSLIP}\n" in caddy
+    assert f"AGENTKENNEL_SITE={SSLIP}\n" in conf_path(box).read_text()
+    caddy = (box.root / "systemd" / "agentkennel-caddy.service").read_text()
+    assert f"AGENTKENNEL_SITE={SSLIP}\n" in caddy
     # the probe goes to this host, by name, and verifies the certificate
     probe = https_probes(box)
     assert probe and f"--resolve {SSLIP}:{P(box, 'HTTPS_PORT')}:127.0.0.1" in probe[0]
@@ -995,11 +1005,11 @@ def test_certificate_timeout_falls_back_to_self_signed(box):
     assert_self_signed(box, out)
     assert "likely firewall problem" in out    # the Caddy log excerpt
     # the units, Caddy's options and the record now say self-signed, so a re-run keeps it
-    caddy = (box.root / "systemd" / "agentdeck-caddy.service").read_text()
-    assert f'"AGENTDECK_SITE=https://{IP}:{port}, https://:{port}"' in caddy
+    caddy = (box.root / "systemd" / "agentkennel-caddy.service").read_text()
+    assert f'"AGENTKENNEL_SITE=https://{IP}:{port}, https://:{port}"' in caddy
     assert "local_certs" in global_file(box)
     conf = conf_path(box).read_text()
-    assert f"AGENTDECK_SITE=https://:{port}\n" in conf and "AGENTDECK_WHY=cert\n" in conf
+    assert f"AGENTKENNEL_SITE=https://:{port}\n" in conf and "AGENTKENNEL_WHY=cert\n" in conf
     restarts = [c for c in box.calls() if c.startswith("systemctl restart")]
     assert len(restarts) == 2                  # trusted attempt, then self-signed
 
@@ -1007,7 +1017,7 @@ def test_certificate_timeout_falls_back_to_self_signed(box):
 def test_certificate_timeout_with_a_busy_dashboard_port_fails_loudly(box):
     s, busy = listener()
     try:
-        r = bring_up(box, SSLIP, AGENTDECK_PORT=busy)
+        r = bring_up(box, SSLIP, AGENTKENNEL_PORT=busy)
     finally:
         s.close()
     assert r.returncode != 0
@@ -1026,7 +1036,7 @@ def test_self_signed_bring_up_probes_https_without_verification(box):
 
 
 def test_tls_internal_probe_skips_verification(box):
-    r = bring_up(box, SSLIP, FAKE_CURL_HTTPS="200", AGENTDECK_TLS_INTERNAL="1")
+    r = bring_up(box, SSLIP, FAKE_CURL_HTTPS="200", AGENTKENNEL_TLS_INTERNAL="1")
     assert r.returncode == 0, out_of(r)
     assert " -k " in https_probes(box)[0]
     assert "internal test CA" in r.stdout
@@ -1044,13 +1054,13 @@ def test_http_bring_up_needs_no_certificate(box):
 
 # ── where new terminals start: ~/projects, not the whole home ─────────────────────
 def test_units_start_terminals_in_projects_by_default(box):
-    for name in ("agentdeck-status.service", "agentdeck-sessions.service"):
-        assert "Environment=AGENTDECK_WORKDIR=/home/tester/projects" in render(box, name)
+    for name in ("agentkennel-status.service", "agentkennel-sessions.service"):
+        assert "Environment=AGENTKENNEL_WORKDIR=/home/tester/projects" in render(box, name)
 
 
 def test_units_take_the_chosen_workdir(box):
-    u = render(box, "agentdeck-status.service", AGENTDECK_WORKDIR="/srv/work")
-    assert "Environment=AGENTDECK_WORKDIR=/srv/work" in u
+    u = render(box, "agentkennel-status.service", AGENTKENNEL_WORKDIR="/srv/work")
+    assert "Environment=AGENTKENNEL_WORKDIR=/srv/work" in u
 
 
 def workdir(box, **extra):
@@ -1066,14 +1076,14 @@ def test_workdir_default_is_home_projects(box):
 
 def test_workdir_from_env_wins_then_the_record(box):
     write_conf(box, ":8765")
-    conf_path(box).write_text(conf_path(box).read_text() + "AGENTDECK_WORKDIR=/srv/kept\n")
+    conf_path(box).write_text(conf_path(box).read_text() + "AGENTKENNEL_WORKDIR=/srv/kept\n")
     assert "WORKDIR=/srv/kept" in workdir(box).stdout                  # a re-run keeps it
-    assert "WORKDIR=/srv/new" in workdir(box, AGENTDECK_WORKDIR="/srv/new").stdout
+    assert "WORKDIR=/srv/new" in workdir(box, AGENTKENNEL_WORKDIR="/srv/new").stdout
 
 
 def test_workdir_must_be_absolute(box):
-    r = workdir(box, AGENTDECK_WORKDIR="projects")
-    assert r.returncode != 0 and "AGENTDECK_WORKDIR" in r.stderr
+    r = workdir(box, AGENTKENNEL_WORKDIR="projects")
+    assert r.returncode != 0 and "AGENTKENNEL_WORKDIR" in r.stderr
 
 
 def test_prepare_data_creates_and_records_the_workdir(box):
@@ -1081,18 +1091,18 @@ def test_prepare_data_creates_and_records_the_workdir(box):
     r = box.lib(f'DIR="{box.repo}"; SITE=":8765"; prepare_data')
     assert r.returncode == 0, r.stderr
     assert w.is_dir()
-    assert f"AGENTDECK_WORKDIR={w}\n" in conf_path(box).read_text()
+    assert f"AGENTKENNEL_WORKDIR={w}\n" in conf_path(box).read_text()
 
 
 def test_final_message_says_where_terminals_open(box):
     r = box.lib(f'DIR="{box.repo}"; SITE=":8765"; WHY=requested; SELF_IP={IP}; '
                 f'WORKDIR="$HOME/projects"; finish')
     assert r.returncode == 0, r.stderr
-    assert "New terminals open in ~/projects (set AGENTDECK_WORKDIR to change)" in r.stdout
+    assert "New terminals open in ~/projects (set AGENTKENNEL_WORKDIR to change)" in r.stdout
 
 
 def test_docker_sandbox_keeps_work():
-    assert "AGENTDECK_WORKDIR=/work" in (ROOT / "Dockerfile").read_text()
+    assert "AGENTKENNEL_WORKDIR=/work" in (ROOT / "Dockerfile").read_text()
 
 
 def test_install_gives_the_agents_the_services_rule():
@@ -1105,14 +1115,14 @@ def test_install_gives_the_agents_the_services_rule():
 
 # ── the guests question (2.0): "Will other people work on this server?" ──────────
 # Asked only when a person is at the terminal (not --yes, not --check); the default is
-# no; --guests / --no-guests / AGENTDECK_GUESTS answer it for automation; a re-run keeps
-# the recorded answer. Tests feed the answer through AGENTDECK_TTY (a file instead of
+# no; --guests / --no-guests / AGENTKENNEL_GUESTS answer it for automation; a re-run keeps
+# the recorded answer. Tests feed the answer through AGENTKENNEL_TTY (a file instead of
 # /dev/tty) — without it the sandbox has no terminal, exactly like a script.
 def ask(box, answer=None, pre="YES=0; CHECK=0", **extra):
     if answer is not None:
         tty = box.root / "tty"
         tty.write_text(answer)
-        extra["AGENTDECK_TTY"] = str(tty)
+        extra["AGENTKENNEL_TTY"] = str(tty)
     return box.lib(f'{pre}; ask_guests; echo "GUESTS=$GUESTS"', **extra)
 
 
@@ -1143,13 +1153,13 @@ def test_guests_flags_answer_without_asking(box, flag, want):
 
 
 def test_guests_env_answers_without_asking(box):
-    r = ask(box, "n\n", AGENTDECK_GUESTS="1")
+    r = ask(box, "n\n", AGENTKENNEL_GUESTS="1")
     assert "GUESTS=1" in r.stdout and "other people" not in r.stderr.lower()
 
 
 def test_guests_rerun_keeps_the_recorded_answer(box):
     write_conf(box, ":8765")
-    conf_path(box).write_text(conf_path(box).read_text() + "AGENTDECK_GUESTS=1\n")
+    conf_path(box).write_text(conf_path(box).read_text() + "AGENTKENNEL_GUESTS=1\n")
     r = ask(box, "n\n")
     assert "GUESTS=1" in r.stdout and "other people" not in r.stderr.lower()
 
@@ -1157,7 +1167,7 @@ def test_guests_rerun_keeps_the_recorded_answer(box):
 def test_guests_answer_is_recorded(box):
     r = box.lib(f'DIR="{box.repo}"; SITE=":8765"; GUESTS=1; prepare_data')
     assert r.returncode == 0, r.stderr
-    assert "AGENTDECK_GUESTS=1\n" in conf_path(box).read_text()
+    assert "AGENTKENNEL_GUESTS=1\n" in conf_path(box).read_text()
 
 
 def test_guests_yes_installs_docker_and_lets_the_user_use_it(box):
@@ -1191,5 +1201,211 @@ def test_help_mentions_the_guests_flags(box):
 def test_piped_install_asks_once():
     """curl | bash re-runs itself from the fetched code: the answer goes along."""
     src = SOURCE.read_text()
-    line = next(x for x in src.splitlines() if "AGENTDECK_REEXEC=1 exec bash" in x)
-    assert 'AGENTDECK_GUESTS="$GUESTS"' in line
+    line = next(x for x in src.splitlines() if "AGENTKENNEL_REEXEC=1 exec bash" in x)
+    assert 'AGENTKENNEL_GUESTS="$GUESTS"' in line
+
+
+# ── v2.1.0: the internal names follow the brand (agentdeck → agentkennel) ────────────
+NEW_UNITS = tuple(u.replace("agentdeck-", "agentkennel-") for u in UNITS)
+OLD_UNITS = tuple(u.replace("agentkennel-", "agentdeck-") for u in NEW_UNITS)
+NEW_CONF = (".config", "agentkennel", "install.env")
+OLD_CONF = (".config", "agentdeck", "install.env")
+
+
+def old_record(box, d):
+    """What an install before v2.1.0 recorded: ~/.config/agentdeck/install.env with
+    AGENTDECK_* keys, and the .agentdeck-managed marker in the folder it cloned."""
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ".sessions" / "tmux").mkdir(parents=True, exist_ok=True)
+    (d / ".sessions" / "library.json").write_text("{}")
+    (d / ".agentdeck-managed").write_text("x")
+    conf = box.home.joinpath(*OLD_CONF)
+    conf.parent.mkdir(parents=True, exist_ok=True)
+    conf.write_text(f"AGENTDECK_DIR={d}\nAGENTDECK_MANAGED=1\n"
+                    f"AGENTDECK_TMUX_TMPDIR={d}/.sessions/tmux\nAGENTDECK_SITE=:8765\n")
+
+
+def test_units_have_the_new_names(box):
+    assert box.lib("echo $UNITS").stdout.split() == list(NEW_UNITS)
+    run_units = box.lib("echo $RUN_UNITS").stdout.split()
+    assert run_units and all(u.startswith("agentkennel-") for u in run_units)
+    for name in NEW_UNITS:
+        assert "[Unit]" in render(box, name)
+
+
+def old_install(box, units=OLD_UNITS):
+    """What an install before v2.1.0 left: agentdeck-* unit files, running."""
+    sysd = box.root / "systemd"
+    for u in units:
+        (sysd / u).write_text(f"[Unit]\nDescription=old {u}\n")
+    return sysd
+
+
+def test_upgrade_stops_disables_and_removes_the_old_units_then_starts_the_new(box):
+    sysd = old_install(box)
+    r = bring_up(box, ":8765", AGENTDECK_SITE=":8765")
+    assert r.returncode == 0, out_of(r)
+    calls = box.calls()
+    for u in OLD_UNITS:
+        assert not (sysd / u).exists(), u
+        assert f"systemctl disable --now -q {u}" in calls or \
+            any(c.startswith("systemctl disable") and u in c for c in calls), u
+        assert f"rm -f {sysd / u}" in calls, u
+    for u in NEW_UNITS:
+        assert (sysd / u).exists(), u
+    stop_old = max(i for i, c in enumerate(calls) if c.startswith("systemctl disable") and "agentdeck-" in c)
+    reload_after = [i for i, c in enumerate(calls) if c == "systemctl daemon-reload" and i > stop_old]
+    start_new = [i for i, c in enumerate(calls) if c.startswith("systemctl restart") and "agentkennel-caddy.service" in c]
+    assert reload_after and start_new and stop_old < start_new[0]
+    assert "systemctl enable -q " + " ".join(u for u in NEW_UNITS if u != "agentkennel-reaper.service") in calls
+    # the agents' tmux server is never touched by the move (KillMode=process keeps it)
+    assert tmux_calls(box) == []
+    assert "moved the services to their new names" in r.stdout
+
+
+def test_upgrade_leaves_units_it_does_not_know_alone(box):
+    sysd = old_install(box, ("agentdeck-guest-turnstile.service", "agentdeck-mine.service"))
+    r = bring_up(box, ":8765")
+    assert r.returncode == 0, out_of(r)
+    assert (sysd / "agentdeck-guest-turnstile.service").exists()
+    assert (sysd / "agentdeck-mine.service").exists()
+    assert not any("agentdeck-" in c for c in box.calls() if c.startswith("systemctl "))
+
+
+def test_a_second_run_moves_nothing(box):
+    old_install(box)
+    assert bring_up(box, ":8765").returncode == 0
+    box.log.write_text("")
+    r = bring_up(box, ":8765")
+    assert r.returncode == 0, out_of(r)
+    assert not [c for c in box.calls() if "agentdeck-" in c]
+    assert "moved the services" not in r.stdout
+
+
+def test_uninstall_removes_old_and_new_unit_names(box):
+    sysd = old_install(box, OLD_UNITS[:2])
+    for u in NEW_UNITS:
+        (sysd / u).write_text("[Unit]\n")
+    r = box.run("--uninstall --yes")
+    assert r.returncode == 0, out_of(r)
+    calls = box.calls()                  # sudo is a recording shim: nothing is removed
+    for u in OLD_UNITS[:2] + NEW_UNITS:
+        assert f"sudo rm -f {sysd / u}" in calls, u
+    for u in OLD_UNITS + NEW_UNITS:
+        assert any(c.startswith("sudo systemctl disable --now -q") and c.endswith(" " + u)
+                   for c in calls), u
+
+
+def test_the_old_caddy_unit_on_the_port_is_ours_too(box):
+    """An upgrade: agentdeck-caddy still holds 80/443 until it is moved."""
+    (box.root / "systemd" / "agentdeck-caddy.service").write_text(
+        f"[Service]\nEnvironment=AGENTDECK_SITE={SSLIP}\n")
+    r = box.lib(f"port_is_ours {P(box, 'HTTP_PORT')} && echo ours",
+                FAKE_ACTIVE="agentdeck-caddy.service")
+    assert "ours" in r.stdout
+
+
+# install folder and record
+def test_a_new_install_goes_to_agentkennel(box):
+    assert box.lib("install_dir").stdout.strip() == f"{box.home}/agentkennel"
+
+
+def test_an_existing_install_keeps_its_folder_from_the_old_record(box):
+    d = box.home / "agentdeck"
+    old_record(box, d)
+    assert box.lib("install_dir").stdout.strip() == str(d)
+
+
+def test_the_new_record_wins_over_the_old_one(box):
+    old_record(box, box.home / "agentdeck")
+    new = box.home.joinpath(*NEW_CONF)
+    new.parent.mkdir(parents=True)
+    new.write_text(f"AGENTKENNEL_DIR={box.home}/elsewhere\n")
+    assert box.lib("install_dir").stdout.strip() == f"{box.home}/elsewhere"
+
+
+def test_an_old_clone_without_a_record_keeps_its_folder(box):
+    (box.home / "agentdeck" / ".git").mkdir(parents=True)
+    assert box.lib("install_dir").stdout.strip() == f"{box.home}/agentdeck"
+
+
+@pytest.mark.parametrize("var", ["AGENTKENNEL_DIR", "AGENTDECK_DIR"])
+def test_the_dir_variable_wins_under_either_name(box, var):
+    old_record(box, box.home / "agentdeck")
+    assert box.lib("install_dir", **{var: "/srv/k"}).stdout.strip() == "/srv/k"
+
+
+def test_the_record_is_written_under_the_new_names(box):
+    d = box.root / "deck"
+    d.mkdir()
+    r = box.lib(f'DIR="{d}"; SITE=":8765"; prepare_data')
+    assert r.returncode == 0, r.stderr
+    conf = box.home.joinpath(*NEW_CONF).read_text()
+    assert f"AGENTKENNEL_DIR={d}\n" in conf and "AGENTKENNEL_SITE=:8765\n" in conf
+    assert "AGENTDECK" not in conf
+
+
+def test_the_old_record_is_read(box):
+    old_record(box, box.home / "agentdeck")
+    r = box.lib("conf_get DIR; conf_get SITE")
+    assert r.stdout.split() == [f"{box.home}/agentdeck", ":8765"]
+
+
+def test_purge_accepts_the_old_record_and_marker(box):
+    d = box.home / "agentdeck"
+    old_record(box, d)                  # old record + .agentdeck-managed
+    r = box.run("--uninstall --purge --yes")
+    assert r.returncode == 0, out_of(r)
+    assert not d.exists()
+    assert not box.home.joinpath(*OLD_CONF).exists()
+
+
+def test_a_clone_gets_the_new_marker(box):
+    assert box.lib("echo $MARKER").stdout.strip() == ".agentkennel-managed"
+
+
+# env names in the shell: the new one first, the old one as the fallback
+@pytest.mark.parametrize("env, want", [
+    ({"AGENTKENNEL_PORT": "9001", "AGENTDECK_PORT": "9002"}, "9001"),
+    ({"AGENTDECK_PORT": "9002", "AGENTKENNEL_PORT": ""}, "9002"),
+])
+def test_shell_settings_new_name_first_then_old(box, env, want):
+    assert box.lib("echo $PORT", **env).stdout.strip() == want
+
+
+def test_units_set_both_names_for_their_children(box):
+    u = render(box, "agentkennel-status.service")
+    for name in ("WORKDIR", "PASSFILE", "AUTH_SECRET", "SITE"):
+        new = [l for l in u.splitlines() if f"AGENTKENNEL_{name}=" in l]
+        old = [l for l in u.splitlines() if f"AGENTDECK_{name}=" in l]
+        assert new and old, name
+        assert new[0].split("=", 2)[-1] == old[0].split("=", 2)[-1], name
+
+
+def test_an_old_name_in_dot_env_still_wins_over_the_units_default(box):
+    """`.env` is the person's: before v2.1.0 AGENTDECK_PASSFILE there overrode the unit's
+    value. The unit's AGENTKENNEL_PASSFILE must not now shadow it."""
+    d = box.root / "deck"
+    (d / ".sessions").mkdir(parents=True)
+    (d / ".env").write_text("AGENTDECK_PASSFILE=/srv/pass\n")
+    u = render(box, "agentkennel-status.service", AGENTDECK_DIR=str(d), AGENTKENNEL_DIR=str(d))
+    assert "Environment=AGENTKENNEL_PASSFILE=/srv/pass" in u
+    assert "Environment=AGENTDECK_PASSFILE=/srv/pass" in u
+
+
+def test_the_new_record_replaces_the_old_one(box):
+    d = box.home / "agentdeck"
+    old_record(box, d)
+    r = box.lib(f'DIR="{d}"; SITE=":8765"; prepare_data')
+    assert r.returncode == 0, r.stderr
+    conf = box.home.joinpath(*NEW_CONF).read_text()
+    assert f"AGENTKENNEL_DIR={d}\n" in conf and "AGENTKENNEL_MANAGED=1\n" in conf
+    assert not box.home.joinpath(*OLD_CONF).exists()
+
+
+def test_uninstall_after_an_upgrade_finds_the_tmux_server_from_the_old_record(box):
+    d = box.home / "agentdeck"
+    old_record(box, d)
+    r = box.run("--uninstall --yes")
+    assert r.returncode == 0, out_of(r)
+    assert tmux_calls(box) == [f"tmux-env TMUX_TMPDIR={d}/.sessions/tmux kill-server"]

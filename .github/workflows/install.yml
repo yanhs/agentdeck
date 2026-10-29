@@ -32,16 +32,16 @@ jobs:
       PW: ci-password-123
       # the default (HTTPS) path without Let's Encrypt traffic: the ACME server is
       # unreachable, so after 20 s it falls back to HTTPS with a self-signed certificate
-      AGENTDECK_ACME_CA: https://127.0.0.1:9/directory
-      AGENTDECK_CERT_WAIT: "20"
+      AGENTKENNEL_ACME_CA: https://127.0.0.1:9/directory
+      AGENTKENNEL_CERT_WAIT: "20"
     steps:
       - uses: actions/checkout@v5
       - name: ./install.sh --yes
         run: ./install.sh --yes | tee /tmp/install.log
       - name: services active
         run: |
-          for u in agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service \
-                   agentdeck-caddy.service agentdeck-reaper.timer agentdeck-services.service; do
+          for u in agentkennel-status.service agentkennel-tasks.service agentkennel-sessions.service \
+                   agentkennel-caddy.service agentkennel-reaper.timer agentkennel-services.service; do
             systemctl is-active "$u"; systemctl is-enabled "$u"
           done
       - name: the services keeper answers
@@ -54,35 +54,35 @@ jobs:
           TMUX_TMPDIR=$PWD/.sessions/tmux tmux list-panes -a -F '#{session_name} #{pane_current_command}' | tee /dev/stderr | grep -Eq "^cs-$(cat /tmp/sid) (claude|node)"
       - name: re-run is idempotent
         run: |
-          systemctl list-units 'agentdeck*' --all --no-legend --plain | awk '{print $1}' > /tmp/u1
+          systemctl list-units 'agentkennel*' --all --no-legend --plain | awk '{print $1}' > /tmp/u1
           ./install.sh --yes
-          systemctl list-units 'agentdeck*' --all --no-legend --plain | awk '{print $1}' > /tmp/u2
+          systemctl list-units 'agentkennel*' --all --no-legend --plain | awk '{print $1}' > /tmp/u2
           diff /tmp/u1 /tmp/u2
           test "$(pgrep -xc ttyd)" = 1 && test "$(pgrep -xc caddy)" = 1
           python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --expect-id "$(cat /tmp/sid)"
       - name: uninstall
         run: |
           ./install.sh --uninstall --yes
-          test -z "$(ls /etc/systemd/system | grep agentdeck || true)"
+          test -z "$(ls /etc/systemd/system | grep agentkennel || true)"
           ! curl -sk -o /dev/null --max-time 3 https://127.0.0.1:8765/login
       - name: logs on failure
         if: failure()
-        run: sudo journalctl -u 'agentdeck-*' --no-pager -n 200 || true
+        run: sudo journalctl -u 'agentkennel-*' --no-pager -n 200 || true
 
   guests:
     name: install.sh --guests, then guests/install.sh, on a fresh VM
     runs-on: ubuntu-24.04
     env:
       PW: ci-password-123
-      AGENTDECK_ACME_CA: https://127.0.0.1:9/directory
-      AGENTDECK_CERT_WAIT: "20"
+      AGENTKENNEL_ACME_CA: https://127.0.0.1:9/directory
+      AGENTKENNEL_CERT_WAIT: "20"
     steps:
       - uses: actions/checkout@v5
       - name: ./install.sh --yes --guests
         run: ./install.sh --yes --guests | tee /tmp/install.log
       - name: the answer is recorded, the dashboard works
         run: |
-          grep -x 'AGENTDECK_GUESTS=1' ~/.config/agentdeck/install.env
+          grep -x 'AGENTKENNEL_GUESTS=1' ~/.config/agentkennel/install.env
           python3 tests/install/smoke.py https://127.0.0.1:8765 --insecure --password "$PW" --first-run --setup "$(grep -o '/login?setup=[A-Za-z0-9_-]*' /tmp/install.log | tail -1)"
       - name: guests/install.sh --check
         run: guests/install.sh --check
@@ -94,7 +94,7 @@ jobs:
           docker image inspect "$tag" >/dev/null
           docker network inspect sbx --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' | grep -x 172.31.250.0/24
           systemctl is-active sbx-firewall.timer
-          for u in agentdeck-guest-turnstile agentdeck-guest-tgrelay agentdeck-guest-sitegate; do
+          for u in agentkennel-guest-turnstile agentkennel-guest-tgrelay agentkennel-guest-sitegate; do
             test -f /etc/systemd/system/$u.service
           done
           test "$(stat -c %a guests/.env)" = 600
@@ -102,6 +102,7 @@ jobs:
       - name: a sandbox from the guest image runs AgentKennel and the services keeper
         run: |
           tag="$(python3 guests/guestctl.py image-tag)"
+          # the settings under their names before v2.1.0, as sandboxes made earlier have them
           docker run -d --name g1 --init -e AGENTDECK_PASSWORD="$PW" -e AGENTDECK_SITE=:8765 \
             -p 127.0.0.1:18765:8765 "$tag"
           python3 tests/install/smoke.py http://127.0.0.1:18765 --password "$PW" --wait 120
@@ -115,7 +116,7 @@ jobs:
       - name: logs on failure
         if: failure()
         run: |
-          sudo journalctl -u 'agentdeck-*' -u 'sbx-*' --no-pager -n 200 || true
+          sudo journalctl -u 'agentkennel-*' -u 'sbx-*' --no-pager -n 200 || true
           docker logs g1 2>&1 | tail -100 || true
 
   container:

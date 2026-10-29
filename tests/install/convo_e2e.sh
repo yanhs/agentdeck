@@ -40,13 +40,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 DOCKERFILE="$HERE/Dockerfile.ubuntu-24.04"
 LABEL="${REF:-worktree}"
-TAG="agentdeck-install-test-convo"
+TAG="agentkennel-install-test-convo"
 NAME="$TAG-$$"
 IMAGE="$TAG:$$"
 WORK="$(mktemp -d)"
 PW="e2e-pass-$$"
 
-docker ps -a --format '{{.Names}}' | { grep -v "^agentdeck-install-test-" || true; } | sort > "$WORK/ps-before"
+docker ps -a --format '{{.Names}}' | { grep -v "^agentkennel-install-test-" || true; } | sort > "$WORK/ps-before"
 
 cleanup() {
   local rc=$?
@@ -86,26 +86,26 @@ fi
 echo "commit: $COMMIT"
 (cd "$WORK/src" && git init -q -b master && git add -A \
    && git -c user.name=t -c user.email=t@t commit -qm tree \
-   && git clone -q --bare "$WORK/src" "$WORK/agentdeck.git")
+   && git clone -q --bare "$WORK/src" "$WORK/agentkennel.git")
 
 freeport() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
 PORT="$(freeport)"
 BASE="http://127.0.0.1:$PORT"
 
 echo "=== boot $NAME (systemd PID 1), dashboard -> $BASE"
-docker run -d --name "$NAME" --hostname agentdeck-test --privileged --cgroupns=private \
+docker run -d --name "$NAME" --hostname agentkennel-test --privileged --cgroupns=private \
   --tmpfs /run --tmpfs /run/lock -p "127.0.0.1:$PORT:8765" "$IMAGE" >/dev/null
 for _ in $(seq 1 60); do
   st="$(docker exec "$NAME" systemctl is-system-running 2>/dev/null || true)"
   case "$st" in running|degraded) break ;; esac
   sleep 1
 done
-docker cp "$WORK/agentdeck.git" "$NAME:/opt/agentdeck.git"
-docker exec "$NAME" chown -R ubuntu:ubuntu /opt/agentdeck.git
+docker cp "$WORK/agentkennel.git" "$NAME:/opt/agentkennel.git"
+docker exec "$NAME" chown -R ubuntu:ubuntu /opt/agentkennel.git
 
 echo "=== install: bash < install.sh --http, as user ubuntu"
-docker exec -i -u ubuntu -w /home/ubuntu -e AGENTDECK_REPO_URL=/opt/agentdeck.git \
-  -e AGENTDECK_PUBLIC_IP=203.0.113.7 "$NAME" bash -s -- --http \
+docker exec -i -u ubuntu -w /home/ubuntu -e AGENTKENNEL_REPO_URL=/opt/agentkennel.git \
+  -e AGENTKENNEL_PUBLIC_IP=203.0.113.7 "$NAME" bash -s -- --http \
   < "$WORK/src/install.sh" > "$WORK/install.log" 2>&1 \
   || { tail -40 "$WORK/install.log"; echo "FAIL  install.sh"; exit 1; }
 tail -3 "$WORK/install.log"

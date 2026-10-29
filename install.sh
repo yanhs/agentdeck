@@ -18,7 +18,7 @@
 #
 #   --yes            never ask anything (sudo must then work without a password)
 #   --https [domain] insist on a trusted certificate (refuses if port 80 is busy); a domain
-#                    instead of <your-ip>.sslip.io (or AGENTDECK_SITE=your-domain.com)
+#                    instead of <your-ip>.sslip.io (or AGENTKENNEL_SITE=your-domain.com)
 #   --http           plain http on :8765 — no encryption, the password travels in clear
 #   --check          only the preflight checks, change nothing
 #   --telegram       also print how to connect a Telegram bot (set up in the dashboard)
@@ -26,7 +26,7 @@
 #                    installs Docker; --no-guests: they won't. Without either, a person at
 #                    the terminal is asked once (default: no); a script never is
 #   --uninstall      stop and remove the services (terminals, board, password stay)
-#   --purge          with --uninstall: also delete ~/agentdeck and its data
+#   --purge          with --uninstall: also delete ~/agentkennel and its data
 #
 # Supported: Ubuntu 22.04 / 24.04, Debian 12 — x86_64 or aarch64. Anything else: the
 # Docker sandbox (docker compose up -d), which runs anywhere Docker does.
@@ -34,46 +34,59 @@
 # What it installs: apt packages (tmux, python3, git, curl, …), ttyd + Caddy (release
 # binaries in /usr/local/bin), Node.js 22 (NodeSource, only if no Node 18+ is present),
 # Claude Code (npm -g, the version pinned in the Dockerfile; CLAUDE_CODE_VERSION=… to
-# override), the repo in ~/agentdeck, guard hooks in ~/.claude (AGENTDECK_GUARDS=0 skips),
+# override), the repo in ~/agentkennel, guard hooks in ~/.claude (AGENTKENNEL_GUARDS=0 skips),
 # and systemd services that start at boot:
-#   agentdeck-status    backend + login gate (status_server.py)
-#   agentdeck-tasks     task board (/tasks/)
-#   agentdeck-sessions  the one ttyd behind /sess/ (every terminal)
-#   agentdeck-caddy     proxy + login + HTTPS, on 80/443 (or :8443 / :8765, see above)
-#   agentdeck-reaper    .timer: idle_reaper.py once a minute
+#   agentkennel-status    backend + login gate (status_server.py)
+#   agentkennel-tasks     task board (/tasks/)
+#   agentkennel-sessions  the one ttyd behind /sess/ (every terminal)
+#   agentkennel-caddy     proxy + login + HTTPS, on 80/443 (or :8443 / :8765, see above)
+#   agentkennel-reaper    .timer: idle_reaper.py once a minute
+#   agentkennel-services  the services keeper (<work folder>/.services)
 # Why system units with User=<you> and not `systemctl --user` + linger: they need no user
 # D-Bus session or XDG_RUNTIME_DIR (a fresh SSH-less boot has neither), Caddy can get the
-# capability to bind 80/443 without root, and `systemctl status agentdeck-*` just works.
+# capability to bind 80/443 without root, and `systemctl status agentkennel-*` just works.
+#
+# Upgrading from AgentDeck (before v2.1.0, the same program under its earlier name): the
+# install folder recorded in ~/.config/agentdeck/install.env (or an existing ~/agentdeck
+# clone) is kept; the agentdeck-* units are stopped, disabled and removed and the
+# agentkennel-* ones started in their place. The agents' tmux server lives in
+# <dir>/.sessions/tmux and the units that start it have KillMode=process, so the
+# terminals keep running through the move. Settings named AGENTDECK_* are still read.
 #
 # Running it again upgrades / repairs; nothing is duplicated. It stops at the first error
 # and says what to do; after fixing that, run it again and it continues. A re-run keeps the
 # mode the last install ended up with (trusted / self-signed / --http), unless --https or
 # --http changes it.
 #
-# Test-only env: AGENTDECK_TLS_INTERNAL=1 (Caddy's own CA instead of Let's Encrypt, the
-# readiness probe then skips verification), AGENTDECK_ACME_CA=<directory url>,
-# AGENTDECK_CERT_WAIT=<s> (default 120), AGENTDECK_CERT_POLL=<s> (default 3),
-# AGENTDECK_HTTP_PORT / AGENTDECK_HTTPS_PORT (the ports checked, default 80 / 443),
-# AGENTDECK_ALT_PORT (HTTPS when 443 is taken, default 8443).
+# Test-only env: AGENTKENNEL_TLS_INTERNAL=1 (Caddy's own CA instead of Let's Encrypt, the
+# readiness probe then skips verification), AGENTKENNEL_ACME_CA=<directory url>,
+# AGENTKENNEL_CERT_WAIT=<s> (default 120), AGENTKENNEL_CERT_POLL=<s> (default 3),
+# AGENTKENNEL_HTTP_PORT / AGENTKENNEL_HTTPS_PORT (the ports checked, default 80 / 443),
+# AGENTKENNEL_ALT_PORT (HTTPS when 443 is taken, default 8443).
+# Every AGENTKENNEL_<X> is also read as AGENTDECK_<X>, its name before v2.1.0 (the new
+# name wins): ${AGENTKENNEL_X:-${AGENTDECK_X:-default}}.
 set -Eeuo pipefail
 
-REPO_URL="${AGENTDECK_REPO_URL:-https://github.com/yanhs/agentkennel.git}"
-BRANCH="${AGENTDECK_BRANCH:-master}"
+REPO_URL="${AGENTKENNEL_REPO_URL:-${AGENTDECK_REPO_URL:-https://github.com/yanhs/agentkennel.git}}"
+BRANCH="${AGENTKENNEL_BRANCH:-${AGENTDECK_BRANCH:-master}}"
 CADDY_VERSION="${CADDY_VERSION:-2.11.4}"
 NODE_MAJOR=22
 NODE_MIN=18                       # Claude Code runs on Node 18+; an existing one is kept
-SYSTEMD_DIR="${AGENTDECK_SYSTEMD_DIR:-/etc/systemd/system}"
-PORT="${AGENTDECK_PORT:-8765}"
-HTTP_PORT="${AGENTDECK_HTTP_PORT:-80}"
-HTTPS_PORT="${AGENTDECK_HTTPS_PORT:-443}"
-ALT_PORT="${AGENTDECK_ALT_PORT:-8443}"
+SYSTEMD_DIR="${AGENTKENNEL_SYSTEMD_DIR:-${AGENTDECK_SYSTEMD_DIR:-/etc/systemd/system}}"
+PORT="${AGENTKENNEL_PORT:-${AGENTDECK_PORT:-8765}}"
+HTTP_PORT="${AGENTKENNEL_HTTP_PORT:-${AGENTDECK_HTTP_PORT:-80}}"
+HTTPS_PORT="${AGENTKENNEL_HTTPS_PORT:-${AGENTDECK_HTTPS_PORT:-443}}"
+ALT_PORT="${AGENTKENNEL_ALT_PORT:-${AGENTDECK_ALT_PORT:-8443}}"
 SUDO="${SUDO-sudo}"
-UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.service agentdeck-reaper.timer agentdeck-services.service"
+UNITS="agentkennel-status.service agentkennel-tasks.service agentkennel-sessions.service agentkennel-caddy.service agentkennel-reaper.service agentkennel-reaper.timer agentkennel-services.service"
+# compat: the same units under their names before v2.1.0 — moved by move_old_units,
+# removed by --uninstall too
+OLD_UNITS="${UNITS//agentkennel-/agentdeck-}"
 # the units that run (the reaper .service is started by its timer)
-RUN_UNITS="agentdeck-status.service agentdeck-tasks.service agentdeck-sessions.service agentdeck-caddy.service agentdeck-reaper.timer agentdeck-services.service"
+RUN_UNITS="agentkennel-status.service agentkennel-tasks.service agentkennel-sessions.service agentkennel-caddy.service agentkennel-reaper.timer agentkennel-services.service"
 SANDBOX_HINT="git clone https://github.com/yanhs/agentkennel && cd agentkennel && docker compose up -d"
-CERT_WAIT="${AGENTDECK_CERT_WAIT:-120}"
-CERT_POLL="${AGENTDECK_CERT_POLL:-3}"
+CERT_WAIT="${AGENTKENNEL_CERT_WAIT:-${AGENTDECK_CERT_WAIT:-120}}"
+CERT_POLL="${AGENTKENNEL_CERT_POLL:-${AGENTDECK_CERT_POLL:-3}}"
 CHANGED_UNITS=()
 STEP="start"
 # SITE, what Caddy serves (recorded in install.env):
@@ -85,12 +98,16 @@ BUSY_BY=""        # the program on the port that forced the choice ("" = not vis
 CERT_LOG=""       # Caddy's last words when WHY=cert
 SELF_IP=""        # this server's address (the URL; what a self-signed certificate names)
 CERT_NAME=""      # the name a trusted certificate was tried for
-WORKDIR=""        # where new terminals start (AGENTDECK_WORKDIR, default ~/projects)
+WORKDIR=""        # where new terminals start (AGENTKENNEL_WORKDIR, default ~/projects)
 # What this installer set up is recorded here (outside the repo): the install folder,
 # whether the installer cloned it itself (only then may --purge delete it), the tmux
 # folder of the agents' own tmux server, and the site. --uninstall acts ONLY on these.
-CONF_FILE="${AGENTDECK_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/agentdeck/install.env}"
-MARKER=".agentdeck-managed"      # in a folder the installer cloned itself
+CONF_FILE="${AGENTKENNEL_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/agentkennel/install.env}"
+# compat: the record an install before v2.1.0 wrote (keys AGENTDECK_*); read when there is
+# no new one, removed once the new one is written
+OLD_CONF_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/agentdeck/install.env"
+MARKER=".agentkennel-managed"    # in a folder the installer cloned itself
+OLD_MARKER=".agentdeck-managed"  # compat: the same marker, written before v2.1.0
 TMUX_SUBDIR=".sessions/tmux"     # TMUX_TMPDIR of the agents: a tmux server of their own
 
 say()  { printf '%s\n' "$*"; }
@@ -104,7 +121,7 @@ die()  {
 # ── pure helpers (unit-tested: tests/test_install_sh.py) ─────────────────────────────
 # "ubuntu 22.04" | "ubuntu 24.04" | "debian 12" on stdout, or exit 1
 detect_os() {
-  local f="${AGENTDECK_OS_RELEASE:-/etc/os-release}" id ver
+  local f="${AGENTKENNEL_OS_RELEASE:-${AGENTDECK_OS_RELEASE:-/etc/os-release}}" id ver
   [ -r "$f" ] || return 1
   id="$(. "$f" 2>/dev/null; printf '%s' "${ID:-}")"
   ver="$(. "$f" 2>/dev/null; printf '%s' "${VERSION_ID:-}")"
@@ -115,7 +132,7 @@ detect_os() {
 }
 
 os_name() {  # a readable name for messages
-  local f="${AGENTDECK_OS_RELEASE:-/etc/os-release}"
+  local f="${AGENTKENNEL_OS_RELEASE:-${AGENTDECK_OS_RELEASE:-/etc/os-release}}"
   [ -r "$f" ] || { printf 'an unknown system (no /etc/os-release)'; return; }
   (. "$f" 2>/dev/null; printf '%s' "${PRETTY_NAME:-${ID:-unknown} ${VERSION_ID:-}}")
 }
@@ -138,8 +155,8 @@ caddy_arch() {
 
 valid_ipv4() { [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 
-public_ip() {  # AGENTDECK_PUBLIC_IP, else ask the internet; exit 1 if unknown
-  local ip="${AGENTDECK_PUBLIC_IP:-}" u
+public_ip() {  # AGENTKENNEL_PUBLIC_IP, else ask the internet; exit 1 if unknown
+  local ip="${AGENTKENNEL_PUBLIC_IP:-${AGENTDECK_PUBLIC_IP:-}}" u
   if [ -z "$ip" ]; then
     for u in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
       ip="$(curl -4 -fsS --max-time 5 "$u" 2>/dev/null | tr -d '[:space:]')" || ip=""
@@ -181,11 +198,14 @@ port_owner() {  # the program listening on the port, "" when not visible (needs 
 }
 
 port_is_ours() {  # a re-run: our own running Caddy serves this port already
-  local site ports
-  [ -f "$SYSTEMD_DIR/agentdeck-caddy.service" ] || return 1
-  systemctl is-active --quiet agentdeck-caddy.service 2>/dev/null || return 1
-  site="$(sed -n 's/^Environment="\{0,1\}AGENTDECK_SITE=\([^"]*\)"\{0,1\}$/\1/p' \
-          "$SYSTEMD_DIR/agentdeck-caddy.service" | head -n 1)"
+  local site ports unit=""
+  # agentdeck-caddy: the same Caddy before v2.1.0, still running on an upgrade (compat)
+  for unit in agentkennel-caddy.service agentdeck-caddy.service ""; do
+    [ -n "$unit" ] || return 1
+    [ -f "$SYSTEMD_DIR/$unit" ] && systemctl is-active --quiet "$unit" 2>/dev/null && break
+  done
+  site="$(sed -n 's/^Environment="\{0,1\}AGENT\(KENNEL\|DECK\)_SITE=\([^"]*\)"\{0,1\}$/\2/p' \
+          "$SYSTEMD_DIR/$unit" | head -n 1)"
   site="${site%%,*}"
   case "$site" in
     "") return 1 ;;
@@ -211,7 +231,7 @@ caddy_address() {
 # Caddy's extra global options for SITE (the Caddyfile imports them; one file, rewritten
 # on every install)
 caddy_global_conf() {
-  local ca="${AGENTDECK_ACME_CA:-}"
+  local ca="${AGENTKENNEL_ACME_CA:-${AGENTDECK_ACME_CA:-}}"
   case "$SITE" in
     :*) ;;
     https://:*)
@@ -221,7 +241,7 @@ caddy_global_conf() {
       # browsers send no SNI to an IP address: hand them this server's certificate
       printf 'default_sni %s\nfallback_sni %s\n' "${SELF_IP:-127.0.0.1}" "${SELF_IP:-127.0.0.1}" ;;
     *)
-      if [ "${AGENTDECK_TLS_INTERNAL:-}" = 1 ]; then
+      if [ "${AGENTKENNEL_TLS_INTERNAL:-${AGENTDECK_TLS_INTERNAL:-}}" = 1 ]; then
         printf 'local_certs\nskip_install_trust\n'
       elif [ "${SITE##*:}" != "$SITE" ]; then
         # 443 is someone else's: the TLS-ALPN challenge would land there — HTTP-01 on 80 only
@@ -242,37 +262,60 @@ sd_env() {
   case "$kv" in *" "*) printf 'Environment="%s"\n' "$kv" ;; *) printf 'Environment=%s\n' "$kv" ;; esac
 }
 
+# the value of AGENTDECK_<NAME> in the install's .env, when that file has no
+# AGENTKENNEL_<NAME>: before v2.1.0 such a line overrode the unit's AGENTDECK_<NAME>; the
+# unit now sets both names and the new one, read first, would shadow it (compat)
+dotenv_old() {
+  local f="$AGENTKENNEL_DIR/.env" v
+  [ -f "$f" ] || return 1
+  grep -Eq "^[[:space:]]*(export[[:space:]]+)?AGENTKENNEL_$1=" "$f" && return 1
+  v="$(sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?AGENTDECK_$1=//p" "$f" | tail -n 1)"
+  v="${v%\"}"; v="${v#\"}"; v="${v%\'}"; v="${v#\'}"
+  [ -n "$v" ] || return 1
+  printf '%s\n' "$v"
+}
+
+# Environment= for AGENTKENNEL_<NAME> and AGENTDECK_<NAME> (compat: what earlier hooks
+# and the owner's own tools read), the same value; an old-named .env line wins as before
+sd_env_both() {
+  local v="$2" o
+  o="$(dotenv_old "$1")" && v="$o"
+  sd_env "AGENTKENNEL_$1" "$v"
+  sd_env "AGENTDECK_$1" "$v"
+}
+
 unit_service_common() {
-  local d="$AGENTDECK_DIR" h="$AGENTDECK_HOME"
-  printf 'User=%s\n' "$AGENTDECK_USER"
+  local d="$AGENTKENNEL_DIR" h="$AGENTKENNEL_HOME"
+  printf 'User=%s\n' "$AGENTKENNEL_USER"
   printf 'WorkingDirectory=%s\n' "$(sd_esc "$d")"
   sd_env HOME "$h"
-  sd_env PATH "${AGENTDECK_PATH:-$h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+  sd_env PATH "${AGENTKENNEL_PATH:-$h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
   sd_env LANG C.UTF-8
   sd_env LC_ALL C.UTF-8
   # new terminals start here — not in the whole home (with ~/.ssh, ~/.claude, …), so
   # Claude's "trust this folder?" is asked for ~/projects only
-  sd_env AGENTDECK_WORKDIR "${AGENTDECK_WORKDIR:-$h/projects}"
-  sd_env AGENTDECK_PASSFILE "$d/.sessions/.dashpass"
-  sd_env AGENTDECK_AUTH_SECRET "$d/.sessions/.agents_auth_secret"
+  sd_env_both WORKDIR "${AGENTKENNEL_WORKDIR:-$h/projects}"
+  sd_env_both PASSFILE "$d/.sessions/.dashpass"
+  sd_env_both AUTH_SECRET "$d/.sessions/.agents_auth_secret"
   sd_env TRACKER_STATE "$d/.sessions/tasks-state.json"
-  sd_env AGENTDECK_SITE "${AGENTDECK_SITE:-:8765}"
+  sd_env_both SITE "${AGENTKENNEL_SITE:-:8765}"
   # the agents' tmux server gets a folder of its own: every tmux call of AgentKennel (and
   # of the agents) talks to it, and none touches your own tmux sessions
   sd_env TMUX_TMPDIR "$d/$TMUX_SUBDIR"
   sd_env XDG_DATA_HOME "$h/.local/share"
   sd_env XDG_CONFIG_HOME "$h/.config"
-  [ -n "${AGENTDECK_CLAUDE_BIN:-}" ] && sd_env CLAUDE_BIN "$AGENTDECK_CLAUDE_BIN"
+  [ -n "${AGENTKENNEL_CLAUDE_BIN:-}" ] && sd_env CLAUDE_BIN "$AGENTKENNEL_CLAUDE_BIN"
   # claude refuses --dangerously-skip-permissions as root unless told it is on purpose
-  [ "$AGENTDECK_USER" = root ] && sd_env IS_SANDBOX 1
-  # your own settings (AGENTDECK_PASSWORD, AGENTDECK_ORIGIN, AGENTDECK_EMAIL, …) win
+  [ "$AGENTKENNEL_USER" = root ] && sd_env IS_SANDBOX 1
+  # your own settings (AGENTKENNEL_ORIGIN, AGENTKENNEL_EMAIL, …, or their AGENTDECK_*
+  # names from before v2.1.0) win
   printf 'EnvironmentFile=-%s\n' "$(sd_esc "$d/.env")"
 }
 
 render_unit() {
-  local d="$AGENTDECK_DIR" py=/usr/bin/python3
+  local d="$AGENTKENNEL_DIR" py=/usr/bin/python3
   case "$1" in
-    agentdeck-status.service)
+    agentkennel-status.service)
       cat <<EOF
 [Unit]
 Description=AgentKennel backend (status_server.py: API + login gate)
@@ -291,7 +334,7 @@ KillMode=process
 WantedBy=multi-user.target
 EOF
       ;;
-    agentdeck-tasks.service)
+    agentkennel-tasks.service)
       cat <<EOF
 [Unit]
 Description=AgentKennel task board (/tasks/)
@@ -307,7 +350,7 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
       ;;
-    agentdeck-services.service)
+    agentkennel-services.service)
       cat <<EOF
 [Unit]
 Description=AgentKennel services keeper (<work folder>/.services: programs that outlive a terminal)
@@ -323,7 +366,7 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
       ;;
-    agentdeck-sessions.service)
+    agentkennel-sessions.service)
       cat <<EOF
 [Unit]
 Description=AgentKennel terminals (one ttyd for /sess/ -> open-session.sh)
@@ -341,18 +384,19 @@ KillMode=process
 WantedBy=multi-user.target
 EOF
       ;;
-    agentdeck-caddy.service)
+    agentkennel-caddy.service)
       cat <<EOF
 [Unit]
 Description=AgentKennel proxy + login + HTTPS (Caddy)
-After=network-online.target agentdeck-status.service
+After=network-online.target agentkennel-status.service
 Wants=network-online.target
 
 [Service]
 $(unit_service_common)
-$(sd_env AGENTDECK_CADDY_GLOBAL "$AGENTDECK_DIR/.sessions/caddy-global.caddy")
+$(sd_env AGENTKENNEL_CADDY_GLOBAL "$AGENTKENNEL_DIR/.sessions/caddy-global.caddy")
+$(o="$(dotenv_old EMAIL)" && sd_env AGENTKENNEL_EMAIL "$o")
 # Let's Encrypt refuses an @example.* contact address (the Caddyfile default): drop it then
-ExecStartPre=/bin/sh -c 'case "\$\${AGENTDECK_EMAIL:-}" in ""|*@example.com|*@example.org|*@example.net) grep -v "^[[:space:]]*email " Caddyfile ;; *) cat Caddyfile ;; esac > .sessions/Caddyfile.run'
+ExecStartPre=/bin/sh -c 'case "\$\${AGENTKENNEL_EMAIL:-\$\${AGENTDECK_EMAIL:-}}" in ""|*@example.com|*@example.org|*@example.net) grep -v "^[[:space:]]*email " Caddyfile ;; *) cat Caddyfile ;; esac > .sessions/Caddyfile.run'
 ExecStart=/usr/local/bin/caddy run --config .sessions/Caddyfile.run --adapter caddyfile
 ExecReload=/usr/local/bin/caddy reload --config .sessions/Caddyfile.run --adapter caddyfile
 AmbientCapabilities=CAP_NET_BIND_SERVICE
@@ -363,7 +407,7 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
       ;;
-    agentdeck-reaper.service)
+    agentkennel-reaper.service)
       cat <<EOF
 [Unit]
 Description=AgentKennel idle reaper (unloads terminals nobody uses)
@@ -374,7 +418,7 @@ $(unit_service_common)
 ExecStart=$py $(sd_arg "$d/idle_reaper.py")
 EOF
       ;;
-    agentdeck-reaper.timer)
+    agentkennel-reaper.timer)
       cat <<EOF
 [Unit]
 Description=AgentKennel idle reaper, once a minute
@@ -407,20 +451,42 @@ write_unit() {
   CHANGED_UNITS+=("$name")
 }
 
-conf_get() {  # conf_get KEY — a value from the install record ("" if none)
-  [ -f "$CONF_FILE" ] || return 0
-  sed -n "s/^$1=//p" "$CONF_FILE" | tail -n 1
+conf_get() {  # conf_get NAME — AGENTKENNEL_NAME from the install record ("" if none);
+  # with no record yet, AGENTDECK_NAME from the one an install before v2.1.0 wrote (compat)
+  if [ -f "$CONF_FILE" ]; then
+    sed -n "s/^AGENTKENNEL_$1=//p" "$CONF_FILE" | tail -n 1
+  elif [ -f "$OLD_CONF_FILE" ]; then
+    sed -n "s/^AGENTDECK_$1=//p" "$OLD_CONF_FILE" | tail -n 1
+  fi
 }
+
+# where the code goes when piped (curl | bash): AGENTKENNEL_DIR, else the recorded install
+# (an install before v2.1.0 included), else an existing ~/agentdeck clone of an older
+# install that has no record, else ~/agentkennel. A live folder is never moved: the
+# agents' tmux socket is inside it.
+install_dir() {
+  local d="${AGENTKENNEL_DIR:-${AGENTDECK_DIR:-$(conf_get DIR)}}"
+  if [ -z "$d" ]; then
+    if [ ! -e "$HOME/agentkennel" ] && [ -d "$HOME/agentdeck/.git" ]; then
+      d="$HOME/agentdeck"        # compat: the default folder before v2.1.0
+    else
+      d="$HOME/agentkennel"
+    fi
+  fi
+  printf '%s\n' "$d"
+}
+
+has_marker() { [ -f "$1/$MARKER" ] || [ -f "$1/$OLD_MARKER" ]; }
 
 # the folder --purge may delete: recorded as installer-cloned AND carrying the marker,
 # absolute, not / and not $HOME. Prints it, or exits 1 with nothing printed.
 purge_target() {
-  local d; d="$(conf_get AGENTDECK_DIR)"
-  [ -n "$d" ] && [ "$(conf_get AGENTDECK_MANAGED)" = 1 ] || return 1
+  local d; d="$(conf_get DIR)"
+  [ -n "$d" ] && [ "$(conf_get MANAGED)" = 1 ] || return 1
   case "$d" in /*) ;; *) return 1 ;; esac
   d="${d%/}"
   [ -n "$d" ] && [ "$d" != "${HOME%/}" ] && [ -d "$d" ] && [ ! -L "$d" ] || return 1
-  [ -f "$d/$MARKER" ] || return 1
+  has_marker "$d" || return 1
   printf '%s\n' "$d"
 }
 
@@ -445,12 +511,13 @@ HTTPS by default: a free Let's Encrypt certificate on https://<ip>.sslip.io when
                      (also installs Docker); --no-guests: they won't. Without either
                      you're asked once (default: no) — a script never is
   --uninstall        stop + remove the services (keeps terminals, board, password)
-  --purge            with --uninstall: also delete ~/agentdeck and its data
+  --purge            with --uninstall: also delete ~/agentkennel and its data
   -h, --help         this help
 
-Env: AGENTDECK_GUARDS=0 (no guard hooks), CLAUDE_CODE_VERSION=<ver|latest>,
-     AGENTDECK_DIR (default ~/agentdeck), AGENTDECK_PORT (default 8765),
-     AGENTDECK_ALLOW_ROOT=1 (install as root — agents then run as root).
+Env: AGENTKENNEL_GUARDS=0 (no guard hooks), CLAUDE_CODE_VERSION=<ver|latest>,
+     AGENTKENNEL_DIR (default ~/agentkennel), AGENTKENNEL_PORT (default 8765),
+     AGENTKENNEL_ALLOW_ROOT=1 (install as root — agents then run as root).
+     (AGENTDECK_* — the names before v2.1.0 — work too.)
 Supported: Ubuntu 22.04 / 24.04, Debian 12 (x86_64, aarch64).
 EOF
 }
@@ -521,7 +588,7 @@ preflight() {
   ARCH="$arch" OS="$os"
 
   if [ "$(id -u)" = 0 ]; then
-    if [ "${AGENTDECK_ALLOW_ROOT:-}" != 1 ]; then
+    if [ "${AGENTKENNEL_ALLOW_ROOT:-${AGENTDECK_ALLOW_ROOT:-}}" != 1 ]; then
       cat >&2 <<'EOF'
 error: you are running this as root. The agents would run as root as well — nothing
 between them and the machine, not even sudo. Run it as a normal user who has sudo:
@@ -529,7 +596,7 @@ between them and the machine, not even sudo. Run it as a normal user who has sud
   adduser deck && usermod -aG sudo deck      # once, as root
   su - deck                                  # then install as deck
 
-To install as root anyway (the agents WILL run as root): AGENTDECK_ALLOW_ROOT=1
+To install as root anyway (the agents WILL run as root): AGENTKENNEL_ALLOW_ROOT=1
 EOF
       exit 1
     fi
@@ -552,7 +619,7 @@ EOF
 
   if [ "$UNINSTALL" = 1 ]; then
     if [ "$PURGE" = 1 ] && ! purge_target >/dev/null; then
-      die "--purge deletes only a folder this installer cloned itself (recorded in $CONF_FILE, with a $MARKER marker inside). There is none here — nothing was changed. Run --uninstall without --purge; delete your own clone yourself if you want it gone."
+      die "--purge deletes only a folder this installer cloned itself (recorded in $CONF_FILE or the older $OLD_CONF_FILE, with a $MARKER or $OLD_MARKER marker inside). There is none here — nothing was changed. Run --uninstall without --purge; delete your own clone yourself if you want it gone."
     fi
     return 0
   fi
@@ -564,24 +631,24 @@ EOF
 }
 
 # Will other people work on this server? (the optional guests module, guests/README.md)
-# --guests / --no-guests / AGENTDECK_GUESTS answer it; a re-run keeps the recorded answer;
+# --guests / --no-guests / AGENTKENNEL_GUESTS answer it; a re-run keeps the recorded answer;
 # otherwise a person at the terminal is asked once — default no — and a script never is.
 human_here() {
   [ "$YES" = 0 ] && [ "$CHECK" = 0 ] || return 1
-  [ -n "${AGENTDECK_TTY:-}" ] && return 0          # tests: the answer comes from this file
+  [ -n "${AGENTKENNEL_TTY:-${AGENTDECK_TTY:-}}" ] && return 0          # tests: the answer comes from this file
   [ -t 2 ] && { : </dev/tty; } 2>/dev/null
 }
 
 ask_guests() {
   local ans=""
-  GUESTS="${GUESTS_FLAG:-${AGENTDECK_GUESTS:-$(conf_get AGENTDECK_GUESTS)}}"
+  GUESTS="${GUESTS_FLAG:-${AGENTKENNEL_GUESTS:-${AGENTDECK_GUESTS:-$(conf_get GUESTS)}}}"
   case "$GUESTS" in 0|1) return 0 ;; esac
   GUESTS=0
   human_here || return 0
   printf '\nWill other people work on this server too? Each would get their own sandbox\n' >&2
   printf '(an AgentKennel of their own, in Docker) on your Claude subscription, with a daily\n' >&2
   printf 'limit. You can turn it on any time later in the dashboard. [y/N] ' >&2
-  read -r ans <"${AGENTDECK_TTY:-/dev/tty}" || ans=""
+  read -r ans <"${AGENTKENNEL_TTY:-${AGENTDECK_TTY:-/dev/tty}}" || ans=""
   case "$ans" in [yY]|[yY][eE][sS]) GUESTS=1 ;; esac
   return 0
 }
@@ -606,23 +673,23 @@ guests_note() {
   fi
 }
 
-# where new terminals start: AGENTDECK_WORKDIR now, else the last install's, else ~/projects
+# where new terminals start: AGENTKENNEL_WORKDIR now, else the last install's, else ~/projects
 resolve_workdir() {
-  WORKDIR="${AGENTDECK_WORKDIR:-$(conf_get AGENTDECK_WORKDIR)}"
+  WORKDIR="${AGENTKENNEL_WORKDIR:-${AGENTDECK_WORKDIR:-$(conf_get WORKDIR)}}"
   WORKDIR="${WORKDIR:-$HOME/projects}"
   case "$WORKDIR" in
     /*) WORKDIR="${WORKDIR%/}"; WORKDIR="${WORKDIR:-/}" ;;
-    *) die "AGENTDECK_WORKDIR must be an absolute path (got \"$WORKDIR\"), e.g. AGENTDECK_WORKDIR=\$HOME/projects" ;;
+    *) die "AGENTKENNEL_WORKDIR must be an absolute path (got \"$WORKDIR\"), e.g. AGENTKENNEL_WORKDIR=\$HOME/projects" ;;
   esac
 }
 
 # which address Caddy serves → SITE, WHY, BUSY_BY, SELF_IP (see the top of the file).
 # Explicit flags win, then the last install's choice, then the ladder: a trusted
-# certificate when port 80 is free and a name is known (AGENTDECK_SITE, else
+# certificate when port 80 is free and a name is known (AGENTKENNEL_SITE, else
 # <public-ip>.sslip.io) — on 443, or on ALT_PORT when 443 is taken — else self-signed.
 choose_site() {
   local prev domain="$DOMAIN" name ip p
-  prev="$(conf_get AGENTDECK_SITE)"
+  prev="$(conf_get SITE)"
   SITE="" WHY="" BUSY_BY=""
   ip="$(public_ip 2>/dev/null || true)"
   SELF_IP="${ip:-$(hostname -I 2>/dev/null | awk '{print $1}' || true)}"
@@ -630,14 +697,16 @@ choose_site() {
   if [ "$HTTPS_OFF" = 1 ]; then
     SITE=":$PORT" WHY=requested
   elif [ "$HTTPS" = 0 ] && [ -z "$domain" ] && [ -n "$prev" ] \
-       && { [ "${prev#https://}" != "$prev" ] || { [ "${prev#:}" != "$prev" ] && [ "$(conf_get AGENTDECK_WHY)" = requested ]; }; }; then
-    # a re-run keeps a self-signed / asked-for-http install as it is
+       && { [ "${prev#https://}" != "$prev" ] || { [ "${prev#:}" != "$prev" ] && case "$(conf_get WHY)" in requested|kept) true ;; *) false ;; esac; }; }; then
+    # a re-run keeps a self-signed / asked-for-http install as it is (WHY=kept: a re-run
+    # already kept it once — the person's --http still holds)
     case "$prev" in https://*) SITE="https://:$PORT" ;; *) SITE=":$PORT" ;; esac
     WHY=kept
   fi
   if [ -z "$SITE" ]; then
     if [ "$HTTPS" = 0 ] && [ -z "$domain" ]; then
-      case "${AGENTDECK_SITE:-}" in :*|"") ;; *) domain="$AGENTDECK_SITE" ;; esac
+      local env_site="${AGENTKENNEL_SITE:-${AGENTDECK_SITE:-}}"
+      case "$env_site" in :*|"") ;; *) domain="$env_site" ;; esac
       # a re-run of a trusted install keeps its name (a domain, or the sslip.io one)
       case "$prev" in :*|https://*|"") ;; *) [ -n "$domain" ] || domain="${prev%%:*}" ;; esac
     fi
@@ -652,13 +721,13 @@ choose_site() {
         SITE="$name"
       else
         BUSY_BY="$(port_owner "$HTTPS_PORT")"
-        p="$(free_alt_port)" || die "ports $HTTPS_PORT and $ALT_PORT…$((ALT_PORT + 10)) are all busy — free one of them and run this again (or AGENTDECK_ALT_PORT=<port>)."
+        p="$(free_alt_port)" || die "ports $HTTPS_PORT and $ALT_PORT…$((ALT_PORT + 10)) are all busy — free one of them and run this again (or AGENTKENNEL_ALT_PORT=<port>)."
         SITE="$name:$p"
       fi
     else
       if [ -n "$domain" ]; then die "\"$domain\" is not a domain name (just the name, e.g. deck.example.com)"; fi
       if [ "$HTTPS" = 1 ]; then
-        die "couldn't find this server's public IPv4 address for <ip>.sslip.io — pass your domain: --https your-domain.com (or set AGENTDECK_PUBLIC_IP)"
+        die "couldn't find this server's public IPv4 address for <ip>.sslip.io — pass your domain: --https your-domain.com (or set AGENTKENNEL_PUBLIC_IP)"
       fi
       SITE="https://:$PORT" WHY=noip
     fi
@@ -676,7 +745,7 @@ free_alt_port() {  # ALT_PORT, or the next free one of the ten after it
 
 check_dashboard_port() {
   if ! port_free "$PORT"; then
-    die "port $PORT is busy — another program listens on it. Free it, or pick another port: AGENTDECK_PORT=8766 ./install.sh"
+    die "port $PORT is busy — another program listens on it. Free it, or pick another port: AGENTKENNEL_PORT=8766 ./install.sh"
   fi
 }
 
@@ -804,13 +873,13 @@ get_repo() {
   if [ -n "$s" ]; then
     DIR="$s"; say "using this clone as it is: $DIR"; return 0
   fi
-  DIR="${AGENTDECK_DIR:-$HOME/agentdeck}"
+  DIR="$(install_dir)"
   if [ -d "$DIR/.git" ]; then
     say "updating $DIR"
     git -C "$DIR" pull --ff-only -q </dev/null \
       || warn "couldn't fast-forward $DIR (local changes?) — installing the code that is there"
   elif [ -e "$DIR" ]; then
-    die "$DIR exists but is not a git clone of AgentKennel. Move it away, or set AGENTDECK_DIR=/another/path"
+    die "$DIR exists but is not a git clone of AgentKennel. Move it away, or set AGENTKENNEL_DIR=/another/path"
   else
     say "cloning $REPO_URL -> $DIR"
     git clone -q -b "$BRANCH" "$REPO_URL" "$DIR" </dev/null
@@ -824,14 +893,15 @@ prepare_data() {
   chmod 700 "$DIR/.sessions"
   local state="$DIR/.sessions/tasks-state.json" pf="$DIR/.sessions/.dashpass"
   [ -f "$state" ] || echo '{"title":"Task Tracker","tasks":[]}' > "$state"
-  if [ -n "${AGENTDECK_PASSWORD:-}" ] && [ ! -s "$pf" ]; then
-    python3 - "$pf" "$AGENTDECK_PASSWORD" <<'PY'
+  local seed="${AGENTKENNEL_PASSWORD:-${AGENTDECK_PASSWORD:-}}"
+  if [ -n "$seed" ] && [ ! -s "$pf" ]; then
+    python3 - "$pf" "$seed" <<'PY'
 import sys, os, hashlib
 p, pw = sys.argv[1], sys.argv[2]
 salt = os.urandom(16); h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 200_000)
 os.umask(0o077); open(p, "w").write(f"{salt.hex()}${h.hex()}")
 PY
-    say "dashboard password seeded from AGENTDECK_PASSWORD"
+    say "dashboard password seeded from AGENTKENNEL_PASSWORD"
   fi
   mkdir -p "$DIR/$TMUX_SUBDIR"
   chmod 700 "$DIR/$TMUX_SUBDIR"
@@ -847,19 +917,24 @@ PY
 write_record() {  # what the install set up — --uninstall and the next run read it
   mkdir -p "$(dirname "$CONF_FILE")"
   {
-    printf 'AGENTDECK_DIR=%s\n' "$DIR"
-    printf 'AGENTDECK_MANAGED=%s\n' "$([ -f "$DIR/$MARKER" ] && echo 1 || echo 0)"
-    printf 'AGENTDECK_TMUX_TMPDIR=%s\n' "$DIR/$TMUX_SUBDIR"
-    printf 'AGENTDECK_SITE=%s\n' "$SITE"
-    printf 'AGENTDECK_WHY=%s\n' "$WHY"
-    printf 'AGENTDECK_WORKDIR=%s\n' "$WORKDIR"
-    printf 'AGENTDECK_GUESTS=%s\n' "$GUESTS"
+    printf 'AGENTKENNEL_DIR=%s\n' "$DIR"
+    printf 'AGENTKENNEL_MANAGED=%s\n' "$(has_marker "$DIR" && echo 1 || echo 0)"
+    printf 'AGENTKENNEL_TMUX_TMPDIR=%s\n' "$DIR/$TMUX_SUBDIR"
+    printf 'AGENTKENNEL_SITE=%s\n' "$SITE"
+    printf 'AGENTKENNEL_WHY=%s\n' "$WHY"
+    printf 'AGENTKENNEL_WORKDIR=%s\n' "$WORKDIR"
+    printf 'AGENTKENNEL_GUESTS=%s\n' "$GUESTS"
   } > "$CONF_FILE"
+  # compat: the record of an install before v2.1.0 is replaced by this one
+  if [ -f "$OLD_CONF_FILE" ] && [ "$OLD_CONF_FILE" != "$CONF_FILE" ]; then
+    rm -f -- "$OLD_CONF_FILE"
+    rmdir -- "$(dirname "$OLD_CONF_FILE")" 2>/dev/null || true
+  fi
 }
 
 install_guards() {
-  if [ "${AGENTDECK_GUARDS:-1}" = 0 ]; then
-    say "guard hooks: skipped (AGENTDECK_GUARDS=0)"; return 0
+  if [ "${AGENTKENNEL_GUARDS:-${AGENTDECK_GUARDS:-1}}" = 0 ]; then
+    say "guard hooks: skipped (AGENTKENNEL_GUARDS=0)"; return 0
   fi
   mkdir -p "$HOME/.claude"
   python3 "$DIR/hooks/install_guards.py" --settings "$HOME/.claude/settings.json" \
@@ -869,24 +944,47 @@ install_guards() {
   say "guard hooks: on in ~/.claude/settings.json (task board before edits, no silent mid-task stop)"
 }
 
+# An install before v2.1.0 has the same services as agentdeck-* units: stop and disable
+# them, remove their files, and let the agentkennel-* ones (written just before) take the
+# ports. The agents' tmux server survives: it was started by agentdeck-status or
+# agentdeck-sessions, whose KillMode=process stops only the unit's main process, and it
+# lives in <dir>/.sessions/tmux, which stays where it is. It stays in the old unit's
+# cgroup until the next reboot (systemd then lists that unit as not-found, inactive).
+move_old_units() {
+  local u moved=()
+  for u in $OLD_UNITS; do
+    [ -e "$SYSTEMD_DIR/$u" ] || continue
+    $SUDO systemctl disable --now -q "$u" 2>/dev/null || true
+    $SUDO rm -f "$SYSTEMD_DIR/$u"
+    moved+=("$u")
+  done
+  [ "${#moved[@]}" -gt 0 ] || return 0
+  $SUDO systemctl daemon-reload
+  # shellcheck disable=SC2086
+  $SUDO systemctl reset-failed ${moved[*]} 2>/dev/null || true
+  say "moved the services to their new names: agentdeck-* → agentkennel-* (terminals keep running)"
+}
+
 install_services() {
   local u
-  AGENTDECK_DIR="$DIR" AGENTDECK_USER="$(id -un)" AGENTDECK_SITE="$(caddy_address)"
+  # what the units are rendered from (render_unit, unit_service_common)
+  AGENTKENNEL_DIR="$DIR" AGENTKENNEL_USER="$(id -un)" AGENTKENNEL_SITE="$(caddy_address)"
   mkdir -p "$DIR/.sessions"
-  { printf '# written by install.sh for AGENTDECK_SITE=%s — rewritten on every install\n' "$SITE"
+  { printf '# written by install.sh for AGENTKENNEL_SITE=%s — rewritten on every install\n' "$SITE"
     caddy_global_conf; } > "$DIR/.sessions/caddy-global.caddy"
-  AGENTDECK_HOME="$(getent passwd "$AGENTDECK_USER" | cut -d: -f6)"; AGENTDECK_HOME="${AGENTDECK_HOME:-$HOME}"
-  AGENTDECK_CLAUDE_BIN="$CLAUDE"
+  AGENTKENNEL_HOME="$(getent passwd "$AGENTKENNEL_USER" | cut -d: -f6)"; AGENTKENNEL_HOME="${AGENTKENNEL_HOME:-$HOME}"
+  AGENTKENNEL_CLAUDE_BIN="$CLAUDE"
   [ -n "$WORKDIR" ] || resolve_workdir
-  AGENTDECK_WORKDIR="$WORKDIR"
-  AGENTDECK_PATH="$AGENTDECK_HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-  case ":$AGENTDECK_PATH:" in *":$NODE_DIR:"*) ;; *) AGENTDECK_PATH="$NODE_DIR:$AGENTDECK_PATH" ;; esac
+  AGENTKENNEL_WORKDIR="$WORKDIR"
+  AGENTKENNEL_PATH="$AGENTKENNEL_HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  case ":$AGENTKENNEL_PATH:" in *":$NODE_DIR:"*) ;; *) AGENTKENNEL_PATH="$NODE_DIR:$AGENTKENNEL_PATH" ;; esac
   for u in $UNITS; do write_unit "$u"; done
   if [ "${#CHANGED_UNITS[@]}" -gt 0 ]; then
     say "unit files written: ${CHANGED_UNITS[*]}"
   else
     say "unit files unchanged"
   fi
+  move_old_units
   $SUDO systemctl daemon-reload
   # shellcheck disable=SC2086
   $SUDO systemctl enable -q $RUN_UNITS
@@ -899,7 +997,7 @@ install_services() {
 # by name). Returns 1 after CERT_WAIT seconds without one.
 wait_cert() {
   local code k=() end port="$HTTPS_PORT" name="$SITE"
-  [ "${AGENTDECK_TLS_INTERNAL:-}" = 1 ] && k=(-k)
+  [ "${AGENTKENNEL_TLS_INTERNAL:-${AGENTDECK_TLS_INTERNAL:-}}" = 1 ] && k=(-k)
   [ "${SITE##*:}" = "$SITE" ] || { port="${SITE##*:}"; name="${SITE%:*}"; }
   say "Getting a certificate for $name (up to $CERT_WAIT s)…"
   end=$((SECONDS + CERT_WAIT))
@@ -913,7 +1011,7 @@ wait_cert() {
 }
 
 caddy_log_excerpt() {  # Caddy's certificate errors (the "error" field of its JSON log)
-  $SUDO journalctl -u agentdeck-caddy.service --no-pager -o cat -n 300 2>/dev/null \
+  $SUDO journalctl -u agentkennel-caddy.service --no-pager -o cat -n 300 2>/dev/null \
     | sed -n '/"level":"error"/{s/.*"error":"//;s/"[,}].*//;s/\\"/"/g;p;}' \
     | awk '!seen[$0]++' | tail -n 3 | cut -c1-300 || true
 }
@@ -952,7 +1050,7 @@ wait_healthy() {
     sleep 1
   done
   $SUDO systemctl --no-pager status $RUN_UNITS | tail -n 40 >&2 || true
-  die "the dashboard did not answer on $url. Logs: sudo journalctl -u 'agentdeck-*' -n 50"
+  die "the dashboard did not answer on $url. Logs: sudo journalctl -u 'agentkennel-*' -n 50"
 }
 
 firewall_hint() {
@@ -965,7 +1063,7 @@ firewall_hint() {
 
 # what the dashboard's security is and why, in plain words — one paragraph per case
 explain_mode() {
-  local url me="${DIR:-~/agentdeck}/install.sh" p80="port $HTTP_PORT"
+  local url me="${DIR:-~/agentkennel}/install.sh" p80="port $HTTP_PORT"
   url="$(dashboard_url)"
   case "$SITE" in
     :*)
@@ -1002,9 +1100,9 @@ explain_mode() {
         *)      say "For a trusted certificate (ports $HTTP_PORT and $HTTPS_PORT free and open) run $me --https" ;;
       esac ;;
     *)
-      if [ "${AGENTDECK_TLS_INTERNAL:-}" = 1 ]; then
+      if [ "${AGENTKENNEL_TLS_INTERNAL:-${AGENTDECK_TLS_INTERNAL:-}}" = 1 ]; then
         say "Dashboard: $url — HTTPS is on (certificate from Caddy's internal test CA,"
-        say "AGENTDECK_TLS_INTERNAL=1: browsers will warn). Plain http is off."
+        say "AGENTKENNEL_TLS_INTERNAL=1: browsers will warn). Plain http is off."
       else
         say "Dashboard: $url — HTTPS is on (free certificate from Let's Encrypt for ${SITE%:*},"
         say "renewed automatically). Plain http is off, so your password never travels unencrypted."
@@ -1017,8 +1115,8 @@ explain_mode() {
 }
 
 setup_link() {  # the first-run link's path (/login?setup=…), empty once a password is set
-  (cd "$DIR" && AGENTDECK_PASSFILE="$DIR/.sessions/.dashpass" \
-    AGENTDECK_AUTH_SECRET="$DIR/.sessions/.agents_auth_secret" \
+  (cd "$DIR" && AGENTKENNEL_PASSFILE="$DIR/.sessions/.dashpass" \
+    AGENTKENNEL_AUTH_SECRET="$DIR/.sessions/.agents_auth_secret" \
     python3 status_server.py --setup-link 2>/dev/null) || true
 }
 
@@ -1036,7 +1134,7 @@ finish() {
   fi
   say "  2. Then + New terminal, and sign in to Claude once (every terminal reuses the login)."
   [ -n "$WORKDIR" ] || resolve_workdir
-  say "  New terminals open in ${WORKDIR/#$HOME/\~} (set AGENTDECK_WORKDIR to change)"
+  say "  New terminals open in ${WORKDIR/#$HOME/\~} (set AGENTKENNEL_WORKDIR to change)"
   case "$SITE" in
     :*|https://*) firewall_hint "$PORT" ;;
     *:*) firewall_hint "$HTTP_PORT"; firewall_hint "${SITE##*:}" ;;
@@ -1049,28 +1147,30 @@ finish() {
   guests_note
   echo
   say "Agents run as $(id -un) with full access to this machine (sudo included)."
-  say "Status: systemctl status 'agentdeck-*' · logs: journalctl -u agentdeck-status -f"
+  say "Status: systemctl status 'agentkennel-*' · logs: journalctl -u agentkennel-status -f"
   say "The agents' tmux server is their own: TMUX_TMPDIR=$DIR/$TMUX_SUBDIR tmux ls"
   say "Update: run the same command again · remove: $DIR/install.sh --uninstall"
 }
 
 uninstall() {
   local u dir tdir purge_dir=""
-  dir="$(conf_get AGENTDECK_DIR)"
-  if [ -z "$dir" ] && [ -f "$SYSTEMD_DIR/agentdeck-status.service" ]; then
-    dir="$(sed -n 's/^WorkingDirectory=//p' "$SYSTEMD_DIR/agentdeck-status.service" | head -n 1)"
-  fi
+  dir="$(conf_get DIR)"
+  for u in agentkennel-status.service agentdeck-status.service; do   # agentdeck-: compat
+    if [ -z "$dir" ] && [ -f "$SYSTEMD_DIR/$u" ]; then
+      dir="$(sed -n 's/^WorkingDirectory=//p' "$SYSTEMD_DIR/$u" | head -n 1)"
+    fi
+  done
   [ "$PURGE" = 1 ] && purge_dir="$(purge_target)"
   step "Stopping and removing the services"
-  for u in $UNITS; do
+  for u in $UNITS $OLD_UNITS; do      # OLD_UNITS: an install from before v2.1.0
     $SUDO systemctl disable --now -q "$u" 2>/dev/null || true
     if [ -e "$SYSTEMD_DIR/$u" ]; then $SUDO rm -f "$SYSTEMD_DIR/$u"; fi
   done
   $SUDO systemctl daemon-reload || true
-  $SUDO systemctl reset-failed 'agentdeck-*' 2>/dev/null || true
+  $SUDO systemctl reset-failed 'agentkennel-*' 'agentdeck-*' 2>/dev/null || true
   # the agents' own tmux server (KillMode=process kept it through the stop) — it lives in
   # the recorded TMUX_TMPDIR, so no other tmux server of this user is ever touched
-  tdir="$(conf_get AGENTDECK_TMUX_TMPDIR)"
+  tdir="$(conf_get TMUX_TMPDIR)"
   case "$tdir" in
     /*/"$TMUX_SUBDIR")
       if [ -d "$tdir" ]; then
@@ -1087,7 +1187,7 @@ uninstall() {
     step "Deleting AgentKennel's files"
     if [ -n "$purge_dir" ]; then
       rm -rf -- "$purge_dir"; say "deleted $purge_dir"
-      rm -f -- "$CONF_FILE"
+      rm -f -- "$CONF_FILE" "$OLD_CONF_FILE"
     fi
     say "kept: ttyd, Caddy, Node.js, Claude Code and your Claude login in ~/.claude"
   else
@@ -1111,9 +1211,9 @@ main() {
   step "AgentKennel code"
   local was_piped=0; [ -z "$(self_dir)" ] && was_piped=1
   get_repo
-  if [ "$was_piped" = 1 ] && [ -z "${AGENTDECK_REEXEC:-}" ]; then
+  if [ "$was_piped" = 1 ] && [ -z "${AGENTKENNEL_REEXEC:-${AGENTDECK_REEXEC:-}}" ]; then
     # continue with the installer from the code just fetched (always the matching version)
-    AGENTDECK_GUESTS="$GUESTS" AGENTDECK_REEXEC=1 exec bash "$DIR/install.sh" "${ARGS[@]}" </dev/null
+    AGENTKENNEL_GUESTS="$GUESTS" AGENTKENNEL_REEXEC=1 exec bash "$DIR/install.sh" "${ARGS[@]}" </dev/null
   fi
   mkdir -p "$DIR/.sessions"
 
@@ -1140,5 +1240,5 @@ main() {
 }
 
 # tests source the functions only (tests/test_install_sh.py, always on a copy)
-[ "${AGENTDECK_SOURCE_ONLY:-}" = 1 ] && return 0 2>/dev/null
+[ "${AGENTKENNEL_SOURCE_ONLY:-${AGENTDECK_SOURCE_ONLY:-}}" = 1 ] && return 0 2>/dev/null
 main "$@" </dev/null

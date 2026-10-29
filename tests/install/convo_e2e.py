@@ -6,7 +6,7 @@ test container (tests/install/convo_e2e.sh boots it). Stdlib only.
 
 From the host: the dashboard over BASE_URL (login, /api/library, /sess/ websocket,
 /tasks/state.json); inside the container, as user ubuntu: its OWN tmux server
-(TMUX_TMPDIR=~/agentdeck/.sessions/tmux — never the host's), /proc and ~/.claude.
+(TMUX_TMPDIR=~/agentkennel/.sessions/tmux — never the host's), /proc and ~/.claude.
 Keys go to the container's tmux with send-keys; the screen is read with capture-pane.
 
 Every check prints PASS/FAIL with the evidence; the last lines are a table row per
@@ -31,8 +31,8 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from smoke import NoRedirect, ttyd_attach  # noqa: E402
 
-TMUX_TMPDIR = "/home/ubuntu/agentdeck/.sessions/tmux"
-TRACKER = "/home/ubuntu/agentdeck/tasks-dashboard/tracker.py"
+TMUX_TMPDIR = "/home/ubuntu/agentkennel/.sessions/tmux"
+TRACKER = "/home/ubuntu/agentkennel/tasks-dashboard/tracker.py"
 
 FAILED: list[str] = []
 TABLE: list[tuple[str, str]] = []
@@ -452,7 +452,7 @@ def run(deck, box, password, label, setup=""):
     TABLE.append(("task board: task added in the pane", f"session {stamp}"))
     p, _ = claude_in(box, csess)
     if p:
-        note(f"claude's own AGENTDECK_SESSION={one_var(box, p, 'AGENTDECK_SESSION')} (exported "
+        note(f"claude's own AGENTKENNEL_SESSION={one_var(box, p, 'AGENTKENNEL_SESSION')} (exported "
              "once at launch: stale after the switch; the tracker stamps CLAUDE_CODE_SESSION_ID, "
              "which Claude sets for its shells)")
 
@@ -514,7 +514,7 @@ def run(deck, box, password, label, setup=""):
         rows = {r["id"]: r for r in deck.library()}
         sess = box.sessions()
         runs = {s: live_uuid(box, claude_in(box, s)[0]) for s in sess}
-        logged = box.sh("sudo journalctl -u agentdeck-status --no-pager 2>/dev/null "
+        logged = box.sh("sudo journalctl -u agentkennel-status --no-pager 2>/dev/null "
                         f"| grep -m1 'conversation {B} is open in'").stdout.strip()
         check("/resume of a conversation open elsewhere: both terminals kept, nothing merged",
               f"cs-{B}" in sess and f"cs-{C}" in sess and B in rows and C in rows,
