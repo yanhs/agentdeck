@@ -83,6 +83,7 @@ class FakeTmux:
         monkeypatch.setattr(reaper, "session_attached", lambda s: self.sessions[s]["attached"])
         monkeypatch.setattr(reaper, "session_activity", lambda s: self.sessions[s]["activity"])
         monkeypatch.setattr(reaper, "session_has_bg_jobs", lambda s: self.sessions[s]["bg"])
+        monkeypatch.setattr(reaper, "session_screen", lambda s: self.sessions[s].get("screen"))
         monkeypatch.setattr(reaper, "unload", lambda s: self.killed.append(s) or True)
 
 
@@ -117,6 +118,84 @@ def test_dry_run_kills_nothing(monkeypatch, tmp_path):
     t.install(monkeypatch, tmp_path)
     assert reaper.sweep(now=now, dry_run=True) == ["s"]
     assert t.killed == []
+
+
+# ── a redraw is not output: the clock follows what the screen SHOWS ────────
+# Claude Code repaints its whole screen every 30 minutes even when idle (measured
+# 2026-10-29 on 2.1.312: cs-3f304eb3 at 10:46:21, 11:16:21, 11:46:21 — the screen
+# before and after byte for byte the same). tmux counts the repaint as output, so
+# the 2 h clock restarted every 30 min and no terminal was unloaded after 27.10.
+def test_a_repaint_that_changes_nothing_does_not_restart_the_clock(monkeypatch, tmp_path):
+    t0 = 100_000
+    t = FakeTmux({"s": dict(activity=t0 - 60, attached=False, bg=False, screen="idle prompt")})
+    t.install(monkeypatch, tmp_path)
+    assert reaper.sweep(now=t0) == []
+    for k in range(1, 4):                       # repaints at +30, +60, +90 min
+        t.sessions["s"]["activity"] = t0 + 1800 * k
+        assert reaper.sweep(now=t0 + 1800 * k + 30) == []
+    t.sessions["s"]["activity"] = t0 + IDLE - 10
+    assert reaper.sweep(now=t0 + IDLE) == ["s"]
+
+
+def test_a_screen_that_changes_restarts_the_clock(monkeypatch, tmp_path):
+    t0 = 100_000
+    t = FakeTmux({"s": dict(activity=t0 - 60, attached=False, bg=False, screen="working ⠋")})
+    t.install(monkeypatch, tmp_path)
+    assert reaper.sweep(now=t0) == []
+    t.sessions["s"].update(activity=t0 + 1800, screen="working ⠙")
+    assert reaper.sweep(now=t0 + 1830) == []
+    assert reaper.sweep(now=t0 + IDLE) == []    # changed 1.5 h ago: still in the window
+    assert reaper.sweep(now=t0 + 1800 + IDLE + 60) == ["s"]
+
+
+def test_first_sight_counts_from_the_last_output(monkeypatch, tmp_path):
+    # a terminal silent for 3 h when the reaper first reads its screen goes now,
+    # not two hours later
+    now = 100_000
+    t = FakeTmux({"s": dict(activity=now - IDLE - 3600, attached=False, bg=False, screen="x")})
+    t.install(monkeypatch, tmp_path)
+    assert reaper.sweep(now=now) == ["s"]
+
+
+def test_unreadable_screen_falls_back_to_tmux_activity(monkeypatch, tmp_path):
+    now = 100_000
+    t = FakeTmux({"old": dict(activity=now - IDLE - 60, attached=False, bg=False, screen=None),
+                  "new": dict(activity=now - 60, attached=False, bg=False, screen=None)})
+    t.install(monkeypatch, tmp_path)
+    assert reaper.sweep(now=now) == ["old"]
+
+
+def test_screen_record_is_kept_apart_and_forgotten_with_the_session(monkeypatch, tmp_path):
+    now = 100_000
+    t = FakeTmux({"s": dict(activity=now - 60, attached=False, bg=False, screen="x")})
+    t.install(monkeypatch, tmp_path)
+    reaper.sweep(now=now)
+    assert reaper.load_state() == {}            # the tab clock file keeps its shape
+    assert list(reaper.load_screens()) == ["s"]
+    del t.sessions["s"]
+    reaper.sweep(now=now + 60)
+    assert reaper.load_screens() == {}
+
+
+def test_a_repaint_on_a_real_tmux_moves_activity_but_not_the_screen_clock(monkeypatch, tmp_path):
+    sock = f"agentkennel-test-reaper-paint-{os.getpid()}"
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", sock)
+    monkeypatch.setattr(reaper, "STATE_FILE", str(tmp_path / "state.json"))
+    subprocess.run(["tmux", "-L", sock, "-f", "/dev/null", "new-session", "-d", "-s", "probe",
+                    "while true; do printf '\\033[H\\033[2Jsame screen'; sleep 1; done"],
+                   check=True)
+    try:
+        time.sleep(1.5)
+        screens = {}
+        first = reaper.output_at("probe", time.time(), screens)
+        time.sleep(2.5)
+        assert reaper.session_activity("probe") > first      # tmux saw the repaints
+        assert reaper.output_at("probe", time.time(), screens) == first
+        assert "same screen" in reaper.session_screen("probe")
+        assert reaper.session_screen("prob") is None          # exact target, no prefix match
+    finally:
+        subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
+        _drop_socket(sock)
 
 
 # ── background-task detection on real processes ────────────────────────────
@@ -392,9 +471,11 @@ def test_sweep_syncs_first_and_carries_the_seen_attached_clock(switched):
     # renamed terminal looks idle since its last output and is unloaded
     now = time.time() + reaper.IDLE_SECONDS + 50
     reaper.save_state({"cs-a1a1a1a1": now - 100})
+    reaper.save_screens({"cs-a1a1a1a1": ["h", now - 100]})
     assert reaper.sweep(now=now) == []
     assert switched.names() == ["cs-b2b2b2b2"]
     assert reaper.load_state() == {"cs-b2b2b2b2": now - 100}
+    assert list(reaper.load_screens()) == ["cs-b2b2b2b2"]
     assert [e["id"] for e in reaper.library.load(switched.reg)["sessions"]] == ["b2b2b2b2"]
 
 

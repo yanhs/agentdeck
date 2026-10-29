@@ -8,9 +8,12 @@ transcript, so killing the session loses nothing: the dashboard shows it
 greyed (active=false), and clicking it reloads it via ttyd -> launch script ->
 `claude --resume`.
 
-Run once per minute from cron. "Idle" is measured from the terminal's last
-screen output (tmux `session_activity`): a working Claude animates its spinner
-every second, an idle one prints nothing. (The first version sampled CPU for
+Run once per minute from cron. "Idle" is measured from the last time the
+terminal's screen CHANGED: a working Claude animates its spinner every second,
+an idle one shows the same screen. Not from tmux's last output alone: an idle
+Claude Code repaints its whole screen every 30 minutes without changing a
+character (2.1.312, measured 2026-10-29), and tmux counts the repaint as output,
+so the 2 h clock restarted every half hour and nothing was unloaded. (The first version sampled CPU for
 0.3 s each minute; an idle Claude still burns a few ticks now and then, which
 read as "working" ~3-4% of the time — over two hours the clock almost never
 ran out, so terminals sat loaded for days.)
@@ -34,6 +37,7 @@ IDLE_SECONDS, by the same rules otherwise.
 It never touches agents.json (the id stays in the dashboard's order, so the
 card stays visible and reloadable) and never deletes a transcript.
 """
+import hashlib
 import json
 import os
 import re
@@ -53,6 +57,7 @@ BG_MAX_SECONDS = int(os.getenv("REAPER_BG_MAX_SECONDS", "86400"))   # 24 hours
 # silence — the same window POST /api/library/archive uses (DELETE_QUIET_SECONDS).
 ARCHIVED_IDLE_SECONDS = int(os.getenv("REAPER_ARCHIVED_IDLE_SECONDS", "120"))
 STATE_FILE = os.path.join(HERE, ".idle_reaper_state.json")          # last seen attached
+# Beside it: what each terminal's screen showed and since when (see output_at).
 
 # Legacy numbered terminals (until the session-library migration) ...
 SESSIONS = ["claude-terminal"] + [f"claude-terminal-{i}" for i in range(2, 13)]
@@ -116,6 +121,32 @@ def session_activity(session):
     times = [int(v) for n, _, v in (l.partition("\t") for l in r.stdout.splitlines())
              if n == session and v.isdigit()] if r.returncode == 0 else []
     return max(times) if times else None
+
+
+def session_screen(session):
+    """The text the terminal shows now, or None (gone, or tmux failed)."""
+    r = _tmux(["capture-pane", "-p", "-t", f"={session}:"])   # exact target
+    return r.stdout if r.returncode == 0 else None
+
+
+def output_at(session, now, screens):
+    """Unix time the terminal's screen last changed, or None if unknown.
+
+    screens[session] = [hash of the screen, since when]; updated in place. A new
+    or changed screen dates from tmux's last output (when it was drawn); the same
+    screen keeps its old time however often it is repainted. An unreadable screen
+    falls back to tmux's last output."""
+    tmux_at = session_activity(session)
+    screen = session_screen(session)
+    if screen is None:
+        return tmux_at
+    digest = hashlib.sha1(screen.encode()).hexdigest()
+    seen = screens.get(session)
+    if seen and seen[0] == digest:
+        return seen[1]
+    at = tmux_at if tmux_at is not None else now
+    screens[session] = [digest, at]
+    return at
 
 
 def get_pane_pid(session):
@@ -221,18 +252,35 @@ def load_state():
         return {}
 
 
-def save_state(state):
-    tmp = STATE_FILE + ".tmp"
+def save_state(state, path=None):
+    path = path or STATE_FILE
+    tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(state, f)
-    os.replace(tmp, STATE_FILE)
+    os.replace(tmp, path)
+
+
+def _screens_file():
+    return os.path.splitext(STATE_FILE)[0] + "_screens.json"
+
+
+def load_screens():
+    try:
+        with open(_screens_file()) as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_screens(screens):
+    save_state(screens, _screens_file())
 
 
 # ── main sweep ──────────────────────────────────────────────────────────────
-def sync_conversations(state):
+def sync_conversations(state, screens):
     """Before deciding: a terminal whose Claude now runs another conversation takes
     its number (convo_sync — tmux cs-A becomes cs-B), and what we remember about
-    cs-A (when a tab was last seen on it) goes with it. A failure is logged and the
+    cs-A (when a tab was last seen on it, what its screen showed) goes with it. A failure is logged and the
     sweep goes on with the names as they are."""
     try:
         switched = convo_sync.sync(run=lambda *a: _tmux(list(a)),
@@ -244,18 +292,22 @@ def sync_conversations(state):
         old, new = library.tmux_name(a), library.tmux_name(b)
         if old in state:
             state[new] = max(state.pop(old), state.get(new) or 0)
+        if old in screens:
+            screens[new] = screens.pop(old)
 
 
 def sweep(now=None, dry_run=False):
     now = now if now is not None else time.time()
-    state = load_state()
+    state, screens = load_state(), load_screens()
     if not dry_run:
-        sync_conversations(state)
+        sync_conversations(state, screens)
     actions = []
     archived = archived_ids()
-    for s in watched_sessions():
+    watched = watched_sessions()
+    for s in watched:
         if not session_exists(s):
             state.pop(s, None)          # forget dead sessions
+            screens.pop(s, None)
             continue
         attached = session_attached(s)
         if attached:
@@ -265,14 +317,18 @@ def sweep(now=None, dry_run=False):
             state[s] = now              # a timer is pending: working; clock restarts after
             continue
         window = ARCHIVED_IDLE_SECONDS if library.id_from_tmux(s) in archived else IDLE_SECONDS
-        last = last_active_of(session_activity(s), state.get(s))
+        last = last_active_of(output_at(s, now, screens), state.get(s))
         # the process-tree walk only for sessions already past the idle window
         bg = last is not None and now - last >= window and session_has_bg_jobs(s)
         if decide(now, last, False, bg, window, BG_MAX_SECONDS):
             actions.append(s)
             if not dry_run and unload(s):
                 state.pop(s, None)
+                screens.pop(s, None)
+    for s in set(screens) - set(watched):
+        screens.pop(s)                  # a session gone outside the watched list
     save_state(state)
+    save_screens(screens)
     return actions
 
 
