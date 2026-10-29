@@ -59,6 +59,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import library  # noqa: E402
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _PIDFILE = re.compile(r"(\d+)\.json")
@@ -79,7 +80,7 @@ def log(msg, key=None):
 
 
 def sessions_dir():
-    return (os.getenv("AGENTDECK_CLAUDE_SESSIONS")
+    return (envcompat.get("CLAUDE_SESSIONS")
             or os.path.join(os.path.expanduser("~"), ".claude", "sessions"))
 
 
@@ -144,7 +145,7 @@ def live_files(directory=None):
 
 
 def _default_run(*args):
-    sock = os.getenv("AGENTDECK_TMUX_SOCKET")
+    sock = envcompat.get("TMUX_SOCKET")
     env = {k: v for k, v in os.environ.items() if k != "TMUX"}
     return subprocess.run(["tmux", *(["-L", sock] if sock else []), *args],
                           capture_output=True, text=True, env=env, timeout=15)
@@ -295,7 +296,7 @@ def sync(run=None, lib_file=None, lock=True, now=None, projects_root=None):
     it. Returns the switches made, [(A, B)]. Reads first without any lock; only a
     needed switch takes the ensure lock and writes."""
     run = run or _default_run
-    lib_file = lib_file or os.getenv("AGENTDECK_LIBRARY") or library.LIB_FILE
+    lib_file = lib_file or envcompat.get("LIBRARY") or library.LIB_FILE
     projects_root = projects_root or library.claude_projects_root()
     panes = pane_conversations(run)
     if not panes or not plan(library.load(lib_file), panes):

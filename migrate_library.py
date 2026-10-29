@@ -9,7 +9,7 @@
     migrate_library.py --apply --rollback-dashboard
                                               only put web/index-legacy.html back as index.html
     --repo DIR   the terminal repo to work on (default: this script's directory; tests
-                 pass a temp copy). Registry: library.LIB_FILE (env AGENTDECK_LIBRARY).
+                 pass a temp copy). Registry: library.LIB_FILE (env AGENTKENNEL_LIBRARY).
 
 What --apply does:
  1. Registry: one entry per slot whose transcript
@@ -31,7 +31,7 @@ index.html.pre-swap-<time> before it is overwritten.
 
 tmux: only `list-sessions -F`, filtered here (exact names). Never display-message —
 tmux 3.2a crashes the whole server on it with a missing target.
-AGENTDECK_TMUX_SOCKET=<name> -> tmux -L <name>.
+AGENTKENNEL_TMUX_SOCKET=<name> -> tmux -L <name>.
 """
 import argparse
 import filecmp
@@ -150,7 +150,8 @@ unset CLAUDE_CODE_SESSION CLAUDE_SESSION_ID CLAUDE_CODE CLAUDE_CODE_RUNNING CLAU
 for var in $(env | cut -d= -f1 | grep -i CLAUDE | grep -vx CLAUDE_BIN); do unset "$var"; done
 
 TMUX_CMD=(tmux)
-[ -n "${{AGENTDECK_TMUX_SOCKET:-}}" ] && TMUX_CMD=(tmux -L "$AGENTDECK_TMUX_SOCKET")
+SOCK="${{AGENTKENNEL_TMUX_SOCKET:-${{AGENTDECK_TMUX_SOCKET:-}}}}"   # compat: the old name too
+[ -n "$SOCK" ] && TMUX_CMD=(tmux -L "$SOCK")
 
 # exact name match in code (list-sessions), never display-message
 if "${{TMUX_CMD[@]}}" list-sessions -F '#{{session_name}}' 2>/dev/null | grep -qxF -- "$SESSION"; then

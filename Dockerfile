@@ -45,7 +45,8 @@ COPY . /app
 # survive a container re-create (otherwise they land in /root/.local/share and are lost).
 # TRACKER_STATE: the task board file, set image-wide so tracker.py in a `docker exec` shell
 # writes the same board the agents and the guard hooks use (it lives in the sessions volume).
-ENV AGENTDECK_WORKDIR=/work IS_SANDBOX=1 LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+# AGENTDECK_WORKDIR: the same, under its name before v2.1.0 (compat, for older tools).
+ENV AGENTKENNEL_WORKDIR=/work AGENTDECK_WORKDIR=/work IS_SANDBOX=1 LANG=C.UTF-8 LC_ALL=C.UTF-8 \
     XDG_DATA_HOME=/data XDG_CONFIG_HOME=/data/config \
     TRACKER_STATE=/app/.sessions/tasks-state.json
 RUN mkdir -p /work /app/.sessions /data/config

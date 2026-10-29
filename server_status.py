@@ -33,9 +33,13 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
 
 WORKING_PCT = 5.0          # a member using this much CPU (of one core) is "working"
 DOCKER_TTL = 15.0
@@ -227,7 +231,7 @@ def _run(cmd, timeout=5):
 
 def default_tmux_panes():
     """[(session_name, pane_pid)] — list-panes only (display-message segfaults tmux 3.2a)."""
-    sock = os.environ.get("AGENTDECK_TMUX_SOCKET")
+    sock = envcompat.get("TMUX_SOCKET")
     out = _run(["tmux", *(["-L", sock] if sock else []), "list-panes", "-a",
                 "-F", "#{session_name}\t#{pane_pid}"], timeout=3)
     panes = []
@@ -285,7 +289,7 @@ _lib_cache = {"key": None, "val": ({}, {})}
 def default_library_names():
     """({sid: name}, {uuid: name}) from the session library (cached by mtime)."""
     import library
-    path = os.environ.get("AGENTDECK_LIBRARY") or library.LIB_FILE
+    path = envcompat.get("LIBRARY") or library.LIB_FILE
     try:
         key = os.stat(path).st_mtime_ns
     except OSError:

@@ -1,45 +1,49 @@
+# The project name: volumes are agentkennel_agentkennel-*, whatever the folder is called.
+name: agentkennel
+
 services:
-  agentdeck:
+  agentkennel:
     build: .
     ports:
-      # http://<your-vps-ip>:8765 — set AGENTDECK_PORT to pick any free host port.
-      - "${AGENTDECK_PORT:-8765}:8765"
+      # http://<your-vps-ip>:8765 — set AGENTKENNEL_PORT to pick any free host port
+      # (AGENTDECK_*, the names before v2.1.0, are read as the fallback everywhere here).
+      - "${AGENTKENNEL_PORT:-${AGENTDECK_PORT:-8765}}:8765"
     environment:
       # Dashboard password: set it on first visit in the browser (it exposes live
       # terminals) — or pre-seed it here.
-      AGENTDECK_PASSWORD: "${AGENTDECK_PASSWORD:-}"
-      AGENTDECK_EMAIL: "${AGENTDECK_EMAIL:-you@example.com}"
+      AGENTKENNEL_PASSWORD: "${AGENTKENNEL_PASSWORD:-${AGENTDECK_PASSWORD:-}}"
+      AGENTKENNEL_EMAIL: "${AGENTKENNEL_EMAIL:-${AGENTDECK_EMAIL:-you@example.com}}"
       # Default: plain http on :8765. Want a domain + automatic HTTPS? Set
-      # AGENTDECK_SITE=your-domain AND change the port line above to "80:80" + "443:443".
-      AGENTDECK_SITE: "${AGENTDECK_SITE:-:8765}"
+      # AGENTKENNEL_SITE=your-domain AND change the port line above to "80:80" + "443:443".
+      AGENTKENNEL_SITE: "${AGENTKENNEL_SITE:-${AGENTDECK_SITE:-:8765}}"
       # Library changes (new/rename/archive/...) are accepted only from the dashboard's own
       # address — by default the scheme + Host the browser used. Behind another proxy that
       # rewrites Host, set it explicitly, e.g. https://agents.example.com
-      AGENTDECK_ORIGIN: "${AGENTDECK_ORIGIN:-}"
+      AGENTKENNEL_ORIGIN: "${AGENTKENNEL_ORIGIN:-${AGENTDECK_ORIGIN:-}}"
       # Guard hooks keep the agents on the task board: work goes on the board before the
       # first edit, an agent doesn't stop mid-task with nothing scheduled to resume it, and a
       # terminal waiting on its own timer stays loaded until the timer fires.
-      # On by default; AGENTDECK_GUARDS=0 turns them off (removed on the next start).
-      AGENTDECK_GUARDS: "${AGENTDECK_GUARDS:-1}"
+      # On by default; AGENTKENNEL_GUARDS=0 turns them off (removed on the next start).
+      AGENTKENNEL_GUARDS: "${AGENTKENNEL_GUARDS:-${AGENTDECK_GUARDS:-1}}"
     volumes:
       # the agents' Claude login — stored here; sign in once in a dashboard terminal (no
       # Claude needed on the host), and it's reused on every restart.
-      - agentdeck-claude:/root/.claude
+      - agentkennel-claude:/root/.claude
       # keep agent conversations resumable across restarts
-      - agentdeck-sessions:/app/.sessions
+      - agentkennel-sessions:/app/.sessions
       # persist TLS certs if you switch to a domain (avoids Let's Encrypt rate limits)
       - caddy-data:/data
       # the agents' working directory — kept in a volume so their work survives
       # `docker compose down` / a re-create. To work on YOUR project files instead,
       # replace this line with a bind mount:  - ./my-project:/work
-      - agentdeck-work:/work
+      - agentkennel-work:/work
     restart: unless-stopped
     # an init as PID 1 reaps orphans (caddy, which the entrypoint execs, never does):
     # without it every exited orphan stays a zombie and eats the process limit
     init: true
 
 volumes:
-  agentdeck-claude:
-  agentdeck-sessions:
+  agentkennel-claude:
+  agentkennel-sessions:
   caddy-data:
-  agentdeck-work:
+  agentkennel-work:

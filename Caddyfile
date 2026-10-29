@@ -1,14 +1,14 @@
 # Reverse proxy + login for `./start.sh` (no Docker). status_server manages the password:
 # you set it on first visit, and there's a Change-password page. Caddy asks /check whether
-# the session cookie is valid; if not -> redirect to /login. Set AGENTDECK_SITE to a domain
+# the session cookie is valid; if not -> redirect to /login. Set AGENTKENNEL_SITE to a domain
 # (or <ip>.sslip.io) for automatic HTTPS; default is plain http on :8765.
 {
-	email {$AGENTDECK_EMAIL:you@example.com}
+	email {$AGENTKENNEL_EMAIL:you@example.com}
 	# install.sh's per-mode options (self-signed / alternate port); nothing without it
-	import "{$AGENTDECK_CADDY_GLOBAL:/dev/null}"
+	import "{$AGENTKENNEL_CADDY_GLOBAL:/dev/null}"
 }
 
-{$AGENTDECK_SITE::8765} {
+{$AGENTKENNEL_SITE::8765} {
 	root * web
 
 	route {

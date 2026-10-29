@@ -65,6 +65,7 @@ import uuid as _uuid
 import status_server as ss  # same dir: SESSIONS, strip_ansi, is_junk
 import services_keeper as sk  # noqa: E402
 import library              # topic registry (.sessions/library.json)
+import envcompat            # settings: AGENTKENNEL_*, then the old AGENTDECK_*
 import library_cli          # tmux socket choice, transcript path of a topic
 import convo_sync           # a terminal takes the number of its live conversation
 
@@ -106,7 +107,7 @@ TG_DOWNLOAD_LIMIT = 20 * 1024 * 1024
 # point TG_WHISPER_PY at a virtualenv's python if faster-whisper lives there.
 WHISPER_PY = os.environ.get("TG_WHISPER_PY") or sys.executable
 # the folder an agent started from the bot runs in
-AGENT_CWD = (os.environ.get("TG_AGENT_CWD") or os.environ.get("AGENTDECK_WORKDIR")
+AGENT_CWD = (os.environ.get("TG_AGENT_CWD") or envcompat.get("WORKDIR")
              or os.path.expanduser("~"))
 WHISPER_SCRIPT = os.path.join(GATE_DIR, "whisper_transcribe.py")
 
@@ -114,7 +115,7 @@ WHISPER_SCRIPT = os.path.join(GATE_DIR, "whisper_transcribe.py")
 # ── tmux helpers ──────────────────────────────────────────────────────────
 
 def _tmux(*args, cwd=None) -> subprocess.CompletedProcess:
-    # AGENTDECK_TMUX_SOCKET → `tmux -L <name>`, the same server library_cli uses
+    # AGENTKENNEL_TMUX_SOCKET → `tmux -L <name>`, the same server library_cli uses
     # (tests run on their own server and never reach the live one). cwd: where tmux is
     # called from — `/` for a new-session: the server keeps the working directory of
     # the call that starts it (library_cli.LAUNCHER says why)
@@ -304,7 +305,7 @@ _TUI_MARKERS = ("bypass permissions", "shift+tab", "esc to interrupt", "? for sh
 
 
 def _lib_file() -> str:
-    return os.environ.get("AGENTDECK_LIBRARY") or library.LIB_FILE
+    return envcompat.get("LIBRARY") or library.LIB_FILE
 
 
 def _load_lib() -> dict:
@@ -898,7 +899,7 @@ def transcript_path(aid: str) -> str | None:
         return None
     if not library_cli._UUID.fullmatch(u):
         return None
-    cwd = os.environ.get("AGENTDECK_WORKDIR") or os.path.dirname(GATE_DIR)
+    cwd = envcompat.get("WORKDIR") or os.path.dirname(GATE_DIR)
     return library_cli.transcript_path(os.path.expanduser("~"), cwd, u)
 
 
@@ -1921,7 +1922,7 @@ async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/new <name> — create a topic (name optional: a dated default), select it
     and load it. It starts where the dashboard's «＋ Новая тема» starts one."""
     name = _CTRL_NL.sub("", " ".join(ctx.args or [])).replace("\n", " ").strip()[:TOPIC_NAME_MAX]
-    cwd = os.environ.get("AGENTDECK_WORKDIR") or os.path.dirname(GATE_DIR)
+    cwd = envcompat.get("WORKDIR") or os.path.dirname(GATE_DIR)
     try:
         with library.update(_lib_file()) as lib:
             e = dict(library.create(lib, name, cwd=cwd, now=int(time.time())))

@@ -21,6 +21,7 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 import library   # session registry (library.py next to this file)
+import envcompat   # settings: AGENTKENNEL_*, then the old AGENTDECK_*
 import convo_sync   # a terminal takes the number of the conversation live in it
 import idle_reaper   # background-task detection (tree_has_task_output), pure /proc walk
 import library_cli   # claude_processes: which claudes run a conversation (Restart)
@@ -440,7 +441,7 @@ def tg_start(token, owner):
     os.makedirs("/work/tg-uploads", exist_ok=True)
     env = {**os.environ, "TG_BRIDGE_TOKEN": token, "TG_BRIDGE_OWNER": str(owner),
            "TG_FILES_DIR": "/work/tg-uploads", "TG_FILES_URL": "",
-           "TG_AGENT_CWD": os.environ.get("AGENTDECK_WORKDIR", "/work")}
+           "TG_AGENT_CWD": envcompat.get("WORKDIR", "/work")}
     try:
         p = subprocess.Popen(["python3", TG_SCRIPT], env=env, cwd=_HERE,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -513,7 +514,7 @@ def tg_render(msg=""):
 
 # ── Session library API: /api/library (see library.py) ──────────────────────
 # Topics live in the registry; the loaded ones are tmux sessions cs-<id>. All tmux
-# calls here go to AGENTDECK_TMUX_SOCKET when set (`tmux -L <name>` — tests use a
+# calls here go to AGENTKENNEL_TMUX_SOCKET when set (`tmux -L <name>` — tests use a
 # private socket), and /close targets exactly "=cs-<id>" after the id is validated
 # and found in the registry, so nothing else can ever be killed from here.
 LIB_ROUTE = "/api/library"
@@ -525,7 +526,7 @@ CLOSE_QUIET_SECONDS = 30 * 60
 # CSRF: POSTs must be JSON (a cross-site <form> cannot send that without a CORS
 # preflight, and we answer no preflight) and, when the browser says where the
 # request comes from, come from the dashboard itself.
-# The dashboard's origin: $AGENTDECK_ORIGIN when set (e.g. https://agents.example.com —
+# The dashboard's origin: $AGENTKENNEL_ORIGIN when set (e.g. https://agents.example.com —
 # needed behind a proxy that rewrites Host or doesn't pass X-Forwarded-Proto, like the
 # nginx config in nginx/); otherwise the request's own scheme + Host, as the proxy
 # forwards them (Caddy keeps Host and sets X-Forwarded-Proto). No Host -> refused.
@@ -533,7 +534,7 @@ CLOSE_QUIET_SECONDS = 30 * 60
 
 def lib_allowed_origin(headers=None):
     """The one Origin library writes are accepted from ('' = none acceptable)."""
-    configured = os.environ.get("AGENTDECK_ORIGIN")
+    configured = envcompat.get("ORIGIN")
     if configured:
         return configured
     headers = headers or {}
@@ -561,17 +562,17 @@ class LibError(Exception):
 
 
 def lib_path():
-    return os.environ.get("AGENTDECK_LIBRARY") or library.LIB_FILE
+    return envcompat.get("LIBRARY") or library.LIB_FILE
 
 
 def lib_workdir():
-    """Where a new topic starts: $AGENTDECK_WORKDIR, else the folder above this
+    """Where a new topic starts: $AGENTKENNEL_WORKDIR, else the folder above this
     repo — the same default the launch-claude*.sh scripts use."""
-    return os.environ.get("AGENTDECK_WORKDIR") or os.path.dirname(_HERE)
+    return envcompat.get("WORKDIR") or os.path.dirname(_HERE)
 
 
 def lib_tmux(*args):
-    sock = os.environ.get("AGENTDECK_TMUX_SOCKET")
+    sock = envcompat.get("TMUX_SOCKET")
     return subprocess.run(["tmux", *(["-L", sock] if sock else []), *args],
                           capture_output=True, text=True)
 
@@ -1060,7 +1061,7 @@ def lib_restart(sid, force, check=False):
         raise LibError(500, "the registry entry is corrupt (uuid)")
     with convo_sync._ensure_lock(lib_path(), True):          # library_cli's ensure lock
         _unload_locked(name, u, RESTART_CHANGED, "nothing was started")
-    env = dict(os.environ, AGENTDECK_LIBRARY=lib_path())
+    env = dict(os.environ, **envcompat.both("LIBRARY", lib_path()))
     try:
         r = subprocess.run([sys.executable, LIBRARY_CLI, "ensure", sid], capture_output=True,
                            text=True, env=env, timeout=RESTART_ENSURE_TIMEOUT)
@@ -1923,12 +1924,11 @@ class LiveHandler(BaseHTTPRequestHandler):
 # request (fetch, iframe, ttyd ws) carries it automatically. Passwords are the
 # SAME (verified against the existing /etc/nginx/.htpasswd_agents).
 
-HTPASSWD_FILE = os.environ.get("AGENTDECK_HTPASSWD", "/etc/nginx/.htpasswd_agents")
-# Cookie-signing key. AGENTDECK_AUTH_SECRET lets the entrypoint keep it in the persistent
+HTPASSWD_FILE = envcompat.get("HTPASSWD", "/etc/nginx/.htpasswd_agents")
+# Cookie-signing key. AGENTKENNEL_AUTH_SECRET lets the entrypoint keep it in the persistent
 # volume (so sessions survive a container recreate and the key is never baked into the image);
 # the default sits next to this module, leaving the existing host service untouched.
-AUTH_SECRET_FILE = os.environ.get(
-    "AGENTDECK_AUTH_SECRET",
+AUTH_SECRET_FILE = envcompat.get("AUTH_SECRET",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), ".agents_auth_secret"),
 )
 AUTH_COOKIE = "agents_session"
@@ -1972,9 +1972,9 @@ def _verify_token(tok):
 
 
 # Standalone/Docker mode: keep a single dashboard password (pbkdf2 hash) in a file the
-# user SETS on first run and can change in the UI. If AGENTDECK_PASSFILE is unset, behaviour
+# user SETS on first run and can change in the UI. If AGENTKENNEL_PASSFILE is unset, behaviour
 # is unchanged (verify against /etc/nginx/.htpasswd_agents) — the live nginx setup is untouched.
-PASSFILE = os.environ.get("AGENTDECK_PASSFILE", "")
+PASSFILE = envcompat.get("PASSFILE", "")
 
 
 def _pw_is_set():
@@ -2188,9 +2188,9 @@ def _setup_locked():
     return (_AUTH_HEAD + '<div class="card">'
       '<h1>🐾 AgentKennel</h1><p class="sub">No password yet</p>'
       '<p>Open the <b>setup link</b> the installer printed — only that link can set the '
-      'password. To show it again, on the server run <code>~/agentdeck/install.sh</code> '
+      'password. To show it again, on the server run <code>~/agentkennel/install.sh</code> '
       'again, or <code>python3 status_server.py --setup-link</code> in the AgentKennel folder '
-      '(Docker: <code>docker compose logs agentdeck | grep setup</code>).</p>'
+      '(Docker: <code>docker compose logs agentkennel | grep setup</code>).</p>'
       '</div></body></html>')
 
 
@@ -2217,7 +2217,7 @@ def _cookie_flags(secure=True):
 
 class AuthHandler(BaseHTTPRequestHandler):
     """Cookie login. /check (auth probe), /login (form/verify; FIRST RUN in
-    AGENTDECK_PASSFILE mode = set the password), /change-password, /logout."""
+    AGENTKENNEL_PASSFILE mode = set the password), /change-password, /logout."""
 
     def _secure(self):
         return self.headers.get("X-Forwarded-Proto", "") == "https"
@@ -2346,10 +2346,10 @@ class AuthHandler(BaseHTTPRequestHandler):
 # Default: inside the repo (.sessions/paste — the persisted volume in Docker), no public
 # URL → the response's "url" is the local path. The dashboard only uses "path" (typed into
 # the terminal so the agent can Read it). A server that serves the folder publicly sets
-# AGENTDECK_PASTE_DIR + AGENTDECK_PASTE_URL (TG_FILES_DIR_IMG is the legacy name for the dir).
-PASTE_DIR = (os.environ.get("AGENTDECK_PASTE_DIR") or os.environ.get("TG_FILES_DIR_IMG")
+# AGENTKENNEL_PASTE_DIR + AGENTKENNEL_PASTE_URL (TG_FILES_DIR_IMG is the legacy name for the dir).
+PASTE_DIR = (envcompat.get("PASTE_DIR") or os.environ.get("TG_FILES_DIR_IMG")
              or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".sessions", "paste"))
-PASTE_URL = os.environ.get("AGENTDECK_PASTE_URL", "").rstrip("/")
+PASTE_URL = envcompat.get("PASTE_URL", "").rstrip("/")
 _PASTE_EXT = {
     "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/gif": ".gif",
     "image/webp": ".webp", "image/bmp": ".bmp", "image/svg+xml": ".svg",
@@ -2381,9 +2381,9 @@ def save_paste_image(data: bytes, ctype: str, token: str, dest_dir: str | None =
 # A path, not a link: the agent runs on this machine and reads the file directly, and a
 # public link would expose whatever was uploaded (client documents, keys). Files keep
 # their (made safe) name under <UPLOAD_DIR>/<YYYY-MM-DD>/, folder 0700, files 0600.
-UPLOAD_DIR = (os.environ.get("AGENTDECK_UPLOAD_DIR")
+UPLOAD_DIR = (envcompat.get("UPLOAD_DIR")
               or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".sessions", "uploads"))
-UPLOAD_MAX = int(float(os.environ.get("AGENTDECK_UPLOAD_MAX_MB", "100")) * 1024 * 1024)
+UPLOAD_MAX = int(float(envcompat.get("UPLOAD_MAX_MB", "100")) * 1024 * 1024)
 
 
 def _upload_name(raw):

@@ -44,6 +44,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import library  # noqa: E402  (hold markers)
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
 import convo_sync  # noqa: E402  (a terminal follows its conversation's number)
 IDLE_SECONDS = int(os.getenv("REAPER_IDLE_SECONDS", "7200"))        # 2 hours
 BG_MAX_SECONDS = int(os.getenv("REAPER_BG_MAX_SECONDS", "86400"))   # 24 hours
@@ -65,8 +66,8 @@ _TASK_OUTPUT = re.compile(r"/tasks/[A-Za-z0-9_-]+\.output$")
 
 # ── tmux / proc helpers ─────────────────────────────────────────────────────
 def _tmux(args):
-    # AGENTDECK_TMUX_SOCKET points tests at a private tmux server (tmux -L).
-    sock = os.getenv("AGENTDECK_TMUX_SOCKET")
+    # AGENTKENNEL_TMUX_SOCKET points tests at a private tmux server (tmux -L).
+    sock = envcompat.get("TMUX_SOCKET")
     base = ["tmux", "-L", sock] if sock else ["tmux"]
     return subprocess.run([*base, *args], capture_output=True, text=True)
 
@@ -171,7 +172,7 @@ def archived_ids():
     """Ids of archived registry entries — trashed ones too (Move to Trash unloads at
     once; one still loaded gets the archive's short window); empty when the
     registry is missing or unreadable (never guess towards killing)."""
-    path = os.getenv("AGENTDECK_LIBRARY") or library.LIB_FILE
+    path = envcompat.get("LIBRARY") or library.LIB_FILE
     try:
         lib = library.load(path)
         return {e["id"] for e in lib.get("sessions", [])
@@ -235,7 +236,7 @@ def sync_conversations(state):
     sweep goes on with the names as they are."""
     try:
         switched = convo_sync.sync(run=lambda *a: _tmux(list(a)),
-                                   lib_file=os.getenv("AGENTDECK_LIBRARY") or library.LIB_FILE)
+                                   lib_file=envcompat.get("LIBRARY") or library.LIB_FILE)
     except Exception as ex:  # noqa: BLE001 — never stop the sweep over it
         convo_sync.log(f"sync failed: {str(ex)[:200]}")
         return

@@ -12,7 +12,8 @@
 # library_cli prints the human-readable reason; we keep it on screen for
 # OPEN_SESSION_PAUSE seconds (default 5) before the tab's shell ends.
 # DRY_RUN=1 prints the command the pane would run and starts nothing.
-# AGENTDECK_TMUX_SOCKET=<name> -> tmux -L <name> (tests use their own server).
+# AGENTKENNEL_TMUX_SOCKET=<name> -> tmux -L <name> (tests use their own server;
+# AGENTDECK_TMUX_SOCKET, the name before v2.1.0, still works).
 #
 # `shell` (/sess/?arg=shell, the dashboard's "cmd" button): the ONE plain command
 # line, tmux session cmd-shell (`bash -l`, started by `library_cli.py
@@ -38,7 +39,8 @@ fi
 ID="$1"
 
 TMUX_CMD=(tmux)
-[ -n "${AGENTDECK_TMUX_SOCKET:-}" ] && TMUX_CMD=(tmux -L "$AGENTDECK_TMUX_SOCKET")
+SOCK="${AGENTKENNEL_TMUX_SOCKET:-${AGENTDECK_TMUX_SOCKET:-}}"   # compat: the old name too
+[ -n "$SOCK" ] && TMUX_CMD=(tmux -L "$SOCK")
 
 if [ "$ID" = "shell" ]; then
   if [ "${DRY_RUN:-}" = "1" ]; then

@@ -8,13 +8,14 @@
 # $(env | cut -d= -f1 | grep -i CLAUDE) … exec claude --resume …'`, and on 2026-09-26 a
 # careless `pkill -f "… | grep"` elsewhere on the machine matched the SERVER and took
 # every terminal down at once. So tmux is handed only this script's path and the id,
-# and the rest happens here, in the pane. The name says nothing either: no "agentdeck"
-# (a `pkill -f agentdeck` meant for another install), no claude/bash/env/grep.
+# and the rest happens here, in the pane. The name says nothing either: no "agentkennel"
+# (a `pkill -f agentkennel` meant for another install), no claude/bash/env/grep.
 #
 #   <id>   topic cs-<id>: enter the topic's folder, then a login + interactive bash
 #          loads the user's rc environment (the same one a terminal's own shell has);
 #          then every CLAUDE* variable is unset (a Claude-spawned caller must not leak
-#          into the pane), ~/.claude/oauth.env is sourced, AGENTDECK_SESSION=<id>
+#          into the pane), ~/.claude/oauth.env is sourced, AGENTKENNEL_SESSION=<id>
+#          (and AGENTDECK_SESSION, its name before v2.1.0: hooks and tools may read it)
 #          exported (the number the terminal has at launch: after Claude's consent
 #          relaunch, /clear or /resume the terminal takes the live conversation's
 #          number — convo_sync.py — and the live one is CLAUDE_CODE_SESSION_ID),
@@ -23,7 +24,7 @@
 #          exec: when claude exits the pane closes — a shell prompt left behind
 #          would run whatever the Telegram bridge types next as commands.
 #   shell  cmd-shell, the dashboard's plain command line: enter the folder prepared for
-#          it (none prepared: stay), CLAUDE* and AGENTDECK_SESSION unset, `exec bash -l`.
+#          it (none prepared: stay), CLAUDE* and AGENTKENNEL_/AGENTDECK_SESSION unset, `exec bash -l`.
 #
 # The prepared start: <this checkout>/.sessions/launch/<id|shell>, NUL-separated — the
 # folder, then (for a topic) claude's arguments: claude, --resume or --session-id, the
@@ -94,11 +95,12 @@ if [ "$id" = shell ]; then
     enter "$dir"
   fi
   scrub
-  unset AGENTDECK_SESSION AGENTDECK_PANE_RC
+  unset AGENTKENNEL_SESSION AGENTDECK_SESSION AGENTKENNEL_PANE_RC AGENTDECK_PANE_RC
   exec bash -l
 fi
 
-if [ "${AGENTDECK_PANE_RC:-}" != "$id" ]; then
+# (AGENTDECK_PANE_RC: the marker of a pane that bin/pane from before v2.1.0 started)
+if [ "${AGENTKENNEL_PANE_RC:-${AGENTDECK_PANE_RC:-}}" != "$id" ]; then
   # from tmux: enter the folder, then run again under a login + interactive bash, so
   # claude starts with the rc-loaded environment (the rc runs in the folder, as it did
   # under tmux -c); the marker says the second run has it
@@ -106,14 +108,15 @@ if [ "${AGENTDECK_PANE_RC:-}" != "$id" ]; then
   dir=
   IFS= read -r -d '' dir < "$prepared"
   enter "$dir"
-  export AGENTDECK_PANE_RC="$id"
+  export AGENTKENNEL_PANE_RC="$id"
   exec bash -lic 'exec "$0" "$1"' "$self" "$id"
 fi
-unset AGENTDECK_PANE_RC
+unset AGENTKENNEL_PANE_RC AGENTDECK_PANE_RC
 
 scrub
 [ -r "$HOME/.claude/oauth.env" ] && . "$HOME/.claude/oauth.env"
-export AGENTDECK_SESSION="$id"
+# both names: hooks and the owner's tools written before v2.1.0 read AGENTDECK_SESSION
+export AGENTKENNEL_SESSION="$id" AGENTDECK_SESSION="$id"
 # the wheel: under tmux Claude's fullscreen renderer detects tmux, not the browser's
 # xterm.js, and scrolls 1 line per notch; 3 is what it picks on xterm.js directly.
 # Claude applies the settings files' "env" over this, so the owner's /scroll-speed

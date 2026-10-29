@@ -30,6 +30,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, List, Optional
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
+
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 MAX_DEFAULT = 10
 LOG_MAX = 1_000_000          # bytes; then <name>.log -> <name>.log.1
@@ -267,7 +270,7 @@ def telegram_view(services: Optional[Dict], now: Optional[float] = None):
     refresh = [("🔄 Refresh", "svc:refresh:")]
     if services is None:
         return ("The services keeper isn't running, so the list is unavailable. It starts "
-                "with AgentKennel: the agentdeck-services unit on a server, the entrypoint in "
+                "with AgentKennel: the agentkennel-services unit on a server, the entrypoint in "
                 "Docker.", [refresh])
     if not services:
         return ("No services yet.\n\nA service is a program that keeps running without an "
@@ -364,9 +367,9 @@ def make_server(bind: str, port: int, keeper: Keeper) -> ThreadingHTTPServer:
 
 
 def work_folder() -> Path:
-    """Where terminals start — the same rule as library_cli.WORKDIR: AGENTDECK_WORKDIR,
+    """Where terminals start — the same rule as library_cli.WORKDIR: AGENTKENNEL_WORKDIR,
     else the folder above this AgentKennel checkout (Docker sets /work)."""
-    return Path(os.environ.get("AGENTDECK_WORKDIR")
+    return Path(envcompat.get("WORKDIR")
                 or Path(__file__).resolve().parent.parent)
 
 

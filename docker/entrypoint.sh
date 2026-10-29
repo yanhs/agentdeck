@@ -7,6 +7,9 @@
 # needed) and stored in the volume.
 set -uo pipefail
 cd /app
+# settings under their names before v2.1.0 (AGENTDECK_*, e.g. a sandbox made earlier)
+# still count; programs started below get both names
+. /app/envcompat.sh && envcompat_sync
 
 # A UTF-8 locale so the tmux client renders Cyrillic / box-drawing instead of "?".
 # (The Dockerfile sets this as ENV too; this also covers a non-rebuilt image. ttyd runs a
@@ -15,23 +18,23 @@ export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}"
 
 # the login password + the cookie-signing key both live in the persisted sessions volume,
 # so they survive a container recreate and the key is never baked into the image
-export AGENTDECK_PASSFILE="${AGENTDECK_PASSFILE:-/app/.sessions/.dashpass}"
-export AGENTDECK_AUTH_SECRET="${AGENTDECK_AUTH_SECRET:-/app/.sessions/.agents_auth_secret}"
+export AGENTKENNEL_PASSFILE="${AGENTKENNEL_PASSFILE:-/app/.sessions/.dashpass}"
+export AGENTKENNEL_AUTH_SECRET="${AGENTKENNEL_AUTH_SECRET:-/app/.sessions/.agents_auth_secret}"
 # task board state lives in the volume too (survives recreate; author's tasks not baked in)
 export TRACKER_STATE="${TRACKER_STATE:-/app/.sessions/tasks-state.json}"
 
 # OPTIONAL: pre-seed the password from an env var (otherwise set it on first visit)
-if [ -n "${AGENTDECK_PASSWORD:-}" ] && [ ! -s "$AGENTDECK_PASSFILE" ]; then
-  python3 - "$AGENTDECK_PASSFILE" "$AGENTDECK_PASSWORD" <<'PY'
+if [ -n "${AGENTKENNEL_PASSWORD:-}" ] && [ ! -s "$AGENTKENNEL_PASSFILE" ]; then
+  python3 - "$AGENTKENNEL_PASSFILE" "$AGENTKENNEL_PASSWORD" <<'PY'
 import sys, os, hashlib
 path, pw = sys.argv[1], sys.argv[2]
 salt = os.urandom(16)
 h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 200_000)
 os.umask(0o077); open(path, "w").write(f"{salt.hex()}${h.hex()}")
 PY
-  echo "[agentkennel] dashboard password seeded from AGENTDECK_PASSWORD"
+  echo "[agentkennel] dashboard password seeded from AGENTKENNEL_PASSWORD"
 fi
-if [ -s "$AGENTDECK_PASSFILE" ]; then
+if [ -s "$AGENTKENNEL_PASSFILE" ]; then
   echo "[agentkennel] dashboard password is set"
 else   # only this one-time link can set it (a stranger opening the port first can't)
   echo "[agentkennel] no password yet — set it at the one-time setup link: your dashboard"
@@ -50,18 +53,20 @@ ln -sfn /root/.claude/.claude.json /root/.claude.json
 # nothing scheduled to resume it, and a terminal waiting on its own timer (ScheduleWakeup /
 # CronCreate / Monitor) stays loaded until it fires (hold_on_timer.py). Merged into claude's
 # user settings (the persisted volume) idempotently — other keys and your own hooks are kept. A default ~/.claude/CLAUDE.md with
-# the board commands is written only if you have none. Opt out: AGENTDECK_GUARDS=0.
-if [ "${AGENTDECK_GUARDS:-1}" = 0 ]; then
+# the board commands is written only if you have none. Opt out: AGENTKENNEL_GUARDS=0.
+if [ "${AGENTKENNEL_GUARDS:-1}" = 0 ]; then
   python3 /app/hooks/install_guards.py --settings /root/.claude/settings.json \
     --hooks-dir /app/hooks --remove
-  echo "[agentkennel] guard hooks: off (AGENTDECK_GUARDS=0)"
+  echo "[agentkennel] guard hooks: off (AGENTKENNEL_GUARDS=0)"
 else
   python3 /app/hooks/install_guards.py --settings /root/.claude/settings.json \
     --hooks-dir /app/hooks --tracker-state "$TRACKER_STATE" \
     --claude-md /root/.claude/CLAUDE.md --tracker /app/tasks-dashboard/tracker.py \
-    --services-dir "${AGENTDECK_WORKDIR:-/work}/.services" \
+    --services-dir "${AGENTKENNEL_WORKDIR:-/work}/.services" \
     && echo "[agentkennel] guard hooks: on (task board before edits, no silent mid-task stop, timers keep the terminal loaded)"
 fi
+
+envcompat_sync   # the defaults above, under the old names too
 
 echo "[agentkennel] backend: status_server.py"
 python3 status_server.py &
@@ -91,25 +96,25 @@ echo "[agentkennel] services keeper: services_keeper.py (<work folder>/.services
 CADDYFILE=/app/docker/Caddyfile
 # Let's Encrypt refuses a contact address at example.com, and the compose default is the
 # placeholder you@example.com — drop the email line then (an ACME account needs no email).
-case "${AGENTDECK_EMAIL:-}" in
+case "${AGENTKENNEL_EMAIL:-}" in
   ""|*@example.com|*@example.org|*@example.net)
     grep -v '^[[:space:]]*email ' /app/docker/Caddyfile > /tmp/Caddyfile.base
     CADDYFILE=/tmp/Caddyfile.base ;;
 esac
-# AGENTDECK_SITE=https://... (a port or IP, no real domain) → self-signed HTTPS:
+# AGENTKENNEL_SITE=https://... (a port or IP, no real domain) → self-signed HTTPS:
 # generate a certificate on first run (kept in the volume) and serve with it.
-case "${AGENTDECK_SITE:-}" in
+case "${AGENTKENNEL_SITE:-}" in
   https://*)
     CD=/app/.sessions/tls; mkdir -p "$CD"
     if [ ! -s "$CD/cert.pem" ]; then
       openssl req -x509 -newkey rsa:2048 -keyout "$CD/key.pem" -out "$CD/cert.pem" \
-        -days 3650 -nodes -subj "/CN=agentdeck" \
+        -days 3650 -nodes -subj "/CN=agentkennel" \
         -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
       echo "[agentkennel] generated a self-signed TLS certificate (first run)"
     fi
-    CD="$CD" SRC="$CADDYFILE" python3 -c 'import os;cd=os.environ["CD"];p=os.environ["SRC"];s=open(p).read().replace("{$AGENTDECK_SITE::8765} {","{$AGENTDECK_SITE::8765} {\n\ttls "+cd+"/cert.pem "+cd+"/key.pem");open("/tmp/Caddyfile","w").write(s)'
+    CD="$CD" SRC="$CADDYFILE" python3 -c 'import os;cd=os.environ["CD"];p=os.environ["SRC"];s=open(p).read().replace("{$AGENTKENNEL_SITE::8765} {","{$AGENTKENNEL_SITE::8765} {\n\ttls "+cd+"/cert.pem "+cd+"/key.pem");open("/tmp/Caddyfile","w").write(s)'
     CADDYFILE=/tmp/Caddyfile
     ;;
 esac
-echo "[agentkennel] caddy -> ${AGENTDECK_SITE:-:8765}  (domain=auto-HTTPS, https://:port=self-signed)"
+echo "[agentkennel] caddy -> ${AGENTKENNEL_SITE:-:8765}  (domain=auto-HTTPS, https://:port=self-signed)"
 exec caddy run --config "$CADDYFILE" --adapter caddyfile

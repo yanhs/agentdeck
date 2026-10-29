@@ -20,7 +20,7 @@ page (open-session.sh) and the Telegram bridge.
                                    keep the session counted as working until now +
                                    seconds (`-` = this pane's terminal: the live
                                    conversation, $CLAUDE_CODE_SESSION_ID, inside a
-                                   library pane, $AGENTDECK_SESSION); a longer
+                                   library pane, $AGENTKENNEL_SESSION); a longer
                                    existing hold is kept.
     library_cli.py shell-ensure    print cmd-shell once the dashboard's one plain
                                    command line runs (`bash -l` in WORKDIR, mouse
@@ -41,13 +41,13 @@ conversation of its own is an alias of the terminal that took it over: `ensure A
 prints cs-B.
 
 At the limit (library.MAX_ACTIVE) the least recently used session that is idle
-(no screen output for AGENTDECK_WORKING_SECONDS, default 1800, no live
+(no screen output for AGENTKENNEL_WORKING_SECONDS, default 1800, no live
 background task — idle_reaper's test — and no unexpired hold marker) and has
 no tab open is unloaded; "least recently" = the later of last_used and last
 screen output
 (`tmux kill-session`; the transcript stays on disk, `--resume` brings it back).
 
-tmux: AGENTDECK_TMUX_SOCKET=<name> -> `tmux -L <name>` (tests use their own
+tmux: AGENTKENNEL_TMUX_SOCKET=<name> -> `tmux -L <name>` (tests use their own
 server). Queries go through list-sessions / list-windows -F only: tmux 3.2a
 crashes the whole server on `display-message -t =<name>` (no trailing colon)
 with a window/time format. Targets are exact: `=name` for sessions, `=name:`
@@ -76,9 +76,10 @@ sys.path.insert(0, HERE)
 import convo_sync  # noqa: E402  (a terminal follows its conversation's number)
 import idle_reaper  # noqa: E402  (background-task detection, pure /proc walk)
 import library  # noqa: E402
+import envcompat  # noqa: E402  (AGENTKENNEL_*, then the old AGENTDECK_*)
 
-WORKDIR = os.getenv("AGENTDECK_WORKDIR") or os.path.dirname(HERE)
-WORKING_SECONDS = int(os.getenv("AGENTDECK_WORKING_SECONDS", "1800"))
+WORKDIR = envcompat.get("WORKDIR") or os.path.dirname(HERE)
+WORKING_SECONDS = int(envcompat.get("WORKING_SECONDS", "1800"))
 MAX_HOLD_SECONDS = 7 * 86400
 
 EXIT_OK, EXIT_FAIL, EXIT_UNKNOWN, EXIT_BUSY, EXIT_ELSEWHERE = 0, 1, 2, 3, 4
@@ -98,11 +99,13 @@ USAGE = ("usage: library_cli.py ensure <id> | active | pane-cmd <id> | pane-is-c
 # too, for a server that comes up another way. A server someone else started gets
 # it once from ensure_tmux_conf().
 TMUX_CONF = os.path.join(HERE, "tmux.conf")
-TMUX_CONF_MARK = "@agentdeck-conf"                 # set by tmux.conf itself
+TMUX_CONF_MARK = "@agentkennel-conf"               # set by tmux.conf itself
+# compat: a tmux server that read tmux.conf before v2.1.0 carries the old mark
+TMUX_CONF_MARKS = (TMUX_CONF_MARK, "@agentdeck-conf")
 
 
 def tmux_argv(*args):
-    sock = os.getenv("AGENTDECK_TMUX_SOCKET")
+    sock = envcompat.get("TMUX_SOCKET")
     base = ["tmux", "-L", sock] if sock else ["tmux"]
     if os.path.isfile(TMUX_CONF):
         base += ["-f", TMUX_CONF]
@@ -112,7 +115,7 @@ def tmux_argv(*args):
 # What a new pane runs, and how the tmux server comes up. tmux keeps, as the SERVER's
 # own command line, the command line of the client that started it — whichever call
 # came first — and its working directory too. A careless `pkill -f grep` (or claude,
-# bash, env, agentdeck, the checkout's path, …) anywhere on the machine matches that
+# bash, env, agentkennel, the checkout's path, …) anywhere on the machine matches that
 # line and kills the server with every terminal in it (2026-09-26: `pkill -f "… | grep"`
 # did); a `fuser -k <folder>` would, were a terminal's folder its working directory.
 # So when no server runs, hold_server() starts one first with a line that says nothing
@@ -123,10 +126,10 @@ def tmux_argv(*args):
 # bin/pane does the rest inside the pane. Should the placeholder fail, the new-session
 # goes without -c (the prepared start carries the folder too; the launcher enters it),
 # so even then the server's line is only tmux options, the name and bin/pane — a name
-# without such a word, "agentdeck" included (a `pkill -f agentdeck` meant for another
+# without such a word, "agentkennel" included (a `pkill -f agentkennel` meant for another
 # install).
-# AGENTDECK_LAUNCHER: another copy of it (the tests: one in a throwaway checkout).
-LAUNCHER = os.path.abspath(os.getenv("AGENTDECK_LAUNCHER")
+# AGENTKENNEL_LAUNCHER: another copy of it (the tests: one in a throwaway checkout).
+LAUNCHER = os.path.abspath(envcompat.get("LAUNCHER")
                            or os.path.join(HERE, "bin", "pane"))
 TMUX_TIMEOUT = 15
 
@@ -150,7 +153,7 @@ def _has(name):
 def _tmux_bare(*args):
     """tmux on our socket without our -f, from `/`: the call hold_server starts a
     server with (its command line and working directory become the server's)."""
-    sock = os.getenv("AGENTDECK_TMUX_SOCKET")
+    sock = envcompat.get("TMUX_SOCKET")
     return subprocess.run(["tmux", *(["-L", sock] if sock else []), *args],
                           capture_output=True, text=True, env=_clean_env(),
                           timeout=TMUX_TIMEOUT, cwd="/")
@@ -204,9 +207,10 @@ def ensure_tmux_conf(run=None):
     run = run or _tmux
     if not os.path.isfile(TMUX_CONF):
         return
-    r = run("show-options", "-gqv", TMUX_CONF_MARK)
-    if getattr(r, "returncode", 1) != 0 or (getattr(r, "stdout", "") or "").strip():
-        return
+    for mark in TMUX_CONF_MARKS:
+        r = run("show-options", "-gqv", mark)
+        if getattr(r, "returncode", 1) != 0 or (getattr(r, "stdout", "") or "").strip():
+            return
     run("source-file", TMUX_CONF)
 
 
@@ -567,7 +571,8 @@ def pane_command(e, home=None, claude_bin=None):
             f"[ -r {oauth} ] && . {oauth}; "
             # the number the terminal has at launch; after a conversation switch
             # the live one is CLAUDE_CODE_SESSION_ID (see hold(), hold_on_timer)
-            f"export AGENTDECK_SESSION={sid}; "
+            # (both names: hooks and tools written before v2.1.0 read AGENTDECK_SESSION)
+            f"export AGENTKENNEL_SESSION={sid} AGENTDECK_SESSION={sid}; "
             # under tmux Claude scrolls 1 line per wheel notch (it detects tmux,
             # not xterm.js, where it picks 3); settings.json "env" still wins
             "export CLAUDE_CODE_SCROLL_SPEED=3; "
@@ -775,10 +780,10 @@ def shell_ensure():
 # ── hold ────────────────────────────────────────────────────────────────────
 def pane_session():
     """`hold -`: the terminal this runs in. Only inside a library pane
-    (AGENTDECK_SESSION, exported at launch); its number is the conversation live
+    (AGENTKENNEL_SESSION, exported at launch); its number is the conversation live
     now — CLAUDE_CODE_SESSION_ID, which Claude sets for every shell it starts —
     unless that is missing or malformed."""
-    pane = os.getenv("AGENTDECK_SESSION", "")
+    pane = envcompat.get("SESSION", "")
     if not library.valid_id(pane):
         return ""
     u = os.getenv("CLAUDE_CODE_SESSION_ID", "")

@@ -3,9 +3,9 @@
 #
 #   ./https.sh                  use <your-ip>.sslip.io (a free name that resolves to your IP)
 #   ./https.sh your-domain.com  use your own domain (its A record should point at this server)
-#   ./https.sh --off            back to plain http on :8765 (or AGENTDECK_PORT)
+#   ./https.sh --off            back to plain http on :8765 (or AGENTKENNEL_PORT)
 #
-# What it does: writes AGENTDECK_SITE=<name> and COMPOSE_FILE (adds docker-compose.https.yml,
+# What it does: writes AGENTKENNEL_SITE=<name> and COMPOSE_FILE (adds docker-compose.https.yml,
 # which publishes host ports 80 + 443) into .env — other lines in .env are kept — then runs
 # `docker compose up -d` and waits until Caddy has a Let's Encrypt certificate. A plain
 # `docker compose up -d` later keeps HTTPS on (compose reads COMPOSE_FILE from .env).
@@ -13,21 +13,23 @@
 #
 # Needs host ports 80 and 443 free (no other web server on them) and open in the firewall.
 # If they're taken, the fallback is a self-signed certificate on the normal port:
-#   AGENTDECK_SITE=https://:8765 docker compose up -d
+#   AGENTKENNEL_SITE=https://:8765 docker compose up -d
 #
-# Env (mostly for testing): AGENTDECK_HTTP_PORT / AGENTDECK_HTTPS_PORT (host ports, default
-# 80 / 443), AGENTDECK_PUBLIC_IP (skip the lookup), AGENTDECK_HTTPS_WAIT (seconds, default 90),
-# AGENTDECK_CHECK_INSECURE=1 (don't verify the certificate in the readiness check — only for a
+# Env (mostly for testing; the AGENTDECK_* names from before v2.1.0 work too):
+# AGENTKENNEL_HTTP_PORT / AGENTKENNEL_HTTPS_PORT (host ports, default
+# 80 / 443), AGENTKENNEL_PUBLIC_IP (skip the lookup), AGENTKENNEL_HTTPS_WAIT (seconds, default 90),
+# AGENTKENNEL_CHECK_INSECURE=1 (don't verify the certificate in the readiness check — only for a
 # test CA such as Caddy's `tls internal`).
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
 
 OVERRIDE=docker-compose.https.yml
-HTTP_PORT="${AGENTDECK_HTTP_PORT:-80}"
-HTTPS_PORT="${AGENTDECK_HTTPS_PORT:-443}"
-WAIT="${AGENTDECK_HTTPS_WAIT:-90}"
-POLL="${AGENTDECK_POLL:-3}"
-FALLBACK="AGENTDECK_SITE=https://:8765 docker compose up -d"
+# settings: AGENTKENNEL_*, else the same under its name before v2.1.0 (AGENTDECK_*)
+HTTP_PORT="${AGENTKENNEL_HTTP_PORT:-${AGENTDECK_HTTP_PORT:-80}}"
+HTTPS_PORT="${AGENTKENNEL_HTTPS_PORT:-${AGENTDECK_HTTPS_PORT:-443}}"
+WAIT="${AGENTKENNEL_HTTPS_WAIT:-${AGENTDECK_HTTPS_WAIT:-90}}"
+POLL="${AGENTKENNEL_POLL:-${AGENTDECK_POLL:-3}}"
+FALLBACK="AGENTKENNEL_SITE=https://:8765 docker compose up -d"
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
@@ -99,7 +101,8 @@ is_public_ipv4() {
 
 public_ip() {  # prints the first answer; validation is the caller's job
   local ip url
-  if [ -n "${AGENTDECK_PUBLIC_IP:-}" ]; then printf '%s' "$AGENTDECK_PUBLIC_IP"; return 0; fi
+  ip="${AGENTKENNEL_PUBLIC_IP:-${AGENTDECK_PUBLIC_IP:-}}"
+  if [ -n "$ip" ]; then printf '%s' "$ip"; return 0; fi
   for url in https://api.ipify.org https://ifconfig.me https://icanhazip.com; do
     ip=$(curl -4 -s --max-time 6 "$url" 2>/dev/null | tr -d '[:space:]')
     [ -n "$ip" ] && { printf '%s' "$ip"; return 0; }
@@ -134,10 +137,10 @@ busy_ports() {
   done
 }
 
-# is host port $1 published by our own agentdeck container (container port $2)?
+# is host port $1 published by our own agentkennel container (container port $2)?
 ours() {
   local out
-  out=$(compose "$(env_get COMPOSE_FILE)" port agentdeck "$2" 2>/dev/null) || return 1
+  out=$(compose "$(env_get COMPOSE_FILE)" port agentkennel "$2" 2>/dev/null) || return 1
   [[ $out == *":$1" ]]
 }
 
@@ -185,11 +188,13 @@ if [ "$MODE" = off ]; then
     new=$(printf '%s' "$cf" | tr ':' '\n' | grep -vx "$OVERRIDE" | paste -sd: -)
     if [ -z "$new" ] || [ "$new" = docker-compose.yml ]; then env_unset COMPOSE_FILE; else env_set COMPOSE_FILE "$new"; fi
   fi
-  env_unset AGENTDECK_SITE
+  env_unset AGENTKENNEL_SITE
+  env_unset AGENTDECK_SITE      # compat: what https.sh wrote before v2.1.0
   rm -f "$OVERRIDE"
   say "HTTPS off — restarting on plain http..."
   compose "$(env_get COMPOSE_FILE)" up -d || die "docker compose up failed"
-  port=${AGENTDECK_PORT:-$(env_get AGENTDECK_PORT)}; port=${port:-8765}
+  port=${AGENTKENNEL_PORT:-${AGENTDECK_PORT:-$(env_get AGENTKENNEL_PORT)}}
+  port=${port:-$(env_get AGENTDECK_PORT)}; port=${port:-8765}   # compat: an older .env
   ip=$(public_ip) && is_public_ipv4 "$ip" || ip="<your-vps-ip>"
   say ""
   say "Done: http://$ip:$port"
@@ -225,7 +230,7 @@ cat > "$OVERRIDE" <<EOF
 # Written by ./https.sh — publishes the ports Caddy needs for Let's Encrypt (HTTP challenge on
 # 80, the site on 443). ./https.sh --off removes it.
 services:
-  agentdeck:
+  agentkennel:
     ports:
       - "$HTTP_PORT:80"
       - "$HTTPS_PORT:443"
@@ -237,14 +242,15 @@ if [ -z "$cf" ]; then
 elif ! printf '%s' "$cf" | tr ':' '\n' | grep -qx "$OVERRIDE"; then
   env_set COMPOSE_FILE "$cf:$OVERRIDE"
 fi
-env_set AGENTDECK_SITE "$NAME"
+env_set AGENTKENNEL_SITE "$NAME"
+env_unset AGENTDECK_SITE        # compat: an older .env had it under this name
 
 URL="https://$NAME"; [ "$HTTPS_PORT" = 443 ] || URL="$URL:$HTTPS_PORT"
 say "Site name: $NAME — starting AgentKennel with HTTPS..."
 compose "$(env_get COMPOSE_FILE)" up -d || die "docker compose up failed (settings are in .env; ./https.sh --off undoes them)"
 
 say "Waiting for the certificate (up to ${WAIT}s)..."
-k=(); [ "${AGENTDECK_CHECK_INSECURE:-}" = 1 ] && k=(-k)
+k=(); [ "${AGENTKENNEL_CHECK_INSECURE:-${AGENTDECK_CHECK_INSECURE:-}}" = 1 ] && k=(-k)
 deadline=$((SECONDS + WAIT))
 while :; do
   code=$(curl -s "${k[@]}" -o /dev/null -w '%{http_code}' --max-time 5 \
@@ -252,7 +258,7 @@ while :; do
     && [ -n "$code" ] && [ "$code" != 000 ] && break
   if [ "$SECONDS" -ge "$deadline" ]; then
     printf 'error: no valid HTTPS on %s after %ss. Caddy log (last lines):\n' "$URL" "$WAIT" >&2
-    compose "$(env_get COMPOSE_FILE)" logs --tail 25 agentdeck 2>&1 | sed 's/^/  /' >&2
+    compose "$(env_get COMPOSE_FILE)" logs --tail 25 agentkennel 2>&1 | sed 's/^/  /' >&2
     cat >&2 <<EOF
 Common causes: ports $HTTP_PORT/$HTTPS_PORT closed in the firewall / cloud security group, or the
 name doesn't point to this server yet. Caddy keeps retrying on its own; run ./https.sh again

@@ -6,7 +6,7 @@ never list, kill or type into the live terminals. After each test we also check 
 live session registry still exists and stop the run loudly if a test deleted it.
 
 A new pane's start is left in <the pane launcher's checkout>/.sessions/launch/
-(library_cli.LAUNCHER, bin/pane). The run points AGENTDECK_LAUNCHER at a copy of the
+(library_cli.LAUNCHER, bin/pane). The run points AGENTKENNEL_LAUNCHER at a copy of the
 launcher in a throwaway checkout, so nothing a test starts is ever written into this
 checkout's own .sessions (a live AgentKennel may run from it)."""
 import os
@@ -19,6 +19,11 @@ import pytest
 _TMUX_DIR = tempfile.mkdtemp(prefix="pytest-tmux-")
 os.environ["TMUX_TMPDIR"] = _TMUX_DIR
 os.environ.pop("TMUX", None)          # not "inside" the live server either
+# nor any of the live terminal's own settings: run from a dashboard terminal, the suite
+# would inherit its AGENTKENNEL_SESSION (or the older AGENTDECK_SESSION), and a test that
+# unsets one name would still see the other
+for _k in [k for k in os.environ if k.startswith(("AGENTKENNEL_", "AGENTDECK_"))]:
+    del os.environ[_k]
 
 _REPO = Path(__file__).resolve().parents[1]
 _LIVE_LIBRARY = _REPO / ".sessions" / "library.json"
@@ -29,7 +34,7 @@ _PANE_CHECKOUT = tempfile.mkdtemp(prefix="deck-")
 os.makedirs(os.path.join(_PANE_CHECKOUT, "bin"))
 if (_REPO / "bin" / "pane").exists():         # missing: ensure refuses "not executable"
     shutil.copy2(_REPO / "bin" / "pane", os.path.join(_PANE_CHECKOUT, "bin", "pane"))
-os.environ["AGENTDECK_LAUNCHER"] = os.path.join(_PANE_CHECKOUT, "bin", "pane")
+os.environ["AGENTKENNEL_LAUNCHER"] = os.path.join(_PANE_CHECKOUT, "bin", "pane")
 
 
 @pytest.fixture(autouse=True)
