@@ -407,7 +407,7 @@ def guests_payload(configured=True, checks=None) -> dict:
          "spent_today": 0, "limit": 10_000_000, "url": "https://sb-sam.example.com",
          "created": "2026-10-24 08:10:00"},
     ]
-    return {"installed": True, "configured": configured, "dir": "/home/deck/agentdeck/guests",
+    return {"installed": True, "configured": configured, "dir": "/home/deck/agentkennel/guests",
             "env": ({"bot_token_set": True, "owner_id": "4412", "domain": "example.com"} if configured
                     else {"bot_token_set": True, "owner_id": "4412", "domain": ""}),
             "admin": {"bot_set": True, "owner_id": "4412"},
@@ -535,7 +535,7 @@ def open_dashboard(browser, base, *, width, height, mobile=False, tasks_open=Tru
         localStorage.setItem('lib-show-archived', '{1 if show_archived else 0}');
         localStorage.removeItem('stats-hidden');
         localStorage.setItem('lib-server-open', '0');
-        localStorage.setItem('agentdeck-theme', '{theme}');
+        localStorage.setItem('agentkennel-theme', '{theme}');
     }} catch (e) {{}}""")
     pg = ctx.new_page()
     errors: list[str] = []
@@ -731,10 +731,10 @@ def installer_lines() -> list[tuple[str, str]]:
     answer = Path(tempfile.mkdtemp()) / "answer"
     answer.write_text("y\n")
     script = r'''
-AGENTDECK_SOURCE_ONLY=1 source ./install.sh
-YES=0 CHECK=0 GUESTS_FLAG="" CONF_FILE=/nonexistent AGENTDECK_TTY="$1"
+AGENTKENNEL_SOURCE_ONLY=1 source ./install.sh
+YES=0 CHECK=0 GUESTS_FLAG="" CONF_FILE=/nonexistent AGENTKENNEL_TTY="$1"
 ask_guests 2>&1; echo
-HOME=/home/deck DIR=/home/deck/agentdeck SITE=203-0-113-7.sslip.io HTTP_PORT=80 HTTPS_PORT=443
+HOME=/home/deck DIR=/home/deck/agentkennel SITE=203-0-113-7.sslip.io HTTP_PORT=80 HTTPS_PORT=443
 PORT=443 WORKDIR=/home/deck/projects TELEGRAM=0 WHY=""
 id() { echo deck; }
 command() { [ "$2" = ufw ] && return 1; builtin command "$@"; }
@@ -760,7 +760,7 @@ def agents_md_lines() -> list[tuple[str, str]]:
     sys.path.insert(0, str(ROOT / "hooks"))
     import install_guards
     text = install_guards.ENV_MD.format(mark=install_guards.ENV_MARK)
-    return ([("cmd", "deck@vps:~$ grep -A5 agentdeck-environment ~/.claude/CLAUDE.md")]
+    return ([("cmd", "deck@vps:~$ grep -A5 agentkennel-environment ~/.claude/CLAUDE.md")]
             + [("hl" if l.startswith("##") else "", l) for l in text.rstrip("\n").split("\n")])
 
 
@@ -787,7 +787,7 @@ def main() -> int:
 
     only = set(sys.argv[1:])            # optional: regenerate just these names
     OUT.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix="agentdeck-shots-"))
+    tmp = Path(tempfile.mkdtemp(prefix="agentkennel-shots-"))
     state_path = tmp / "state.json"
     state_path.write_text(json.dumps(board_state(), ensure_ascii=False))
     base = start_server(state_path)
@@ -928,7 +928,7 @@ def main() -> int:
             print(name)
             ctx = b.new_context(viewport={"width": 1440, "height": 900}, device_scale_factor=SCALE,
                                 color_scheme=theme)
-            ctx.add_init_script(f"try {{ localStorage.setItem('agentdeck-theme', '{theme}'); }} catch (e) {{}}")
+            ctx.add_init_script(f"try {{ localStorage.setItem('agentkennel-theme', '{theme}'); }} catch (e) {{}}")
             pg = ctx.new_page()
             errs: list[str] = []
             pg.on("pageerror", lambda e, errs=errs: errs.append(str(e)))

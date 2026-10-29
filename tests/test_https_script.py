@@ -79,8 +79,8 @@ def env(tmp_path):
         "HOME": str(tmp_path),
         "SHIM_LOG": str(calls_file),
         "FAKE_IPIFY": PUBLIC_IP,
-        "AGENTDECK_HTTPS_WAIT": "2",
-        "AGENTDECK_POLL": "1",
+        "AGENTKENNEL_HTTPS_WAIT": "2",
+        "AGENTKENNEL_POLL": "1",
     }
 
     class Env:
@@ -129,7 +129,7 @@ def test_no_arg_uses_sslip_name_from_public_ip(env):
     r = env.run()
     assert r.returncode == 0, r.stdout + r.stderr
     kv = env_lines(env.dotenv())
-    assert kv["AGENTDECK_SITE"] == ["45-67-89-10.sslip.io"]
+    assert kv["AGENTKENNEL_SITE"] == ["45-67-89-10.sslip.io"]
     assert "https://45-67-89-10.sslip.io" in r.stdout
     assert ups(env.log()), env.log()
     # the up uses the https override
@@ -139,7 +139,7 @@ def test_no_arg_uses_sslip_name_from_public_ip(env):
 def test_ip_falls_back_when_first_service_fails(env):
     r = env.run(FAKE_IPIFY="", FAKE_IFCONFIG="98.76.54.32")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert env_lines(env.dotenv())["AGENTDECK_SITE"] == ["98-76-54-32.sslip.io"]
+    assert env_lines(env.dotenv())["AGENTKENNEL_SITE"] == ["98-76-54-32.sslip.io"]
 
 
 def test_no_ip_at_all_is_a_clear_error(env):
@@ -158,13 +158,13 @@ def test_non_public_ip_refuses(env, ip):
     assert "public" in out
     assert not ups(env.log())
     assert env.override() is None
-    assert "AGENTDECK_SITE" not in env.dotenv()
+    assert "AGENTKENNEL_SITE" not in env.dotenv()
 
 
 def test_domain_arg_is_used(env):
     r = env.run("agents.example.org", FAKE_GETENT=PUBLIC_IP)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert env_lines(env.dotenv())["AGENTDECK_SITE"] == ["agents.example.org"]
+    assert env_lines(env.dotenv())["AGENTKENNEL_SITE"] == ["agents.example.org"]
     assert "https://agents.example.org" in r.stdout
     assert "does not point" not in r.stdout + r.stderr
 
@@ -172,7 +172,7 @@ def test_domain_arg_is_used(env):
 def test_domain_scheme_and_case_are_normalised(env):
     r = env.run("https://Agents.Example.ORG/", FAKE_GETENT=PUBLIC_IP)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert env_lines(env.dotenv())["AGENTDECK_SITE"] == ["agents.example.org"]
+    assert env_lines(env.dotenv())["AGENTKENNEL_SITE"] == ["agents.example.org"]
 
 
 def test_domain_pointing_elsewhere_warns_but_continues(env):
@@ -201,17 +201,17 @@ def test_invalid_domain_refuses(env, bad):
 
 
 def test_busy_port_refuses_with_owner_and_no_compose_up(env):
-    (env.dir / ".env").write_text("AGENTDECK_PORT=9000\n")
+    (env.dir / ".env").write_text("AGENTKENNEL_PORT=9000\n")
     ss = ('LISTEN 0 511 0.0.0.0:443 0.0.0.0:* users:(("nginx",pid=812,fd=7))\n'
           "LISTEN 0 511 0.0.0.0:8765 0.0.0.0:*\n")
     r = env.run(FAKE_SS=ss)
     assert r.returncode != 0
     out = r.stdout + r.stderr
     assert "443" in out and "nginx" in out
-    assert "AGENTDECK_SITE=https://:8765" in out     # the self-signed fallback is named
+    assert "AGENTKENNEL_SITE=https://:8765" in out     # the self-signed fallback is named
     assert not ups(env.log())
     assert env.override() is None
-    assert env.dotenv() == "AGENTDECK_PORT=9000\n"   # untouched
+    assert env.dotenv() == "AGENTKENNEL_PORT=9000\n"   # untouched
 
 
 def test_busy_port_without_process_name_still_refuses(env):
@@ -235,16 +235,16 @@ def test_ports_held_by_our_own_container_are_fine(env):
 
 
 def test_env_merge_keeps_other_keys(env):
-    (env.dir / ".env").write_text("# my settings\nAGENTDECK_PORT=9000\nAGENTDECK_SITE=old.example.com\n"
-                                  "AGENTDECK_PASSWORD=s3cret=x\n")
+    (env.dir / ".env").write_text("# my settings\nAGENTKENNEL_PORT=9000\nAGENTKENNEL_SITE=old.example.com\n"
+                                  "AGENTKENNEL_PASSWORD=s3cret=x\n")
     r = env.run()
     assert r.returncode == 0, r.stdout + r.stderr
     text = env.dotenv()
     kv = env_lines(text)
     assert "# my settings" in text
-    assert kv["AGENTDECK_PORT"] == ["9000"]
-    assert kv["AGENTDECK_PASSWORD"] == ["s3cret=x"]
-    assert kv["AGENTDECK_SITE"] == ["45-67-89-10.sslip.io"]
+    assert kv["AGENTKENNEL_PORT"] == ["9000"]
+    assert kv["AGENTKENNEL_PASSWORD"] == ["s3cret=x"]
+    assert kv["AGENTKENNEL_SITE"] == ["45-67-89-10.sslip.io"]
 
 
 def test_override_publishes_80_and_443_and_compose_file_is_set(env):
@@ -253,13 +253,13 @@ def test_override_publishes_80_and_443_and_compose_file_is_set(env):
     ov = env.override()
     assert ov is not None
     assert '"80:80"' in ov and '"443:443"' in ov
-    assert "agentdeck:" in ov
+    assert "agentkennel:" in ov
     kv = env_lines(env.dotenv())
     assert kv["COMPOSE_FILE"] == ["docker-compose.yml:docker-compose.https.yml"]
 
 
 def test_alternate_host_ports_for_testing(env):
-    r = env.run(AGENTDECK_HTTP_PORT="18080", AGENTDECK_HTTPS_PORT="18443",
+    r = env.run(AGENTKENNEL_HTTP_PORT="18080", AGENTKENNEL_HTTPS_PORT="18443",
                 FAKE_SS="LISTEN 0 511 0.0.0.0:443 0.0.0.0:* users:((\"nginx\",pid=1,fd=7))\n")
     assert r.returncode == 0, r.stdout + r.stderr
     ov = env.override()
@@ -278,7 +278,7 @@ def test_existing_compose_file_value_is_extended_not_replaced(env):
 
 
 def test_idempotent(env):
-    (env.dir / ".env").write_text("AGENTDECK_PORT=9000\n")
+    (env.dir / ".env").write_text("AGENTKENNEL_PORT=9000\n")
     assert env.run().returncode == 0
     first_env, first_ov = env.dotenv(), env.override()
     r = env.run()
@@ -290,13 +290,13 @@ def test_idempotent(env):
 
 
 def test_off_reverts_to_plain_http(env):
-    (env.dir / ".env").write_text("AGENTDECK_PORT=9000\n")
+    (env.dir / ".env").write_text("AGENTKENNEL_PORT=9000\n")
     assert env.run().returncode == 0
     r = env.run("--off")
     assert r.returncode == 0, r.stdout + r.stderr
     kv = env_lines(env.dotenv())
-    assert "AGENTDECK_SITE" not in kv and "COMPOSE_FILE" not in kv
-    assert kv["AGENTDECK_PORT"] == ["9000"]
+    assert "AGENTKENNEL_SITE" not in kv and "COMPOSE_FILE" not in kv
+    assert kv["AGENTKENNEL_PORT"] == ["9000"]
     assert env.override() is None
     last_up = ups(env.log())[-1]
     assert "docker-compose.https.yml" not in last_up
@@ -310,12 +310,12 @@ def test_off_when_never_on_is_harmless(env):
 
 
 def test_certificate_timeout_shows_caddy_log(env):
-    r = env.run(FAKE_CURL_RC="35", FAKE_HTTP_CODE="000", AGENTDECK_HTTPS_WAIT="1")
+    r = env.run(FAKE_CURL_RC="35", FAKE_HTTP_CODE="000", AGENTKENNEL_HTTPS_WAIT="1")
     assert r.returncode != 0
     out = r.stdout + r.stderr
     assert "CADDY-LOG-LINE" in out
     # settings stay in place — the next `docker compose up -d` retries
-    assert "AGENTDECK_SITE" in env.dotenv()
+    assert "AGENTKENNEL_SITE" in env.dotenv()
 
 
 def test_readiness_probe_pins_the_name_to_this_host(env):

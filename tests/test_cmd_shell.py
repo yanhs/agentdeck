@@ -3,13 +3,13 @@
 The "cmd" button on the library page opens /sess/?arg=shell, so open-session.sh
 accepts the literal `shell` besides an 8-hex id (and still refuses anything
 else before tmux or python run). `library_cli.py shell-ensure` starts the shell
-detached (`bash -l` in AGENTDECK_WORKDIR, mouse on) once; every later press
+detached (`bash -l` in AGENTKENNEL_WORKDIR, mouse on) once; every later press
 attaches to the same one. It is not a library topic: it does not count toward
 MAX_ACTIVE and is never unloaded to make room. GET /api/library reports it in a
 top-level `shell` field, and idle_reaper unloads it after the usual 2 h idle.
 
 Isolation as in test_library_cli: temp registry/HOME, private tmux socket
-agentdeck-test-*; the live server on the default socket is never touched.
+agentkennel-test-*; the live server on the default socket is never touched.
 """
 import os
 import subprocess
@@ -30,7 +30,7 @@ SHELL = "cmd-shell"
 @pytest.fixture
 def deck(tmp_path):
     d = Deck(tmp_path)
-    d.env["AGENTDECK_WORKDIR"] = str(d.work)
+    d.env["AGENTKENNEL_WORKDIR"] = str(d.work)
     yield d
     d.close()
 
@@ -145,10 +145,10 @@ def test_shell_is_not_a_topic_and_never_an_eviction_victim(deck):
     a, b = deck.add("A", uuid=U1), deck.add("B", uuid=U2)
     assert deck.cli("shell-ensure").returncode == 0
     # limit 1: the shell does not take the only place ...
-    assert deck.cli("ensure", a["id"], AGENTDECK_MAX_ACTIVE="1").returncode == 0
+    assert deck.cli("ensure", a["id"], AGENTKENNEL_MAX_ACTIVE="1").returncode == 0
     assert deck.has(SHELL) and deck.has("cs-aaaaaaaa")
     # ... and when room is needed, the idle topic goes, not the shell
-    assert deck.cli("ensure", b["id"], AGENTDECK_MAX_ACTIVE="1").returncode == 0
+    assert deck.cli("ensure", b["id"], AGENTKENNEL_MAX_ACTIVE="1").returncode == 0
     assert deck.has(SHELL) and deck.has("cs-bbbbbbbb") and not deck.has("cs-aaaaaaaa")
     assert set(deck.active()) == {"bbbbbbbb"}                  # not listed as a topic
 
@@ -224,7 +224,7 @@ def test_shell_close_is_idempotent(api):  # noqa: F811
 
 
 def test_shell_close_has_the_same_csrf_checks(api, monkeypatch):  # noqa: F811
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_ORIGIN", raising=False)
     _start(api, SHELL)
     code, _, _ = _raw_req(api, "POST", "/api/library/shell-close", b"{}",
                           {"Content-Type": "text/plain"})

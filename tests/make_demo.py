@@ -273,7 +273,7 @@ def main() -> int:
     for tool in ("ffmpeg",):
         if not shutil.which(tool):
             print(f"{tool} is required"); return 2
-    work = Path(tempfile.mkdtemp(prefix="agentdeck-demo-"))
+    work = Path(tempfile.mkdtemp(prefix="agentkennel-demo-"))
     frames = work / "frames"
     frames.mkdir()
     state_path = work / "state.json"

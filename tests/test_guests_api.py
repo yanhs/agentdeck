@@ -71,7 +71,7 @@ def g(tmp_path, monkeypatch):
     (gd / "guestctl.py").write_text(FAKE)
     (gd / "behave.json").write_text(json.dumps({"guests": GUESTS, "checks": CHECKS}))
     monkeypatch.setenv("GUESTS_DIR", str(gd))
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_ORIGIN", raising=False)
     sys.modules.pop("status_server", None)
     ss = importlib.import_module("status_server")
     # "Your bot" (the dashboard's Telegram page): its owner is the guests' admin

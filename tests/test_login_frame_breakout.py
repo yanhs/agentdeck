@@ -20,8 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 @pytest.fixture
 def ss(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTDECK_PASSFILE", str(tmp_path / ".dashpass"))
-    monkeypatch.setenv("AGENTDECK_AUTH_SECRET", str(tmp_path / ".secret"))
+    monkeypatch.setenv("AGENTKENNEL_PASSFILE", str(tmp_path / ".dashpass"))
+    monkeypatch.setenv("AGENTKENNEL_AUTH_SECRET", str(tmp_path / ".secret"))
     sys.modules.pop("status_server", None)
     m = importlib.import_module("status_server")
     monkeypatch.setattr(m, "HTPASSWD_FILE", str(tmp_path / "none"))

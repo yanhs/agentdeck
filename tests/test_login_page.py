@@ -18,10 +18,10 @@ def load(tmp_path, monkeypatch):
     def _load(passfile: bool, htpasswd: bool, seeded: bool = False):
         pf = tmp_path / ".dashpass"
         if passfile:
-            monkeypatch.setenv("AGENTDECK_PASSFILE", str(pf))
+            monkeypatch.setenv("AGENTKENNEL_PASSFILE", str(pf))
         else:
-            monkeypatch.delenv("AGENTDECK_PASSFILE", raising=False)
-        monkeypatch.setenv("AGENTDECK_AUTH_SECRET", str(tmp_path / ".secret"))
+            monkeypatch.delenv("AGENTKENNEL_PASSFILE", raising=False)
+        monkeypatch.setenv("AGENTKENNEL_AUTH_SECRET", str(tmp_path / ".secret"))
         sys.modules.pop("status_server", None)
         m = importlib.import_module("status_server")
         ht = tmp_path / "htpasswd"

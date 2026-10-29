@@ -60,7 +60,7 @@ def test_save_paste_image_without_public_url_returns_the_path(tmp_path, monkeypa
 def _paste_defaults(extra_env=None):
     import json, subprocess
     env = {k: v for k, v in os.environ.items()
-           if k not in ("AGENTDECK_PASTE_DIR", "AGENTDECK_PASTE_URL", "TG_FILES_DIR_IMG")}
+           if k not in ("AGENTKENNEL_PASTE_DIR", "AGENTKENNEL_PASTE_URL", "TG_FILES_DIR_IMG")}
     env.update(extra_env or {})
     code = "import json,status_server as s;print(json.dumps([s.PASTE_DIR,s.PASTE_URL]))"
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env,
@@ -76,5 +76,5 @@ def test_paste_defaults_are_generic_inside_the_repo():
 
 
 def test_paste_env_overrides():
-    assert _paste_defaults({"AGENTDECK_PASTE_DIR": "/p", "AGENTDECK_PASTE_URL": "https://h/i"}) == ["/p", "https://h/i"]
+    assert _paste_defaults({"AGENTKENNEL_PASTE_DIR": "/p", "AGENTKENNEL_PASTE_URL": "https://h/i"}) == ["/p", "https://h/i"]
     assert _paste_defaults({"TG_FILES_DIR_IMG": "/old"})[0] == "/old"      # legacy name still honoured

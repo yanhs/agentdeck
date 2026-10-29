@@ -8,7 +8,7 @@ locations (/sess/ websocket -> 3031, /api/library -> 3011, both behind the
 server-level cookie auth).
 
 Isolation as in test_library_cli: temp registry/HOME, fake claude, private
-tmux socket agentdeck-test-cli-*.
+tmux socket agentkennel-test-cli-*.
 """
 import os
 import re
@@ -70,7 +70,7 @@ def test_dry_run_prints_the_pane_command_and_starts_nothing(deck):
     e = deck.add("новая", uuid=U1)
     r = run(deck, e["id"], DRY_RUN="1")
     assert r.returncode == 0, r.stderr
-    assert f"--session-id {U1}" in r.stdout and "AGENTDECK_SESSION=aaaaaaaa" in r.stdout
+    assert f"--session-id {U1}" in r.stdout and "AGENTKENNEL_SESSION=aaaaaaaa" in r.stdout
     assert f"{deck.claude} --session-id" in r.stdout            # CLAUDE_BIN reaches library_cli
     assert not deck.server_up()
 
@@ -105,8 +105,8 @@ def test_opens_the_topic_and_attaches_a_tab(deck):
 def test_all_busy_prints_a_clear_message_and_exits_3(deck):
     a, b, c = deck.add("A", uuid=U1), deck.add("B", uuid=U2), deck.add("C", uuid=U3)
     for x in (a, b):
-        assert deck.cli("ensure", x["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
-    r = run(deck, c["id"], AGENTDECK_MAX_ACTIVE="2", AGENTDECK_WORKING_SECONDS="3600")
+        assert deck.cli("ensure", x["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
+    r = run(deck, c["id"], AGENTKENNEL_MAX_ACTIVE="2", AGENTKENNEL_WORKING_SECONDS="3600")
     assert r.returncode == 3
     assert "busy" in (r.stdout + r.stderr)
     assert not deck.has("cs-c0ffee00")

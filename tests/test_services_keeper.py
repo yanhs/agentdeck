@@ -225,17 +225,17 @@ def test_the_api_listens_on_this_machine_only_by_default(tmp_path, monkeypatch):
 
 def test_services_live_in_the_work_folder(tmp_path, monkeypatch):
     monkeypatch.delenv("SERVICES_DIR", raising=False)
-    monkeypatch.setenv("AGENTDECK_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("AGENTKENNEL_WORKDIR", str(tmp_path))
     assert kp.default_dir() == tmp_path / ".services"
     monkeypatch.setenv("SERVICES_DIR", str(tmp_path / "x"))
     assert kp.default_dir() == tmp_path / "x"
 
 
-def test_without_a_work_folder_set_it_is_agentdecks_default(monkeypatch):
+def test_without_a_work_folder_set_it_is_agentkennels_default(monkeypatch):
     """Same as library_cli.WORKDIR: the folder above the AgentKennel checkout (a manual
-    start.sh has no AGENTDECK_WORKDIR; /work does not exist there)."""
+    start.sh has no AGENTKENNEL_WORKDIR; /work does not exist there)."""
     monkeypatch.delenv("SERVICES_DIR", raising=False)
-    monkeypatch.delenv("AGENTDECK_WORKDIR", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_WORKDIR", raising=False)
     repo = Path(kp.__file__).resolve().parent
     assert kp.default_dir() == repo.parent / ".services"
 

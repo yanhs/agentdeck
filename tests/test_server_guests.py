@@ -74,7 +74,7 @@ class FakeGuests:
                     g["limit"] = body["limit"]
                 self.jobs[body["name"]] = {"action": what, "done": True, "ok": True, "output": ""}
             return route.fulfill(status=200, content_type="application/json", body='{"ok": true}')
-        state = {"installed": True, "configured": self.configured, "dir": "/home/me/agentdeck/guests",
+        state = {"installed": True, "configured": self.configured, "dir": "/home/me/agentkennel/guests",
                  "env": self.env, "admin": self.admin, "guests": self.guests if self.configured else None,
                  "list_error": None, "checks": self.checks, "checking": False, "jobs": self.jobs}
         route.fulfill(status=200, content_type="application/json", body=json.dumps(state))
@@ -204,7 +204,7 @@ def test_off_offers_the_wizard(browser, site):  # noqa: F811
     assert body == {"bot_token": "123456789:AAH" + "x" * 32, "domain": "example.com"}
     assert pg.input_value("#gToken") == ""             # never kept on the page
     # step 4: the one command to run, with the module's real folder
-    assert "sudo /home/me/agentdeck/guests/install.sh" in pg.inner_text('#gWizard .gstep[data-step="services"]')
+    assert "sudo /home/me/agentkennel/guests/install.sh" in pg.inner_text('#gWizard .gstep[data-step="services"]')
     shot(pg, "server-guests-wizard-filled.png")
     assert pg.errors == []
     ctx.close()

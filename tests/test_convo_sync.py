@@ -11,9 +11,9 @@ session's OLD name after rename-session). convo_sync reads those files, finds
 each cs-<id> pane's Claude by the process tree, and when the pane runs another
 conversation it moves the registry entry and renames the tmux session.
 
-Isolated world per test: a private tmux server (agentdeck-test-convo-*), a temp
-sessions dir (AGENTDECK_CLAUDE_SESSIONS), temp projects dir
-(AGENTDECK_CLAUDE_PROJECTS) and a temp registry (AGENTDECK_LIBRARY). The "Claude"
+Isolated world per test: a private tmux server (agentkennel-test-convo-*), a temp
+sessions dir (AGENTKENNEL_CLAUDE_SESSIONS), temp projects dir
+(AGENTKENNEL_CLAUDE_PROJECTS) and a temp registry (AGENTKENNEL_LIBRARY). The "Claude"
 processes are sleeps; the test writes their pid files with their real start time.
 Only processes the test started are killed (by saved pid).
 """
@@ -83,7 +83,7 @@ def cmdline(pid):
 class World:
     def __init__(self, tmp_path, monkeypatch):
         self.tmp = tmp_path
-        self.sock = f"agentdeck-test-convo-{os.getpid()}-{_uuid.uuid4().hex[:6]}"
+        self.sock = f"agentkennel-test-convo-{os.getpid()}-{_uuid.uuid4().hex[:6]}"
         self.sessions = tmp_path / "sessions"
         self.sessions.mkdir()
         self.projects = tmp_path / "projects"
@@ -92,9 +92,9 @@ class World:
         self.work.mkdir()
         self.lib = str(tmp_path / "reg" / "library.json")
         self.procs = []
-        for k, v in (("AGENTDECK_CLAUDE_SESSIONS", self.sessions),
-                     ("AGENTDECK_CLAUDE_PROJECTS", self.projects),
-                     ("AGENTDECK_LIBRARY", self.lib), ("AGENTDECK_TMUX_SOCKET", self.sock)):
+        for k, v in (("AGENTKENNEL_CLAUDE_SESSIONS", self.sessions),
+                     ("AGENTKENNEL_CLAUDE_PROJECTS", self.projects),
+                     ("AGENTKENNEL_LIBRARY", self.lib), ("AGENTKENNEL_TMUX_SOCKET", self.sock)):
             monkeypatch.setenv(k, str(v))
         monkeypatch.delenv("TMUX", raising=False)
         sys.modules.pop("convo_sync", None)
@@ -102,7 +102,7 @@ class World:
 
     # tmux (private server only)
     def run(self, *args):
-        assert self.sock.startswith("agentdeck-test-convo-")
+        assert self.sock.startswith("agentkennel-test-convo-")
         env = {k: v for k, v in os.environ.items() if k != "TMUX"}
         return subprocess.run(["tmux", "-L", self.sock, "-f", "/dev/null", *args],
                               capture_output=True, text=True, env=env, timeout=15)

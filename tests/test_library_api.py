@@ -14,9 +14,9 @@ cards already show: off / idle / working, "working" measured the same way (CPU t
 pane's process tree over SAMPLE_INTERVAL).
 
 SAFETY: every tmux call in this file — ours and the server's — goes to a private socket
-(AGENTDECK_TMUX_SOCKET=agentdeck-test-*), never the default socket where the live
+(AGENTKENNEL_TMUX_SOCKET=agentkennel-test-*), never the default socket where the live
 claude-terminal*/cs-* sessions run; teardown kills only that private server. The registry
-is a temp file (AGENTDECK_LIBRARY).
+is a temp file (AGENTKENNEL_LIBRARY).
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ ROW_KEYS = {"id", "name", "cwd", "created", "last_used", "archived", "active", "
 
 # ── fixture: the real Handler on a free port, private tmux socket, temp registry ──
 def _tmux(sock, *args):
-    assert sock.startswith("agentdeck-test-"), "tests must never touch the default tmux socket"
+    assert sock.startswith("agentkennel-test-"), "tests must never touch the default tmux socket"
     env = {k: v for k, v in os.environ.items() if k != "TMUX"}
     return subprocess.run(["tmux", "-L", sock, "-f", "/dev/null", *args],
                           capture_output=True, text=True, env=env)
@@ -57,14 +57,14 @@ def _tmux(sock, *args):
 
 @pytest.fixture
 def api(tmp_path, monkeypatch):
-    sock = f"agentdeck-test-api-{os.getpid()}-{_uuid.uuid4().hex[:6]}"
+    sock = f"agentkennel-test-api-{os.getpid()}-{_uuid.uuid4().hex[:6]}"
     libfile = tmp_path / "library.json"
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", sock)
-    monkeypatch.setenv("AGENTDECK_LIBRARY", str(libfile))
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", sock)
+    monkeypatch.setenv("AGENTKENNEL_LIBRARY", str(libfile))
     # Claude's live-process files (convo_sync) and transcripts: temp, never the real ones
     (tmp_path / "claude-sessions").mkdir()
-    monkeypatch.setenv("AGENTDECK_CLAUDE_SESSIONS", str(tmp_path / "claude-sessions"))
-    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_SESSIONS", str(tmp_path / "claude-sessions"))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_PROJECTS", str(tmp_path / "projects"))
     monkeypatch.delenv("TMUX", raising=False)
     sys.modules.pop("status_server", None)
     ss = importlib.import_module("status_server")
@@ -213,7 +213,7 @@ def test_archived_hidden_by_default_listed_with_query(api):
 
 # ── POST /api/library/new ────────────────────────────────────────────────────
 def test_new_creates_entry_without_starting_tmux(api, monkeypatch):
-    monkeypatch.setenv("AGENTDECK_WORKDIR", "/srv/work")
+    monkeypatch.setenv("AGENTKENNEL_WORKDIR", "/srv/work")
     _seed(api, (U1, "старая", 10))
     t0 = int(time.time())
     code, e = post(api, "new", {"name": "ImmAppeal деплой"})
@@ -230,7 +230,7 @@ def test_new_creates_entry_without_starting_tmux(api, monkeypatch):
 
 
 def test_new_default_cwd_is_the_folder_above_this_repo(api, monkeypatch):
-    monkeypatch.delenv("AGENTDECK_WORKDIR", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_WORKDIR", raising=False)
     code, e = post(api, "new", {"name": "x"})
     assert code == 200 and e["cwd"] == str(TERMINAL_DIR.parent)
 
@@ -383,7 +383,7 @@ def test_post_requires_json_content_type(api):
 
 
 def test_post_rejects_a_foreign_origin(api, monkeypatch):
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_ORIGIN", raising=False)
     body = json.dumps({"name": "x"}).encode()
     own = api.base                                   # http://127.0.0.1:<port> = own scheme+Host
     for origin in ("https://evil.example", "null", "", own.replace("http://", "https://"),
@@ -398,9 +398,9 @@ def test_post_rejects_a_foreign_origin(api, monkeypatch):
 
 
 def test_default_origin_is_the_requests_own_scheme_and_host(api, monkeypatch):
-    """No AGENTDECK_ORIGIN (a fresh install, e.g. docker behind Caddy): the only accepted
+    """No AGENTKENNEL_ORIGIN (a fresh install, e.g. docker behind Caddy): the only accepted
     Origin is the request's own scheme (X-Forwarded-Proto from the proxy, else http) + Host."""
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_ORIGIN", raising=False)
     body = json.dumps({"name": "x"}).encode()
 
     def req(origin, host, proto=None):
@@ -420,7 +420,7 @@ def test_default_origin_is_the_requests_own_scheme_and_host(api, monkeypatch):
 
 
 def test_default_origin_refuses_without_a_host(api, monkeypatch):
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_ORIGIN", raising=False)
     ss = api.ss
     assert ss.lib_origin_ok("http://x", {"Host": ""}) is False
     assert ss.lib_origin_ok("http://x", {}) is False
@@ -429,7 +429,7 @@ def test_default_origin_refuses_without_a_host(api, monkeypatch):
 
 
 def test_allowed_origin_is_configurable(api, monkeypatch):
-    monkeypatch.setenv("AGENTDECK_ORIGIN", "https://deck.test")
+    monkeypatch.setenv("AGENTKENNEL_ORIGIN", "https://deck.test")
     body = json.dumps({"name": "x"}).encode()
     hdr = lambda o: {"Content-Type": "application/json", "Origin": o}
     assert _raw_req(api, "POST", "/api/library/new", body, hdr("https://deck.test"))[0] == 200
@@ -544,7 +544,7 @@ def test_library_session_has_no_legacy_path(api):
 @pytest.fixture
 def projects(tmp_path, monkeypatch):
     root = tmp_path / "projects"
-    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(root))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_PROJECTS", str(root))
     d = root / "-home-ubuntu-pr"
     d.mkdir(parents=True)
     return d
@@ -628,7 +628,7 @@ def test_reorder_validates_ids(api):
 
 
 def test_reorder_has_the_same_csrf_checks(api, monkeypatch):
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_ORIGIN", raising=False)
     _seed(api, (U1, "a", 10), (U2, "b", 20))
     before = [e["pos"] for e in library.load(api.lib)["sessions"]]
     body = json.dumps({"ids": ["aaaa1111", "bbbb2222"]}).encode()
@@ -850,7 +850,7 @@ import library_cli  # noqa: E402  (claude_processes: the one-claude-per-conversa
 
 RESTART_FAKE_CLAUDE = r"""#!/bin/bash
 # stands in for the claude CLI: records each start, then idles looking like claude
-echo "$AGENTDECK_SESSION|$*" >> "$HOME/claude-calls.log"
+echo "$AGENTKENNEL_SESSION|$*" >> "$HOME/claude-calls.log"
 echo "start $$" >> "$HOME/lifecycle.log"
 if [ -f "$HOME/dying" ]; then             # after /clear: see DYING_CLAUDE below
   exec -a claude /bin/bash "$HOME/dying.sh" --resume 00000000-0000-4000-8000-000000000000
@@ -875,7 +875,7 @@ def rs(api, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("CLAUDE_BIN", str(claude))
     monkeypatch.setenv("PATH", f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}")
-    monkeypatch.setenv("AGENTDECK_WORKDIR", str(work))
+    monkeypatch.setenv("AGENTKENNEL_WORKDIR", str(work))
     monkeypatch.setenv("OPEN_SESSION_PAUSE", "0")
     monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 60)
     monkeypatch.setattr(api.ss, "sample_working", lambda pids: {k: False for k in pids})
@@ -1131,7 +1131,7 @@ def test_restart_errors(rs):
 
 
 def test_restart_has_the_same_csrf_checks(rs, monkeypatch):
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_ORIGIN", raising=False)
     sid = _rs_seed(rs)
     _start(rs, "cs-" + sid)
     body = json.dumps({"id": sid, "force": True}).encode()
@@ -1400,7 +1400,7 @@ def test_restart_refuses_a_trashed_terminal(api):
 
 
 def test_trash_routes_have_the_same_csrf_checks(api, monkeypatch):
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_ORIGIN", raising=False)
     _seed(api, (U1, "a", 10))
     with library.update(api.lib) as L:
         library.trash(L, "aaaa1111", now=5)

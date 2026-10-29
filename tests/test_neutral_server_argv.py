@@ -9,7 +9,7 @@ Every terminal died at once.
 
 Now, when no server runs, AgentKennel starts one first with a line that says nothing —
 `tmux [-L sock] -f /dev/null new-session -d -s hold-<hex> tmux wait-for hold-<hex>`: no
-checkout path either, so neither `pkill -f agentdeck` (the default ~/agentdeck, or
+checkout path either, so neither `pkill -f agentkennel` (the default ~/agentkennel, or
 another install) nor `pkill -f <checkout>` matches — sources tmux.conf into it, makes the
 real session and lets the placeholder go. tmux is called from `/`: the server keeps the
 working directory of the call that starts it, and a topic folder there would make
@@ -18,12 +18,12 @@ already up, so it may carry `-c <folder>` (tmux's new windows open there) and
 bin/pane <id|shell> — a launcher whose name carries no kill word either. Should the
 placeholder fail, the new-session goes without -c and the launcher enters the folder
 from the prepared start; either way it does what the long command did: the login +
-interactive bash environment, CLAUDE* unset, ~/.claude/oauth.env, AGENTDECK_SESSION,
+interactive bash environment, CLAUDE* unset, ~/.claude/oauth.env, AGENTKENNEL_SESSION,
 exec claude with the arguments `library_cli.py ensure` prepared.
 
 The prepared start is found without the environment on either side: it lives in
 <the launcher's checkout>/.sessions/launch/<id>. The pane's environment is the tmux
-server's (whoever started it), so AGENTDECK_LIBRARY there says nothing about ensure's.
+server's (whoever started it), so AGENTKENNEL_LIBRARY there says nothing about ensure's.
 
 Isolation as in test_library_cli: a private tmux socket per test, temp HOME and registry,
 a copy of the launcher in a temp checkout, a fake claude, conftest's TMUX_TMPDIR. No
@@ -45,21 +45,21 @@ CONF = os.path.join(REPO, "tmux.conf")
 OPEN_SESSION = os.path.join(REPO, "open-session.sh")
 
 KILL_WORDS = ("grep", "claude", "bash", "env", "python", "node", "sleep", "pytest",
-              "agentdeck")
-TOPIC_DIR = "claude-code-telegram bash env grep agentdeck"    # a folder name full of them
+              "agentkennel")
+TOPIC_DIR = "claude-code-telegram bash env grep agentkennel"    # a folder name full of them
 ULTRA_LINE = '{"type":"attachment","attachment":{"type":"ultra_effort_enter"}}\n'
 
 
 def kill_words(argv, *checkouts):
     """The KILL_WORDS AgentKennel put on argv, case-insensitive, as `pkill -f <word>` would
     find them. Left out: where AgentKennel was cloned (this checkout, the run's launcher
-    copy — conftest — and a test's own copies: the user picks that path, ~/agentdeck by
+    copy — conftest — and a test's own copies: the user picks that path, ~/agentkennel by
     default) and a test's own `-L <socket>`."""
     a = list(argv)
     if len(a) > 2 and a[1] == "-L":
         del a[1:3]
     text = " ".join(a)
-    run_co = os.path.dirname(os.path.dirname(os.environ.get("AGENTDECK_LAUNCHER", "")))
+    run_co = os.path.dirname(os.path.dirname(os.environ.get("AGENTKENNEL_LAUNCHER", "")))
     for c in sorted({REPO, run_co, *map(str, checkouts)} - {""}, key=len, reverse=True):
         text = text.replace(c, "<repo>")
     return [w for w in KILL_WORDS if w in text.lower()]
@@ -141,20 +141,20 @@ def test_the_server_ensure_starts_has_no_kill_words_on_its_command_line(deck):
 def test_the_server_the_cmd_line_starts_has_no_kill_words_either(deck):
     work = deck.tmp / TOPIC_DIR
     work.mkdir()
-    r = deck.cli("shell-ensure", AGENTDECK_WORKDIR=str(work), AGENTDECK_SESSION="deadbeef",
+    r = deck.cli("shell-ensure", AGENTKENNEL_WORKDIR=str(work), AGENTKENNEL_SESSION="deadbeef",
                  _cwd=str(work))
     assert r.returncode == 0, r.stderr
     argv = server_argv(deck.tmux)
     assert neutral_server(argv, deck.socket), argv
     assert sessions(deck.tmux) == ["cmd-shell"]        # the placeholder is gone already
-    # still a login bash in AGENTDECK_WORKDIR, with no CLAUDE* and no topic id
+    # still a login bash in AGENTKENNEL_WORKDIR, with no CLAUDE* and no topic id
     assert wait_for(lambda: pane(deck, "cmd-shell", "#{pane_current_command}") == "bash")
     assert wait_for(lambda: pane(deck, "cmd-shell", "#{pane_current_path}") == str(work))
     pid = int(pane(deck, "cmd-shell", "#{pane_pid}"))
     assert cmdline(pid)[0].endswith("bash") and "-l" in cmdline(pid)
     env = environ(pid)
     assert not [k for k in env if "CLAUDE" in k.upper()]
-    assert "AGENTDECK_SESSION" not in env
+    assert "AGENTKENNEL_SESSION" not in env
     assert not (deck.launch_dir / "shell").exists()          # read once
 
 
@@ -174,7 +174,7 @@ def test_open_session_starts_a_neutral_server_and_the_topic_runs(deck):
 
 def test_a_legacy_slot_the_bridge_starts_leaves_a_neutral_server(tmp_path, monkeypatch):
     """tg_bridge.start_session (old numbered slots) makes `claude-terminal-N`: it is
-    created under a neutral name (no "claude", no "agentdeck") and renamed, from `/`, so
+    created under a neutral name (no "claude", no "agentkennel") and renamed, from `/`, so
     a server it starts carries none of those words nor its folder as its working
     directory — and the slot still gets its typed launch command, in its folder."""
     from tests.test_tg_bridge import tb
@@ -183,8 +183,8 @@ def test_a_legacy_slot_the_bridge_starts_leaves_a_neutral_server(tmp_path, monke
         d.mkdir()
     (gate / "launch-claude-5.sh").write_text(
         '#!/bin/bash\n[ "${DRY_RUN:-}" = 1 ] && echo "pwd > $HOME/legacy-started"\n')
-    sock = f"agentdeck-test-legacy-{os.getpid()}"
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", sock)
+    sock = f"agentkennel-test-legacy-{os.getpid()}"
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", sock)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SHELL", "/bin/sh")
     monkeypatch.delenv("TMUX", raising=False)
@@ -219,7 +219,7 @@ def test_the_server_does_not_keep_a_topic_folder_as_its_working_directory(deck, 
     work.mkdir()
     e = deck.add("A", uuid=U1, cwd=str(work))
     args = ("ensure", e["id"]) if what == "ensure" else ("shell-ensure",)
-    r = deck.cli(*args, AGENTDECK_WORKDIR=str(work), _cwd=str(work))
+    r = deck.cli(*args, AGENTKENNEL_WORKDIR=str(work), _cwd=str(work))
     assert r.returncode == 0, r.stderr
     assert os.readlink(f"/proc/{server_pid(deck.tmux)}/cwd") == "/"
     name = "cs-aaaaaaaa" if what == "ensure" else "cmd-shell"
@@ -234,7 +234,7 @@ def test_tmux_new_windows_in_a_terminal_open_in_its_folder(deck):
     work.mkdir()
     e = deck.add("A", uuid=U1, cwd=str(work))
     assert deck.cli("ensure", e["id"]).returncode == 0            # starts the server
-    assert deck.cli("shell-ensure", AGENTDECK_WORKDIR=str(deck.work)).returncode == 0
+    assert deck.cli("shell-ensure", AGENTKENNEL_WORKDIR=str(deck.work)).returncode == 0
     r = deck.tmux("list-sessions", "-F", "#{session_name}\t#{session_path}")
     paths = dict(l.split("\t", 1) for l in r.stdout.splitlines())
     assert paths == {"cs-aaaaaaaa": str(work), "cmd-shell": str(deck.work)}, paths
@@ -248,17 +248,17 @@ def test_tmux_new_windows_in_a_terminal_open_in_its_folder(deck):
                                   "relative-library"])
 def test_the_pane_finds_its_start_whatever_environment_started_the_server(deck, case):
     """The pane's environment is the tmux server's — whoever started it first (the user's
-    own tmux, the bridge, an older AgentKennel). AGENTDECK_LIBRARY there, or a relative one
+    own tmux, the bridge, an older AgentKennel). AGENTKENNEL_LIBRARY there, or a relative one
     read from another folder, must not send the launcher to another place than ensure's."""
     e = deck.add("A", uuid=U1)
     extra, where = {}, None
     if case == "relative-library":
-        extra, where = {"AGENTDECK_LIBRARY": os.path.relpath(deck.lib, deck.tmp)}, str(deck.tmp)
+        extra, where = {"AGENTKENNEL_LIBRARY": os.path.relpath(deck.lib, deck.tmp)}, str(deck.tmp)
     else:
         env0 = {k: v for k, v in deck.env.items()
-                if k not in ("AGENTDECK_LIBRARY", "AGENTDECK_LAUNCHER")}
+                if k not in ("AGENTKENNEL_LIBRARY", "AGENTKENNEL_LAUNCHER")}
         if case == "server-with-another-library":
-            env0["AGENTDECK_LIBRARY"] = str(deck.tmp / "elsewhere" / "library.json")
+            env0["AGENTKENNEL_LIBRARY"] = str(deck.tmp / "elsewhere" / "library.json")
         first = subprocess.run(["tmux", "-L", deck.socket, "new-session", "-d", "-s", "users-own"],
                                env=env0, cwd=str(deck.home), capture_output=True, text=True,
                                timeout=10)
@@ -375,19 +375,19 @@ def test_start_refuses_loudly_when_the_launcher_is_not_executable(tmp_path, monk
 
 def test_the_launcher_ships_executable_under_a_neutral_name(monkeypatch):
     assert os.access(REPO_LAUNCHER, os.X_OK)
-    # "agentdeck" too: a `pkill -f agentdeck` meant for another install on the machine
+    # "agentkennel" too: a `pkill -f agentkennel` meant for another install on the machine
     assert kill_words(["<repo>/bin/" + os.path.basename(REPO_LAUNCHER)]) == []
-    monkeypatch.delenv("AGENTDECK_LAUNCHER", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_LAUNCHER", raising=False)
     assert _mod().LAUNCHER == REPO_LAUNCHER                 # the checkout's own by default
-    monkeypatch.setenv("AGENTDECK_LAUNCHER", "rel/bin/pane")
+    monkeypatch.setenv("AGENTKENNEL_LAUNCHER", "rel/bin/pane")
     assert _mod().LAUNCHER == os.path.abspath("rel/bin/pane")   # tmux runs it from /
 
 
 # ── the pane: claude with the right flags and environment ───────────────────
 def test_the_pane_runs_claude_with_its_flags_env_and_rc(deck):
     (deck.home / ".profile").write_text(
-        "export AGENTDECK_RC_LOGIN=1\n"
-        "case $- in *i*) export AGENTDECK_RC_INTERACTIVE=1 ;; esac\n"
+        "export AGENTKENNEL_RC_LOGIN=1\n"
+        "case $- in *i*) export AGENTKENNEL_RC_INTERACTIVE=1 ;; esac\n"
         "export CLAUDE_FROM_RC=leak\n"
         'echo "$PWD" > "$HOME/rc-pwd"\n')
     (deck.home / ".claude").mkdir()
@@ -407,11 +407,11 @@ def test_the_pane_runs_claude_with_its_flags_env_and_rc(deck):
     argv = cmdline(pid)
     assert argv[0] == "claude" and U1 in argv, argv
     env = environ(pid)
-    assert env.get("AGENTDECK_SESSION") == "aaaaaaaa"
+    assert env.get("AGENTKENNEL_SESSION") == "aaaaaaaa"
     assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == "tok-from-oauth-env"   # sourced after the scrub
-    assert env.get("AGENTDECK_RC_LOGIN") == "1" and env.get("AGENTDECK_RC_INTERACTIVE") == "1"
+    assert env.get("AGENTKENNEL_RC_LOGIN") == "1" and env.get("AGENTKENNEL_RC_INTERACTIVE") == "1"
     for gone in ("CLAUDE_FROM_RC", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_BIN",
-                 "AGENTDECK_PANE_RC"):
+                 "AGENTKENNEL_PANE_RC"):
         assert gone not in env, gone
     assert wait_for(lambda: deck.cli("pane-is-claude", "aaaaaaaa").returncode == 0)
     # the prepared start was read once and removed
@@ -441,7 +441,7 @@ def test_the_cmd_line_whose_folder_cannot_be_entered_opens_in_home(deck):
     locked.mkdir()
     locked.chmod(0o600)
     try:
-        r = deck.cli("shell-ensure", AGENTDECK_WORKDIR=str(locked))
+        r = deck.cli("shell-ensure", AGENTKENNEL_WORKDIR=str(locked))
         assert r.returncode == 0, (r.stdout, r.stderr)
         assert wait_for(lambda: pane(deck, "cmd-shell", "#{pane_current_command}") == "bash")
         assert wait_for(lambda: pane(deck, "cmd-shell", "#{pane_current_path}") == str(deck.home))
@@ -479,7 +479,7 @@ def _fake(tmp_path):
     d = tmp_path / "fakebin"
     d.mkdir(exist_ok=True)
     f = d / "claude"
-    f.write_text('#!/bin/sh\necho "ran $* as $AGENTDECK_SESSION in $PWD"\n')
+    f.write_text('#!/bin/sh\necho "ran $* as $AGENTKENNEL_SESSION in $PWD"\n')
     f.chmod(0o755)
     return str(f)
 
@@ -532,13 +532,13 @@ def test_launcher_runs_the_prepared_start_once_in_its_folder(tmp_path):
 
 
 def test_launcher_finds_its_start_in_its_own_checkout_whatever_the_environment_says(tmp_path):
-    """Not $AGENTDECK_LIBRARY's folder: the pane's environment is the tmux server's."""
+    """Not $AGENTKENNEL_LIBRARY's folder: the pane's environment is the tmux server's."""
     launcher, launch_dir = _checkout(tmp_path)
     decoy = _prepare(tmp_path / "elsewhere" / "launch", "aaaaaaaa", tmp_path,
                      [_fake(tmp_path), "--session-id", U1, "--decoy"])
     f = _prepare(launch_dir, "aaaaaaaa", tmp_path,
                  [_fake(tmp_path), "--session-id", U1, "--dangerously-skip-permissions"])
-    home, env = _launcher_env(tmp_path, AGENTDECK_LIBRARY=str(tmp_path / "elsewhere" /
+    home, env = _launcher_env(tmp_path, AGENTKENNEL_LIBRARY=str(tmp_path / "elsewhere" /
                                                                "library.json"))
     r = _run([launcher, "aaaaaaaa"], env)
     assert r.returncode == 0, r.stderr
@@ -607,7 +607,7 @@ def test_launcher_starts_in_home_when_the_folder_cannot_be_entered(tmp_path):
 
 def test_launcher_shell_opens_a_clean_login_bash_in_the_prepared_folder(tmp_path):
     launcher, launch_dir = _checkout(tmp_path)
-    home, env = _launcher_env(tmp_path, CLAUDECODE="1", AGENTDECK_SESSION="deadbeef")
+    home, env = _launcher_env(tmp_path, CLAUDECODE="1", AGENTKENNEL_SESSION="deadbeef")
     folder = tmp_path / "work dir"
     folder.mkdir()
     f = _prepare(launch_dir, "shell", folder, [])
@@ -616,7 +616,7 @@ def test_launcher_shell_opens_a_clean_login_bash_in_the_prepared_folder(tmp_path
     assert r.returncode == 0, r.stderr
     assert f"at {folder}" in r.stdout
     names = r.stdout.split()
-    assert "CLAUDECODE" not in names and "AGENTDECK_SESSION" not in names
+    assert "CLAUDECODE" not in names and "AGENTKENNEL_SESSION" not in names
     assert (home / "rc.log").read_text() == "rc\n"            # a login shell
     assert not f.exists()
     # nothing prepared (started by hand): where it was started
@@ -657,7 +657,7 @@ def test_library_cli_prepares_the_start_where_the_launcher_reads_it(tmp_path, mo
 def test_ensure_leaves_no_prepared_start_when_tmux_fails(deck):
     """A start tmux refused must not stay behind for a later, unrelated launch."""
     e = deck.add("A", uuid=U1)
-    r = deck.cli("ensure", e["id"], AGENTDECK_TMUX_SOCKET="bad/socket/name" * 20)
+    r = deck.cli("ensure", e["id"], AGENTKENNEL_TMUX_SOCKET="bad/socket/name" * 20)
     assert r.returncode == 1, (r.stdout, r.stderr)
     time.sleep(0.2)
     assert not (deck.launch_dir / "aaaaaaaa").exists()
@@ -667,7 +667,7 @@ def test_a_hung_tmux_leaves_no_prepared_start_and_no_traceback(tmp_path, monkeyp
     m = _mod()
     lib = tmp_path / "reg" / "library.json"
     monkeypatch.setattr(m.library, "LIB_FILE", str(lib))
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", f"agentdeck-test-hang-{os.getpid()}")
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", f"agentkennel-test-hang-{os.getpid()}")
     launcher, launch_dir = _checkout(tmp_path)
     monkeypatch.setattr(m, "LAUNCHER", launcher)
 

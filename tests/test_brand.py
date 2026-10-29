@@ -2,8 +2,9 @@
 
 A fresh install shows three pages before the dashboard: the setup-locked page (no
 password yet, no link), the setup form (the one-time link) and the login page. Each must
-say AgentKennel and never the old name. Technical identifiers (units agentdeck-*, the
-AGENTDECK_* variables, ~/agentdeck, the compose service) keep their names on purpose."""
+say AgentKennel and never the old name. Since v2.1.0 the technical identifiers follow
+(units agentkennel-*, the AGENTKENNEL_* variables, ~/agentkennel, the compose service);
+the old ones are still accepted (tests/test_envcompat.py, tests/test_install_sh.py)."""
 import http.client
 import importlib
 import socket
@@ -25,8 +26,8 @@ def _free_port():
 
 
 def test_fresh_install_pages_say_agentkennel(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTDECK_PASSFILE", str(tmp_path / ".dashpass"))
-    monkeypatch.setenv("AGENTDECK_AUTH_SECRET", str(tmp_path / ".secret"))
+    monkeypatch.setenv("AGENTKENNEL_PASSFILE", str(tmp_path / ".dashpass"))
+    monkeypatch.setenv("AGENTKENNEL_AUTH_SECRET", str(tmp_path / ".secret"))
     sys.modules.pop("status_server", None)
     m = importlib.import_module("status_server")
     monkeypatch.setattr(m, "HTPASSWD_FILE", str(tmp_path / "none"))

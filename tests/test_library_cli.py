@@ -6,9 +6,9 @@ call before attaching: it refuses anything that is not a known, non-archived
 by unloading the least recently used idle one, and starts Claude with
 `--resume` when the transcript exists, `--session-id` otherwise.
 
-Every test runs in an isolated world: temp registry (AGENTDECK_LIBRARY), temp
-HOME with a fake `claude`, and a private tmux server (AGENTDECK_TMUX_SOCKET =
-agentdeck-test-cli-*) that is killed at the end. The live tmux server on the
+Every test runs in an isolated world: temp registry (AGENTKENNEL_LIBRARY), temp
+HOME with a fake `claude`, and a private tmux server (AGENTKENNEL_TMUX_SOCKET =
+agentkennel-test-cli-*) that is killed at the end. The live tmux server on the
 default socket (claude-terminal*, cs-*) is never touched.
 """
 import importlib.util
@@ -39,12 +39,12 @@ BAD_IDS = [";rm -rf /", "AAAAAAAA", "aaaaaaa", "aaaaaaaa5", "../x", "", "aaaaaaa
 
 FAKE_CLAUDE = r"""#!/bin/bash
 # stands in for the claude CLI: records how it was started, then idles
-echo "$AGENTDECK_SESSION|$*|$PWD|${CLAUDECODE:-}${CLAUDE_CODE_ENTRYPOINT:-}" >> "$HOME/claude-calls.log"
-if [ -f "$HOME/bg-$AGENTDECK_SESSION" ]; then          # simulate a live background task
+echo "$AGENTKENNEL_SESSION|$*|$PWD|${CLAUDECODE:-}${CLAUDE_CODE_ENTRYPOINT:-}" >> "$HOME/claude-calls.log"
+if [ -f "$HOME/bg-$AGENTKENNEL_SESSION" ]; then          # simulate a live background task
   mkdir -p "$HOME/claude-tmp/tasks"
   sleep 600 > "$HOME/claude-tmp/tasks/b0bcat.output" &
 fi
-[ -f "$HOME/exit-$AGENTDECK_SESSION" ] && exit 0        # simulate Claude quitting
+[ -f "$HOME/exit-$AGENTKENNEL_SESSION" ] && exit 0        # simulate Claude quitting
 # keep looking like claude to tmux (#{pane_current_command} = argv[0]) and to a
 # /proc scan (argv[0] "claude" + its --resume/--session-id <uuid> arguments)
 exec -a claude /bin/bash -c 'sleep 600; :' claude "$@"
@@ -76,7 +76,7 @@ class Deck:
         self.work = tmp_path / "work"
         self.work.mkdir()
         self.lib = str(tmp_path / "reg" / "library.json")
-        self.socket = f"agentdeck-test-cli-{os.getpid()}-{_uuid.uuid4().hex[:6]}"
+        self.socket = f"agentkennel-test-cli-{os.getpid()}-{_uuid.uuid4().hex[:6]}"
         # the pane launcher in a checkout of its own: starts are left in
         # <checkout>/.sessions/launch/ (library_cli.LAUNCHER), never in this repo's
         self.checkout = tmp_path / "checkout"
@@ -98,10 +98,10 @@ class Deck:
         env = {k: v for k, v in os.environ.items()
                if k not in ("TMUX", "CLAUDE_CODE_SESSION_ID")}
         env.update(PATH=f"{self.bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
-                   HOME=str(self.home), AGENTDECK_LIBRARY=self.lib,
-                   AGENTDECK_TMUX_SOCKET=self.socket, CLAUDE_BIN=str(self.claude),
-                   AGENTDECK_LAUNCHER=self.launcher,
-                   AGENTDECK_WORKING_SECONDS="0", AGENTDECK_MAX_ACTIVE="12",
+                   HOME=str(self.home), AGENTKENNEL_LIBRARY=self.lib,
+                   AGENTKENNEL_TMUX_SOCKET=self.socket, CLAUDE_BIN=str(self.claude),
+                   AGENTKENNEL_LAUNCHER=self.launcher,
+                   AGENTKENNEL_WORKING_SECONDS="0", AGENTKENNEL_MAX_ACTIVE="12",
                    OPEN_SESSION_PAUSE="0", TERM="xterm-256color", LANG="C.UTF-8",
                    # a Claude-spawned environment: must NOT leak into the pane
                    CLAUDECODE="1", CLAUDE_CODE_ENTRYPOINT="sdk-py")
@@ -292,7 +292,7 @@ def test_pane_command_session_id_when_no_transcript(tmp_path):
     cmd = m.pane_command(e, home=str(tmp_path / "h"), claude_bin="/opt/claude")
     assert f"--session-id {U1}" in cmd and "--resume" not in cmd
     assert "--dangerously-skip-permissions" in cmd
-    assert "export AGENTDECK_SESSION=aaaaaaaa" in cmd
+    assert "export AGENTKENNEL_SESSION=aaaaaaaa" in cmd
 
 
 def test_pane_command_resume_when_transcript_exists(tmp_path):
@@ -313,7 +313,7 @@ def test_pane_command_scrubs_claude_vars_and_sources_oauth(tmp_path):
     assert "grep -i CLAUDE" in cmd and 'unset "$v"' in cmd
     assert "[ -r /home/u/.claude/oauth.env ] && . /home/u/.claude/oauth.env" in cmd
     # order: scrub, token, id, then claude
-    assert cmd.index("unset") < cmd.index("oauth.env") < cmd.index("AGENTDECK_SESSION") \
+    assert cmd.index("unset") < cmd.index("oauth.env") < cmd.index("AGENTKENNEL_SESSION") \
         < cmd.index("/opt/claude")
 
 
@@ -404,7 +404,7 @@ def test_ensure_starts_detached_session_and_prints_tmux_name(deck):
     calls = wait_for(deck.calls)
     assert len(calls) == 1
     sid, args, cwd, leaked = calls[0].split("|")
-    assert sid == "aaaaaaaa"                                   # AGENTDECK_SESSION exported
+    assert sid == "aaaaaaaa"                                   # AGENTKENNEL_SESSION exported
     assert f"--session-id {U1}" in args and "--dangerously-skip-permissions" in args
     assert cwd == str(deck.work)                               # runs in the entry's cwd
     assert leaked == ""                                        # CLAUDE* vars scrubbed
@@ -443,11 +443,11 @@ def test_ensure_touches_nothing_on_the_default_socket(deck):
 def test_ensure_unloads_least_recently_used_idle_session_at_the_limit(deck):
     a, b = deck.add("A", uuid=U1), deck.add("B", uuid=U2)
     c = deck.add("C", uuid=U3)
-    assert deck.cli("ensure", a["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
-    assert deck.cli("ensure", b["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", a["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", b["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     deck.set_last_used(a["id"], 100)                           # A is the oldest
     deck.set_last_used(b["id"], 200)
-    r = deck.cli("ensure", c["id"], AGENTDECK_MAX_ACTIVE="2")
+    r = deck.cli("ensure", c["id"], AGENTKENNEL_MAX_ACTIVE="2")
     assert r.returncode == 0, r.stderr
     assert not deck.has("cs-aaaaaaaa") and deck.has("cs-bbbbbbbb") and deck.has("cs-c0ffee00")
     assert "cs-aaaaaaaa" in r.stderr and "«A»" in r.stderr      # says whom it unloaded
@@ -455,10 +455,10 @@ def test_ensure_unloads_least_recently_used_idle_session_at_the_limit(deck):
 
 def test_ensure_refuses_with_exit_3_when_all_loaded_are_working(deck):
     a, b, c = deck.add("A", uuid=U1), deck.add("B", uuid=U2), deck.add("C", uuid=U3)
-    assert deck.cli("ensure", a["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
-    assert deck.cli("ensure", b["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", a["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", b["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     # both just printed something -> both "working" within a 1-hour window
-    r = deck.cli("ensure", c["id"], AGENTDECK_MAX_ACTIVE="2", AGENTDECK_WORKING_SECONDS="3600")
+    r = deck.cli("ensure", c["id"], AGENTKENNEL_MAX_ACTIVE="2", AGENTKENNEL_WORKING_SECONDS="3600")
     assert r.returncode == 3
     assert r.stdout == ""
     assert "2" in r.stderr and "busy" in r.stderr
@@ -468,38 +468,38 @@ def test_ensure_refuses_with_exit_3_when_all_loaded_are_working(deck):
 def test_session_with_a_live_background_task_is_working_and_kept(deck):
     a, b, c = deck.add("A", uuid=U1), deck.add("B", uuid=U2), deck.add("C", uuid=U3)
     (deck.home / "bg-aaaaaaaa").write_text("")                 # A runs a background task
-    assert deck.cli("ensure", a["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
-    assert deck.cli("ensure", b["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", a["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", b["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     wait_for(lambda: len(deck.calls()) == 2)
     act = wait_for(lambda: (lambda x: x if x["aaaaaaaa"]["working"] else None)(deck.active()))
     assert act["aaaaaaaa"]["working"] is True and act["bbbbbbbb"]["working"] is False
     deck.set_last_used(a["id"], 100)                           # A oldest, but busy
     deck.set_last_used(b["id"], 200)
-    assert deck.cli("ensure", c["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", c["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     assert deck.has("cs-aaaaaaaa") and not deck.has("cs-bbbbbbbb")
 
 
 def test_attached_session_is_not_unloaded(deck):
     a, b, c = deck.add("A", uuid=U1), deck.add("B", uuid=U2), deck.add("C", uuid=U3)
-    assert deck.cli("ensure", a["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
-    assert deck.cli("ensure", b["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", a["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", b["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     deck.attach(a["id"])                                       # a tab is open on A
     assert wait_for(lambda: deck.active()["aaaaaaaa"]["attached"])
     deck.set_last_used(a["id"], 100)
     deck.set_last_used(b["id"], 200)
-    assert deck.cli("ensure", c["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", c["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     assert deck.has("cs-aaaaaaaa") and not deck.has("cs-bbbbbbbb")
 
 
 def test_non_library_sessions_neither_count_nor_get_killed(deck):
     deck.tmux("new-session", "-d", "-s", "claude-terminal-3")  # a legacy slot on the same server
     a, b = deck.add("A", uuid=U1), deck.add("B", uuid=U2)
-    assert deck.cli("ensure", a["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
-    assert deck.cli("ensure", b["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", a["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", b["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     assert deck.has("cs-aaaaaaaa") and deck.has("cs-bbbbbbbb")   # legacy did not count
     c = deck.add("C", uuid=U3)
     deck.set_last_used(a["id"], 100)
-    assert deck.cli("ensure", c["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", c["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     assert deck.has("claude-terminal-3") and not deck.has("cs-aaaaaaaa")
 
 
@@ -579,14 +579,14 @@ def test_hold_writes_an_expiry_marker(deck):
     assert not deck.server_up()
 
 
-def test_hold_dash_takes_the_id_from_agentdeck_session(deck):
-    r = deck.cli("hold", "-", "60", AGENTDECK_SESSION="bbbbbbbb")
+def test_hold_dash_takes_the_id_from_agentkennel_session(deck):
+    r = deck.cli("hold", "-", "60", AGENTKENNEL_SESSION="bbbbbbbb")
     assert r.returncode == 0, r.stderr
     assert library.hold_until("bbbbbbbb", lib_file=deck.lib) > time.time()
 
 
 def test_hold_refuses_bad_input(deck):
-    env = {k: v for k, v in deck.env.items() if k != "AGENTDECK_SESSION"}
+    env = {k: v for k, v in deck.env.items() if k not in ("AGENTKENNEL_SESSION", "AGENTDECK_SESSION")}
     r = subprocess.run([sys.executable, CLI, "hold", "-", "60"], capture_output=True,
                        text=True, env=env, timeout=30)
     assert r.returncode == 2
@@ -598,36 +598,36 @@ def test_hold_refuses_bad_input(deck):
 
 def test_held_session_is_working_and_not_unloaded(deck):
     a, b, c = deck.add("A", uuid=U1), deck.add("B", uuid=U2), deck.add("C", uuid=U3)
-    assert deck.cli("ensure", a["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
-    assert deck.cli("ensure", b["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", a["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", b["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     assert deck.cli("hold", a["id"], "3600").returncode == 0
     act = deck.active()
     assert act["aaaaaaaa"]["working"] is True and act["bbbbbbbb"]["working"] is False
     deck.set_last_used(a["id"], 100)                           # A oldest, but held
     deck.set_last_used(b["id"], 200)
-    assert deck.cli("ensure", c["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", c["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     assert deck.has("cs-aaaaaaaa") and not deck.has("cs-bbbbbbbb")
 
 
 def test_expired_hold_does_not_protect(deck):
     a, b, c = deck.add("A", uuid=U1), deck.add("B", uuid=U2), deck.add("C", uuid=U3)
-    assert deck.cli("ensure", a["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
-    assert deck.cli("ensure", b["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", a["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", b["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     library.set_hold(a["id"], int(time.time()) - 1, lib_file=deck.lib)
     deck.set_last_used(a["id"], 100)
     deck.set_last_used(b["id"], 200)
-    assert deck.cli("ensure", c["id"], AGENTDECK_MAX_ACTIVE="2").returncode == 0
+    assert deck.cli("ensure", c["id"], AGENTKENNEL_MAX_ACTIVE="2").returncode == 0
     assert not deck.has("cs-aaaaaaaa") and deck.has("cs-bbbbbbbb")
 
 
 def test_working_window_defaults_to_30_minutes(monkeypatch):
-    monkeypatch.delenv("AGENTDECK_WORKING_SECONDS", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_WORKING_SECONDS", raising=False)
     assert _mod().WORKING_SECONDS == 1800
 
 
 # ── eviction order: max(last_used, last_output) ────────────────────────────
 def test_make_room_orders_by_the_later_of_use_and_output(deck, monkeypatch):
-    for k in ("AGENTDECK_LIBRARY", "AGENTDECK_TMUX_SOCKET"):
+    for k in ("AGENTKENNEL_LIBRARY", "AGENTKENNEL_TMUX_SOCKET"):
         monkeypatch.setenv(k, deck.env[k])
     m = _mod()
     monkeypatch.setattr(m.library, "LIB_FILE", deck.lib)
@@ -683,7 +683,7 @@ def test_claude_inside_its_own_session_is_not_elsewhere(deck, monkeypatch):
     e = deck.add("A", uuid=U1)
     assert deck.cli("ensure", e["id"]).returncode == 0
     wait_for(deck.calls)
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", deck.socket)
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", deck.socket)
     m = _mod()
     found = wait_for(lambda: m.claude_processes(U1))
     assert [s for _, s in found] == ["cs-aaaaaaaa"]
@@ -880,17 +880,17 @@ def test_pane_cmd_after_switch_resumes_the_live_uuid(deck):
         r = deck.cli("pane-cmd", asked)
         assert r.returncode == 0, r.stderr
         assert f"--resume {U2}" in r.stdout and U1 not in r.stdout
-        assert "AGENTDECK_SESSION=bbbbbbbb" in r.stdout
+        assert "AGENTKENNEL_SESSION=bbbbbbbb" in r.stdout
 
 
 def test_hold_dash_prefers_the_live_conversation(deck):
-    # AGENTDECK_SESSION is the number the pane had at launch; after a switch the
+    # AGENTKENNEL_SESSION is the number the pane had at launch; after a switch the
     # terminal is the conversation Claude runs now (CLAUDE_CODE_SESSION_ID)
-    r = deck.cli("hold", "-", "60", AGENTDECK_SESSION="aaaaaaaa", CLAUDE_CODE_SESSION_ID=U2)
+    r = deck.cli("hold", "-", "60", AGENTKENNEL_SESSION="aaaaaaaa", CLAUDE_CODE_SESSION_ID=U2)
     assert r.returncode == 0, r.stderr
     assert library.hold_until("bbbbbbbb", lib_file=deck.lib) > time.time()
     assert library.hold_until("aaaaaaaa", lib_file=deck.lib) is None
-    r = deck.cli("hold", "-", "60", AGENTDECK_SESSION="aaaaaaaa", CLAUDE_CODE_SESSION_ID="x/../y")
+    r = deck.cli("hold", "-", "60", AGENTKENNEL_SESSION="aaaaaaaa", CLAUDE_CODE_SESSION_ID="x/../y")
     assert r.returncode == 0, r.stderr
     assert library.hold_until("aaaaaaaa", lib_file=deck.lib) > time.time()
 
@@ -933,7 +933,7 @@ def test_pane_command_sets_the_scroll_speed_after_the_scrub(tmp_path):
     cmd = m.pane_command(e, home="/home/u", claude_bin="/opt/claude")
     assert "export CLAUDE_CODE_SCROLL_SPEED=3;" in cmd
     # after the scrub (it would unset it) and the id, before claude
-    assert cmd.index('unset "$v"') < cmd.index("AGENTDECK_SESSION") \
+    assert cmd.index('unset "$v"') < cmd.index("AGENTKENNEL_SESSION") \
         < cmd.index("CLAUDE_CODE_SCROLL_SPEED=3") < cmd.index("/opt/claude")
 
 
@@ -954,7 +954,7 @@ def test_scroll_speed_inherited_from_the_server_is_replaced(scroll_deck):
 
 def test_shell_pane_gets_no_scroll_speed(deck):
     deck.env["CLAUDE_CODE_SCROLL_SPEED"] = "1"                 # inherited: scrubbed too
-    deck.env["AGENTDECK_WORKDIR"] = str(deck.work)
+    deck.env["AGENTKENNEL_WORKDIR"] = str(deck.work)
     # the shell pane is `exec bash -l`: its profile records what the shell got
     (deck.home / ".bash_profile").write_text(
         'echo "${CLAUDE_CODE_SCROLL_SPEED-unset}" >> "$HOME/scroll-speed.log"\n')

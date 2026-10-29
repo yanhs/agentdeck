@@ -35,8 +35,8 @@ def _free_port():
 
 @pytest.fixture
 def srv(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTDECK_PASSFILE", str(tmp_path / ".dashpass"))
-    monkeypatch.setenv("AGENTDECK_AUTH_SECRET", str(tmp_path / ".secret"))
+    monkeypatch.setenv("AGENTKENNEL_PASSFILE", str(tmp_path / ".dashpass"))
+    monkeypatch.setenv("AGENTKENNEL_AUTH_SECRET", str(tmp_path / ".secret"))
     sys.modules.pop("status_server", None)
     m = importlib.import_module("status_server")
     monkeypatch.setattr(m, "HTPASSWD_FILE", str(tmp_path / "none"))
@@ -124,9 +124,9 @@ def test_no_link_once_a_password_is_set(srv):
 
 
 def test_cli_prints_the_link(tmp_path):
-    env = dict(os.environ, AGENTDECK_PASSFILE=str(tmp_path / ".dashpass"),
-               AGENTDECK_AUTH_SECRET=str(tmp_path / ".secret"),
-               AGENTDECK_HTPASSWD=str(tmp_path / "none"))   # no legacy nginx login here
+    env = dict(os.environ, AGENTKENNEL_PASSFILE=str(tmp_path / ".dashpass"),
+               AGENTKENNEL_AUTH_SECRET=str(tmp_path / ".secret"),
+               AGENTKENNEL_HTPASSWD=str(tmp_path / "none"))   # no legacy nginx login here
     p = subprocess.run([sys.executable, str(ROOT / "status_server.py"), "--setup-link"],
                        env=env, capture_output=True, text=True, timeout=20)
     assert p.returncode == 0, p.stderr

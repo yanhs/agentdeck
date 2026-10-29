@@ -1,7 +1,7 @@
 """Dashboard password: move from the nginx htpasswd file to the dashboard's own
 passfile WITHOUT anyone typing the password into a chat (owner 2026-09-25).
 
-With AGENTDECK_PASSFILE set but still empty and the old htpasswd present:
+With AGENTKENNEL_PASSFILE set but still empty and the old htpasswd present:
   * the login page stays a normal login (never the open 'set a password' form —
     the first stranger to arrive would own the dashboard),
   * a login is checked against htpasswd and, on success, seeds the passfile,
@@ -23,8 +23,8 @@ def mod(tmp_path, monkeypatch):
     ht = tmp_path / "htpasswd"
     subprocess.run(["htpasswd", "-cb", str(ht), "admin", "old-secret-1"], check=True,
                    capture_output=True)
-    monkeypatch.setenv("AGENTDECK_PASSFILE", str(tmp_path / ".dashpass"))
-    monkeypatch.setenv("AGENTDECK_AUTH_SECRET", str(tmp_path / ".secret"))
+    monkeypatch.setenv("AGENTKENNEL_PASSFILE", str(tmp_path / ".dashpass"))
+    monkeypatch.setenv("AGENTKENNEL_AUTH_SECRET", str(tmp_path / ".secret"))
     sys.modules.pop("status_server", None)
     m = importlib.import_module("status_server")
     monkeypatch.setattr(m, "HTPASSWD_FILE", str(ht))

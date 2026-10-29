@@ -575,7 +575,7 @@ def test_real_proc_sample_is_cheap():
 # ── the API on the dashboard backend (port-3011 Handler) ───────────────────
 @pytest.fixture
 def api(monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", f"agentdeck-test-srv-{os.getpid()}")
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", f"agentkennel-test-srv-{os.getpid()}")
     sys.modules.pop("status_server", None)
     srv_mod = importlib.import_module("status_server")
     fp = FakeProc(tmp_path / "proc")

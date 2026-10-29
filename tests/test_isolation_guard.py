@@ -27,7 +27,7 @@ def test_pane_starts_go_to_a_throwaway_checkout():
     launcher is a copy outside this checkout, so tests never write the live .sessions."""
     import importlib.util
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    launcher = os.environ.get("AGENTDECK_LAUNCHER", "")
+    launcher = os.environ.get("AGENTKENNEL_LAUNCHER", "")
     assert launcher and not os.path.realpath(launcher).startswith(repo + os.sep), launcher
     spec = importlib.util.spec_from_file_location("library_cli", os.path.join(repo, "library_cli.py"))
     m = importlib.util.module_from_spec(spec)

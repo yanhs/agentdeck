@@ -296,7 +296,7 @@ def test_cwd_slug_matches_claude_project_dir_names():
 
 def test_trash_transcript_finds_a_long_cwds_folder(tmp_path, monkeypatch):
     projects = tmp_path / "projects"
-    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(projects))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_PROJECTS", str(projects))
     cwd = "/home/ubuntu/" + "deep/" * 45 + "end"
     d = projects / (("-home-ubuntu-" + "deep-" * 45 + "end")[:200] + "-cqcn6p")
     d.mkdir(parents=True)
@@ -312,7 +312,7 @@ def _entry(cwd="/home/ubuntu/pr", u=U1):
 
 def test_trash_transcript_moves_file_and_sibling_folder(tmp_path, monkeypatch):
     projects = tmp_path / "projects"
-    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(projects))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_PROJECTS", str(projects))
     d = projects / "-home-ubuntu-pr"
     (d / U1).mkdir(parents=True)
     (d / U1 / "sub.jsonl").write_text("sub")
@@ -329,14 +329,14 @@ def test_trash_transcript_moves_file_and_sibling_folder(tmp_path, monkeypatch):
 
 
 def test_trash_transcript_missing_file_is_skipped(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_PROJECTS", str(tmp_path / "projects"))
     reg = tmp_path / "library.json"
     assert lib.trash_transcript(_entry(), lib_file=str(reg)) is None
 
 
 def test_trash_transcript_never_overwrites_an_earlier_trashed_copy(tmp_path, monkeypatch):
     projects = tmp_path / "projects"
-    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(projects))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_PROJECTS", str(projects))
     d = projects / "-home-ubuntu-pr"
     d.mkdir(parents=True)
     reg = tmp_path / "library.json"
@@ -350,7 +350,7 @@ def test_trash_transcript_never_overwrites_an_earlier_trashed_copy(tmp_path, mon
 
 
 def test_trash_transcript_refuses_a_malformed_uuid(tmp_path, monkeypatch):
-    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_PROJECTS", str(tmp_path / "projects"))
     for bad in ("../../etc/passwd", "", None, "aaaaaaaa"):
         with pytest.raises(ValueError):
             lib.trash_transcript({"id": "aaaaaaaa", "uuid": bad, "cwd": "/x"},
@@ -700,7 +700,7 @@ def test_erase_conversation_removes_its_transcript_and_own_folder_only(tmp_path)
 
 def test_erase_conversation_defaults_to_the_claude_projects_dir(tmp_path, monkeypatch):
     projects, d = _project(tmp_path)
-    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(projects))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_PROJECTS", str(projects))
     (d / f"{U1}.jsonl").write_text("talk")
     assert lib.erase_conversation(_entry()) == [str(d / f"{U1}.jsonl")]
     assert not (d / f"{U1}.jsonl").exists()

@@ -595,7 +595,7 @@ def _legacy_slot_dir(tmp_path, monkeypatch, slot="2", uuid="0badc0de-1111-2222-3
     (gate / ".sessions" / f"agent-{slot}.id").write_text(uuid + "\n")
     monkeypatch.setattr(tb, "GATE_DIR", str(gate))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("AGENTDECK_WORKDIR", "/home/ubuntu/pr")
+    monkeypatch.setenv("AGENTKENNEL_WORKDIR", "/home/ubuntu/pr")
     return uuid
 
 
@@ -755,7 +755,7 @@ def test_public_url_without_a_base_is_the_local_path(monkeypatch, tmp_path):
     assert tb._public_url("tok_file.pdf") == str(tmp_path / "tok_file.pdf")
 
 
-_ENV_KEYS = ("TG_FILES_DIR", "TG_FILES_URL", "TG_WHISPER_PY", "TG_AGENT_CWD", "AGENTDECK_WORKDIR")
+_ENV_KEYS = ("TG_FILES_DIR", "TG_FILES_URL", "TG_WHISPER_PY", "TG_AGENT_CWD", "AGENTKENNEL_WORKDIR")
 
 
 def _bridge_defaults(extra_env=None):
@@ -786,7 +786,7 @@ def test_env_overrides_the_defaults():
     d = _bridge_defaults({"TG_FILES_DIR": "/x/files", "TG_FILES_URL": "https://h/f",
                           "TG_WHISPER_PY": "/v/bin/python", "TG_AGENT_CWD": "/w"})
     assert (d["dir"], d["url"], d["py"], d["cwd"]) == ("/x/files", "https://h/f", "/v/bin/python", "/w")
-    assert _bridge_defaults({"AGENTDECK_WORKDIR": "/work"})["cwd"] == "/work"
+    assert _bridge_defaults({"AGENTKENNEL_WORKDIR": "/work"})["cwd"] == "/work"
 
 
 # --- media detection -------------------------------------------------------
@@ -1037,7 +1037,7 @@ def test_on_voice_handles_empty_transcript(monkeypatch):
 # only as the transition fallback for the legacy claude-terminal-N sessions.
 #
 # Unit tests fake library_cli (tb.run_library_cli); the last test runs the real
-# library_cli against a PRIVATE tmux server (-L agentdeck-test-tg-*) that it
+# library_cli against a PRIVATE tmux server (-L agentkennel-test-tg-*) that it
 # kills at the end — the live sessions on the default socket are never touched.
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1066,9 +1066,9 @@ class World:
 
     def __init__(self, tmp_path, monkeypatch):
         self.lib = str(tmp_path / "reg" / "library.json")
-        monkeypatch.setenv("AGENTDECK_LIBRARY", self.lib)
+        monkeypatch.setenv("AGENTKENNEL_LIBRARY", self.lib)
         # second line of defence: any real tmux call lands on a server that does not exist
-        monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", f"agentdeck-test-none-{os.getpid()}")
+        monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", f"agentkennel-test-none-{os.getpid()}")
         self.not_claude = set()   # ids whose pane runs something else (a shell)
         self.threads = []         # (subcommand, thread id) of every library_cli call
         monkeypatch.setattr(tb, "STATE_FILE", str(tmp_path / "state.json"))
@@ -1354,7 +1354,7 @@ def test_list_says_so_when_loaded_state_is_unknown(world):
 # --- /new ------------------------------------------------------------------
 
 def test_new_creates_topic_selects_and_loads_it(world, monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENTDECK_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("AGENTKENNEL_WORKDIR", str(tmp_path))
     replies = run_cmd(tb.cmd_new, ["Разбор", "логов"])
     rows = library.load(world.lib)["sessions"]
     assert len(rows) == 1
@@ -1487,7 +1487,7 @@ def test_menu_select_on_topic_drives_the_cs_session(world, monkeypatch):
 FAKE_CLAUDE_TUI = r"""#!/bin/bash
 # stands in for claude: records how it was started, shows the TUI status bar,
 # then logs every line typed into it
-echo "$AGENTDECK_SESSION|$*" >> "$HOME/claude-calls.log"
+echo "$AGENTKENNEL_SESSION|$*" >> "$HOME/claude-calls.log"
 printf '\n  \xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on (shift+tab to cycle)\n'
 while IFS= read -r line; do printf '%s\n' "$line" >> "$HOME/typed.log"; done
 """
@@ -1501,13 +1501,13 @@ def test_text_reaches_a_real_topic_on_a_private_tmux(tmp_path, monkeypatch):
     fake.write_text(FAKE_CLAUDE_TUI)
     fake.chmod(0o755)
     (binp / "claude").symlink_to(fake)
-    sock = f"agentdeck-test-tg-{os.getpid()}-{_uuid_mod.uuid4().hex[:6]}"
+    sock = f"agentkennel-test-tg-{os.getpid()}-{_uuid_mod.uuid4().hex[:6]}"
     lib = str(tmp_path / "reg" / "library.json")
     for k in ("TMUX", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
         monkeypatch.delenv(k, raising=False)
     # CLAUDE_BIN names a file called claude: the pane launcher runs nothing else
-    for k, v in dict(HOME=str(home), AGENTDECK_LIBRARY=lib, AGENTDECK_TMUX_SOCKET=sock,
-                     CLAUDE_BIN=str(binp / "claude"), AGENTDECK_WORKDIR=str(work),
+    for k, v in dict(HOME=str(home), AGENTKENNEL_LIBRARY=lib, AGENTKENNEL_TMUX_SOCKET=sock,
+                     CLAUDE_BIN=str(binp / "claude"), AGENTKENNEL_WORKDIR=str(work),
                      PATH=f"{binp}:{os.environ.get('PATH', '/usr/bin:/bin')}",
                      LANG="C.UTF-8", LC_ALL="C.UTF-8", TERM="xterm-256color").items():
         monkeypatch.setenv(k, v)
@@ -1582,12 +1582,12 @@ def test_saved_legacy_selection_follows_its_migrated_topic(world, monkeypatch):
 def _private_tmux_socket(monkeypatch):
     # every test in this file: a stray real tmux call reaches a server that does not
     # exist, never the default socket with the live terminals
-    if not os.environ.get("AGENTDECK_TMUX_SOCKET", "").startswith("agentdeck-test-"):
-        monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", f"agentdeck-test-none-{os.getpid()}")
+    if not os.environ.get("AGENTKENNEL_TMUX_SOCKET", "").startswith("agentkennel-test-"):
+        monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", f"agentkennel-test-none-{os.getpid()}")
 
 
 def test_the_bridge_honours_the_private_socket():
-    assert tb._tmux("list-sessions").args[:3] == ["tmux", "-L", f"agentdeck-test-none-{os.getpid()}"]
+    assert tb._tmux("list-sessions").args[:3] == ["tmux", "-L", f"agentkennel-test-none-{os.getpid()}"]
 
 
 def _no_legacy_start(monkeypatch):
@@ -2313,7 +2313,7 @@ def test_auto_read_after_a_button_pick(world, monkeypatch):
 
 
 def test_auto_read_after_new(world, monkeypatch, tmp_path):
-    monkeypatch.setenv("AGENTDECK_WORKDIR", str(tmp_path))
+    monkeypatch.setenv("AGENTKENNEL_WORKDIR", str(tmp_path))
     # a brand-new conversation has nothing to re-read: once Claude is up the
     # bot says so instead of posting the startup banner as "the session"
     banner = ("╭──────────────────────────╮\n"
@@ -2594,12 +2594,12 @@ def test_selection_syncs_before_resolving(world, monkeypatch, tmp_path):
     # /clear sent through the bot, then the next message at once: nothing else has
     # synced yet. The bridge must not load the earlier conversation into a new
     # cs-aaaa1111 and type there — it resolves the terminal's live number first.
-    sock = f"agentdeck-test-tgsync-{os.getpid()}"
+    sock = f"agentkennel-test-tgsync-{os.getpid()}"
     sessions = tmp_path / "claude-sessions"
     sessions.mkdir()
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", sock)
-    monkeypatch.setenv("AGENTDECK_CLAUDE_SESSIONS", str(sessions))
-    monkeypatch.setenv("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", sock)
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_SESSIONS", str(sessions))
+    monkeypatch.setenv("AGENTKENNEL_CLAUDE_PROJECTS", str(tmp_path / "projects"))
     tm = ["tmux", "-L", sock, "-f", "/dev/null"]
     e = world.add("Deploy", uuid=U1, cwd=str(tmp_path))
     p = Path(library.transcript_file(str(tmp_path / "projects"), e["cwd"], U1))

@@ -37,7 +37,7 @@ def svc(tmp_path, monkeypatch):
     threading.Thread(target=ksrv.serve_forever, daemon=True).start()
     monkeypatch.setenv("SERVICES_URL", f"http://127.0.0.1:{ksrv.server_address[1]}")
     monkeypatch.setenv("SERVICES_DIR", str(d))
-    monkeypatch.delenv("AGENTDECK_ORIGIN", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_ORIGIN", raising=False)
     sys.modules.pop("status_server", None)
     ss = importlib.import_module("status_server")
     srv = HTTPServer(("127.0.0.1", 0), ss.Handler)

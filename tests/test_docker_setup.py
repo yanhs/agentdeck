@@ -94,9 +94,9 @@ def test_script_runs_the_services_keeper(name):
 @pytest.mark.parametrize("name", SCRIPTS)
 def test_script_keeps_the_login_gate_and_persisted_secrets(name):
     src = code(SCRIPTS[name])
-    for var in ("AGENTDECK_PASSFILE", "AGENTDECK_AUTH_SECRET", "TRACKER_STATE"):
+    for var in ("AGENTKENNEL_PASSFILE", "AGENTKENNEL_AUTH_SECRET", "TRACKER_STATE"):
         assert re.search(rf"export\s+{var}=", src), var
-    assert "AGENTDECK_PASSWORD" in src                      # optional pre-seed kept
+    assert "AGENTKENNEL_PASSWORD" in src                      # optional pre-seed kept
     assert re.search(r"caddy\s+run\b", src)
 
 
@@ -187,7 +187,8 @@ def test_dockerignore_keeps_the_library_files():
 
 def test_compose_passes_the_optional_origin_through():
     src = code(ROOT / "docker-compose.yml")
-    assert re.search(r"AGENTDECK_ORIGIN:\s*\"\$\{AGENTDECK_ORIGIN:-\}\"", src)
+    # the new name first, its name before v2.1.0 as the fallback
+    assert re.search(r"AGENTKENNEL_ORIGIN:\s*\"\$\{AGENTKENNEL_ORIGIN:-\$\{AGENTDECK_ORIGIN:-\}\}\"", src)
 
 
 # ── fresh-user Docker test fixes (2026-09-25) ────────────────────────────────
@@ -244,8 +245,8 @@ def test_dockerfile_points_caddy_storage_at_the_data_volume():
 
 def test_compose_persists_the_agents_workdir():
     src = code(ROOT / "docker-compose.yml")
-    assert re.search(r"-\s*agentdeck-work:/work\b", src), src
-    assert re.search(r"^agentdeck-work:\s*$", src, re.M), src
+    assert re.search(r"-\s*agentkennel-work:/work\b", src), src
+    assert re.search(r"^agentkennel-work:\s*$", src, re.M), src
     assert "./my-project:/work" in (ROOT / "docker-compose.yml").read_text()   # hint kept
 
 
@@ -299,11 +300,11 @@ def test_nginx_example_has_no_numbered_slot_terminals():
     assert "location /sess/" in src or "location ^~ /sess/" in src
 
 
-# ── guard hooks on by default in Docker (opt-out AGENTDECK_GUARDS=0) ─────────
+# ── guard hooks on by default in Docker (opt-out AGENTKENNEL_GUARDS=0) ─────────
 def test_entrypoint_installs_the_guards_unless_opted_out():
     src = code(SCRIPTS["entrypoint"])
     assert "hooks/install_guards.py" in src
-    assert re.search(r"AGENTDECK_GUARDS:-1", src), src          # default on
+    assert re.search(r"AGENTKENNEL_GUARDS:-1", src), src          # default on
     assert "--remove" in src                                    # opt-out takes them out
     assert "--claude-md" in src and "/root/.claude/CLAUDE.md" in src
     assert "/root/.claude/settings.json" in src
@@ -313,29 +314,29 @@ def test_entrypoint_installs_the_guards_unless_opted_out():
 
 
 def test_pane_exports_the_session_id_the_hold_hook_reads():
-    """hold_on_timer.py identifies its terminal by $AGENTDECK_SESSION; the pane command
+    """hold_on_timer.py identifies its terminal by $AGENTKENNEL_SESSION; the pane command
     must export it (and must not unset it with the CLAUDE* scrub)."""
     import importlib, sys
     sys.path.insert(0, str(ROOT))
     lc = importlib.import_module("library_cli")
     hook = (ROOT / "hooks" / "hold_on_timer.py").read_text()
-    assert 'os.getenv("AGENTDECK_SESSION"' in hook
+    assert 'envcompat.get("SESSION"' in hook
     cmd = lc.pane_command({"id": "abcdef12", "uuid": "abcdef12-0000-4000-8000-000000000000",
                            "cwd": "/tmp"}, home="/root", claude_bin="/usr/bin/claude")
-    assert "export AGENTDECK_SESSION=abcdef12;" in cmd
-    assert "claude" not in "AGENTDECK_SESSION".lower()
+    assert "export AGENTKENNEL_SESSION=abcdef12 AGENTDECK_SESSION=abcdef12;" in cmd
+    assert "claude" not in "AGENTKENNEL_SESSION".lower()
 
 
 def test_compose_documents_the_guard_opt_out():
     raw = (ROOT / "docker-compose.yml").read_text()
-    assert re.search(r"AGENTDECK_GUARDS:\s*\"\$\{AGENTDECK_GUARDS:-1\}\"", raw)
-    assert re.search(r"#.*AGENTDECK_GUARDS=0", raw)
+    assert re.search(r"AGENTKENNEL_GUARDS:\s*\"\$\{AGENTKENNEL_GUARDS:-\$\{AGENTDECK_GUARDS:-1\}\}\"", raw)
+    assert re.search(r"#.*AGENTKENNEL_GUARDS=0", raw)
 
 
 def test_start_sh_offers_the_guards_without_touching_home_by_default():
     src = code(SCRIPTS["start"])
     assert "hooks/install_guards.py" in src
-    assert '"${AGENTDECK_GUARDS:-}" = 1' in src                 # opt-in on a host
+    assert '"${AGENTKENNEL_GUARDS:-}" = 1' in src                 # opt-in on a host
     assert "--check" in src                                     # hint only when not installed
 
 
@@ -344,7 +345,7 @@ def test_config_table_has_the_guard_switch():
     readme = (ROOT / "README.md").read_text()
     config = (ROOT / "docs" / "configuration.md").read_text()
     assert "docs/configuration.md" in readme
-    rows = [l for l in config.splitlines() if l.startswith("|") and "AGENTDECK_GUARDS" in l]
+    rows = [l for l in config.splitlines() if l.startswith("|") and "AGENTKENNEL_GUARDS" in l]
     assert rows and "0" in rows[0]
     assert "Guard hooks (optional)" not in readme + config
 
@@ -367,7 +368,7 @@ def test_compose_runs_an_init_that_reaps_orphans():
 
 def test_entrypoint_gives_the_agents_the_services_rule():
     src = code(SCRIPTS["entrypoint"])
-    assert re.search(r'--services-dir\s+"\$\{AGENTDECK_WORKDIR:-/work\}/\.services"', src), src
+    assert re.search(r'--services-dir\s+"\$\{AGENTKENNEL_WORKDIR:-/work\}/\.services"', src), src
 
 
 def test_the_image_has_git_for_the_agents_and_the_secrets_guard():

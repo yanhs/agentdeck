@@ -163,8 +163,8 @@ def test_activity_follows_output_of_a_detached_session(monkeypatch):
     # tmux 3.2a: #{session_activity} is client activity — it does NOT move when a
     # detached session prints (measured 2026-09-24: 6 s of output, value frozen).
     # A Claude working with no tab open must not look idle.
-    sock = f"agentdeck-test-reaper-{os.getpid()}"
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", sock)
+    sock = f"agentkennel-test-reaper-{os.getpid()}"
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", sock)
     subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", "probe",
                     "while true; do date; sleep 1; done"], check=True)
     try:
@@ -221,20 +221,20 @@ def test_no_display_message_anywhere():
 
 
 def test_socket_env_is_honoured(monkeypatch):
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", "agentdeck-test-x")
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", "agentkennel-test-x")
     seen = {}
     monkeypatch.setattr(reaper.subprocess, "run",
                         lambda args, **k: seen.setdefault("a", args) and subprocess.CompletedProcess(args, 1, "", ""))
     reaper._tmux(["list-sessions"])
-    assert seen["a"][:3] == ["tmux", "-L", "agentdeck-test-x"]
+    assert seen["a"][:3] == ["tmux", "-L", "agentkennel-test-x"]
 
 
 # ── exact tmux targets on a REAL private server ────────────────────────────
 def test_targets_are_exact_never_prefix(monkeypatch):
     # `-t claude-terminal` prefix-matches claude-terminal-5 in tmux; the reaper
     # must neither read nor kill the neighbour when "claude-terminal" is gone.
-    sock = f"agentdeck-test-reaper-x-{os.getpid()}"
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", sock)
+    sock = f"agentkennel-test-reaper-x-{os.getpid()}"
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", sock)
     subprocess.run(["tmux", "-L", sock, "new-session", "-d", "-s", "claude-terminal-5",
                     "sleep 600"], check=True)
     try:
@@ -323,7 +323,7 @@ def test_archived_window_default_is_120s():
 
 def test_archived_ids_read_the_registry(monkeypatch, tmp_path):
     lib = tmp_path / "library.json"
-    monkeypatch.setenv("AGENTDECK_LIBRARY", str(lib))
+    monkeypatch.setenv("AGENTKENNEL_LIBRARY", str(lib))
     assert reaper.archived_ids() == set()                     # no registry yet
     with reaper.library.update(str(lib)) as L:
         a = reaper.library.create(L, "a", cwd="/", now=1, uuid="aaaaaaaa-1111-4111-8111-111111111111")
@@ -338,7 +338,7 @@ def test_a_trashed_terminal_counts_as_archived(monkeypatch, tmp_path):
     # Move to Trash unloads at once; should one still be loaded (it could not be
     # unloaded then), it gets the archive's short window, never the live 2 h
     lib = tmp_path / "library.json"
-    monkeypatch.setenv("AGENTDECK_LIBRARY", str(lib))
+    monkeypatch.setenv("AGENTKENNEL_LIBRARY", str(lib))
     with reaper.library.update(str(lib)) as L:
         reaper.library.create(L, "a", cwd="/", now=1, uuid="aaaaaaaa-1111-4111-8111-111111111111")
         reaper.library.create(L, "b", cwd="/", now=1, uuid="bbbbbbbb-1111-4111-8111-111111111111")
@@ -353,13 +353,13 @@ def switched(monkeypatch, tmp_path):
     conversation b2b2b2b2 (Claude's pid file says so); temp registry, pid-file dir
     and reaper state."""
     import json as _json
-    sock = f"agentdeck-test-reaper-sync-{os.getpid()}"
+    sock = f"agentkennel-test-reaper-sync-{os.getpid()}"
     reg = tmp_path / "reg" / "library.json"
     sessions = tmp_path / "claude-sessions"
     sessions.mkdir()
-    for k, v in (("AGENTDECK_TMUX_SOCKET", sock), ("AGENTDECK_LIBRARY", str(reg)),
-                 ("AGENTDECK_CLAUDE_SESSIONS", str(sessions)),
-                 ("AGENTDECK_CLAUDE_PROJECTS", str(tmp_path / "projects"))):
+    for k, v in (("AGENTKENNEL_TMUX_SOCKET", sock), ("AGENTKENNEL_LIBRARY", str(reg)),
+                 ("AGENTKENNEL_CLAUDE_SESSIONS", str(sessions)),
+                 ("AGENTKENNEL_CLAUDE_PROJECTS", str(tmp_path / "projects"))):
         monkeypatch.setenv(k, v)
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.setattr(reaper, "STATE_FILE", str(tmp_path / "state.json"))

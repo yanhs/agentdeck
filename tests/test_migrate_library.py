@@ -9,9 +9,9 @@ claude keeps the same uuid, `library_cli ensure <id>` must refuse (exit 4)
 while it runs — never a second claude on one transcript.
 
 Isolation: every test works on a temp COPY of the repo (launch scripts, web/,
-.sessions/, the library modules), a temp registry (AGENTDECK_LIBRARY), a temp
+.sessions/, the library modules), a temp registry (AGENTKENNEL_LIBRARY), a temp
 HOME with a fake `claude` on PATH, and a private tmux socket
-(AGENTDECK_TMUX_SOCKET=agentdeck-test-cli-*). The real scripts, registry,
+(AGENTKENNEL_TMUX_SOCKET=agentkennel-test-cli-*). The real scripts, registry,
 dashboard and the default tmux server are never touched.
 """
 import json
@@ -40,6 +40,7 @@ AGENTS = {"1": {"project": "Terminal"}, "2": {"project": "app - PIPE"},
           "3": {"project": "Instagram"}, "_order": ["2", "1", "3"]}
 
 MODULES = ["library.py", "library_cli.py", "idle_reaper.py", "open-session.sh",
+           "envcompat.py",                      # settings under either name
            "convo_sync.py",                     # library_cli follows conversation switches
            "bin/pane"]                          # what tmux runs in a new pane
 SCRIPTS = {1: "launch-claude.sh", 2: "launch-claude-2.sh", 3: "launch-claude-3.sh",
@@ -82,7 +83,7 @@ class Mig(Deck):
         self.uuids = {1: U1, 2: U2, 3: U3, 4: U4, 10: U10}
         for n, u in self.uuids.items():
             (self.repo / ".sessions" / f"agent-{n}.id").write_text(u + "\n")
-        self.env["AGENTDECK_WORKDIR"] = str(self.work)
+        self.env["AGENTKENNEL_WORKDIR"] = str(self.work)
         self.mtimes = {}
         for n, size in ((1, 20_000), (2, 50_000), (3, 12_000), (4, 900)):
             p = self.transcript_for(self.uuids[n], size)

@@ -11,7 +11,7 @@ started with -f /dev/null, so no path lands on its command line); every other tm
 call carries `-f <repo>/tmux.conf` (library_cli.tmux_argv — tmux reads -f only when
 the server starts) for a server that comes up another way; a server that was already
 running gets it once via `source-file` on ensure / shell-ensure (the file sets the
-marker @agentdeck-conf, so it is never sourced twice). The file ends by sourcing the
+marker @agentkennel-conf, so it is never sourced twice). The file ends by sourcing the
 user's own ~/.tmux.conf, which therefore still applies on top.
 
 Isolation: a private tmux socket per test (Deck from test_library_cli, killed at
@@ -31,7 +31,7 @@ CONF = os.path.join(REPO, "tmux.conf")
 @pytest.fixture
 def deck(tmp_path):
     d = Deck(tmp_path)
-    d.env["AGENTDECK_WORKDIR"] = str(d.work)
+    d.env["AGENTKENNEL_WORKDIR"] = str(d.work)
     yield d
     d.close()
 
@@ -76,11 +76,11 @@ def test_dockerignore_keeps_tmux_conf_in_the_image():
 # ── every tmux call carries -f (the first one may start the server) ─────────
 def test_tmux_argv_passes_the_conf(monkeypatch):
     m = _mod()
-    monkeypatch.delenv("AGENTDECK_TMUX_SOCKET", raising=False)
+    monkeypatch.delenv("AGENTKENNEL_TMUX_SOCKET", raising=False)
     assert m.tmux_argv("new-session", "-d")[:3] == ["tmux", "-f", CONF]
-    monkeypatch.setenv("AGENTDECK_TMUX_SOCKET", "agentdeck-test-x")
+    monkeypatch.setenv("AGENTKENNEL_TMUX_SOCKET", "agentkennel-test-x")
     a = m.tmux_argv("new-session", "-d")
-    assert a[:5] == ["tmux", "-L", "agentdeck-test-x", "-f", CONF]
+    assert a[:5] == ["tmux", "-L", "agentkennel-test-x", "-f", CONF]
     assert a[5:] == ["new-session", "-d"]
 
 
@@ -94,7 +94,7 @@ def test_tg_bridge_tmux_calls_carry_the_conf():
 
 
 # ── a server started by ensure ──────────────────────────────────────────────
-def _assert_agentdeck_settings(deck, sess):
+def _assert_agentkennel_settings(deck, sess):
     assert opt(deck, "-g", "mouse") == "on"
     assert opt(deck, "-t", f"={sess}:", "mouse") in ("", "on")   # not turned off per session
     assert opt(deck, "-g", "history-limit") == "50000"
@@ -119,13 +119,13 @@ def _drag_copies(deck, sess):
     return deck.tmux("show-buffer").stdout
 
 
-def test_ensure_starts_the_server_with_agentdeck_settings(deck):
+def test_ensure_starts_the_server_with_agentkennel_settings(deck):
     assert not deck.server_up()
     e = deck.add("A", uuid=U1)
     r = deck.cli("ensure", e["id"])
     assert r.returncode == 0, r.stderr
     sess = r.stdout.strip()
-    _assert_agentdeck_settings(deck, sess)
+    _assert_agentkennel_settings(deck, sess)
 
 
 def test_mouse_release_copies_the_selection_to_the_buffer(deck):
@@ -142,10 +142,10 @@ def test_mouse_release_copies_the_selection_to_the_buffer(deck):
     assert sess.startswith("cs-")
 
 
-def test_shell_ensure_starts_the_server_with_agentdeck_settings(deck):
+def test_shell_ensure_starts_the_server_with_agentkennel_settings(deck):
     assert not deck.server_up()
     assert deck.cli("shell-ensure").returncode == 0
-    _assert_agentdeck_settings(deck, "cmd-shell")
+    _assert_agentkennel_settings(deck, "cmd-shell")
 
 
 # ── a server that was already running without it ───────────────────────────
@@ -161,7 +161,7 @@ def test_ensure_sources_the_conf_once_into_a_running_server(deck):
     assert log.read_text().count("read") == 1              # tmux's own default read
     e = deck.add("A", uuid=U1)
     sess = deck.cli("ensure", e["id"]).stdout.strip()
-    _assert_agentdeck_settings(deck, sess)
+    _assert_agentkennel_settings(deck, sess)
     assert deck.cli("shell-ensure").returncode == 0
     assert deck.cli("ensure", e["id"]).returncode == 0
     wait_for(lambda: log.read_text().count("read") >= 2)
@@ -176,3 +176,20 @@ def test_user_tmux_conf_is_sourced_after_ours(deck):
     assert opt(deck, "-g", "@user-mark") == "yes"
     assert opt(deck, "-g", "history-limit") == "777"       # the user's value wins
     assert opt(deck, "-g", "mouse") == "on"                # ours still there
+
+
+def test_a_server_marked_by_the_old_conf_is_not_sourced_again(deck):
+    """A live server started before v2.1.0 read tmux.conf when it still set
+    @agentdeck-conf: it has the settings, so it must not get the file a second time."""
+    (deck.home / ".tmux.conf").write_text(
+        'run-shell "echo read >> $HOME/user-conf.log"\n')
+    deck.tmux("new-session", "-d", "-s", "other-work")
+    log = deck.home / "user-conf.log"
+    wait_for(log.exists)
+    deck.tmux("set", "-g", "@agentdeck-conf", "1")
+    e = deck.add("A", uuid=U1)
+    assert deck.cli("ensure", e["id"]).returncode == 0
+    assert deck.cli("shell-ensure").returncode == 0
+    import time
+    time.sleep(0.5)
+    assert log.read_text().count("read") == 1              # never sourced again
