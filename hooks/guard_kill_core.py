@@ -2229,7 +2229,7 @@ SC_LONG_ARG = {"type", "property", "signal", "host", "machine", "lines", "output
                "check-inhibitors", "image-policy"}
 UNIT_SUFFIX = re.compile(r"\.(service|socket|target|scope|slice|mount|automount|swap|timer|"
                          r"path|device)$")
-HARD_PATTERNS = ("agentdeck-*",)            # AgentDeck's own units: always protected
+HARD_PATTERNS = ("agentdeck-*",)            # AgentKennel's own units: always protected
 
 
 def protected_units():
