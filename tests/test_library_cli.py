@@ -837,7 +837,7 @@ def test_active_lists_the_terminal_under_its_live_number(deck):
 
 
 def test_ensure_exit_4_when_live_map_shows_the_uuid_outside_tmux(deck):
-    # a claude /resume'd onto U1 outside AgentDeck: nothing on its command line says
+    # a claude /resume'd onto U1 outside AgentKennel: nothing on its command line says
     # U1, only its pid file does
     e = deck.add("A", uuid=U1)
     p = subprocess.Popen(["bash", "-c", "exec -a claude sleep 600"], env=deck.env,

@@ -192,7 +192,7 @@ def test_an_existing_claude_md_gets_the_services_rule_once(tmp_path):
 def test_a_new_claude_md_says_where_the_agent_runs(tmp_path):
     """27.10.2026: asked "if I change the password and open the web, does the first terminal
     stop?", a sandbox agent answered "I can't tell how your platform works" and that it
-    would not remember the conversation. The agents must know AgentDeck's facts."""
+    would not remember the conversation. The agents must know AgentKennel's facts."""
     md = tmp_path / "CLAUDE.md"
     r = run(tmp_path, "--claude-md", str(md))
     assert r.returncode == 0, r.stderr
@@ -205,8 +205,30 @@ def test_a_new_claude_md_says_where_the_agent_runs(tmp_path):
     assert text.isascii()
 
 
+def test_a_new_claude_md_says_agentkennel(tmp_path):
+    """The brand is AgentKennel (29.10.2026); the <!-- agentdeck-... --> marks stay."""
+    md = tmp_path / "CLAUDE.md"
+    r = run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
+    assert r.returncode == 0, r.stderr
+    text = md.read_text()
+    assert text.startswith("# Working rules (AgentKennel)\n")
+    assert "an AgentKennel terminal" in text and "AgentDeck" not in text
+    assert "<!-- agentdeck-environment -->" in text and "<!-- agentdeck-safety -->" in text
+
+
+def test_a_claude_md_with_the_new_header_gets_the_blocks_once(tmp_path):
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Working rules (AgentKennel)\n\n## Put multi-step work on the task board\n")
+    for _ in range(2):
+        run(tmp_path, "--claude-md", str(md))
+    text = md.read_text()
+    assert text.count("<!-- agentdeck-environment -->") == 1
+    assert text.count("<!-- agentdeck-safety -->") == 1
+
+
 def test_a_claude_md_agentdeck_wrote_earlier_gets_the_environment_note_once(tmp_path):
-    """Sandboxes and servers set up before the note have AgentDeck's file without it.
+    """Sandboxes and servers set up before the note have our file without it (headed
+    AgentDeck, the product's name before 29.10.2026).
     A person's own CLAUDE.md is still never touched (test_claude_md_written_only_when_missing)."""
     md = tmp_path / "CLAUDE.md"
     md.write_text("# Working rules (AgentDeck)\n\n## Put multi-step work on the task board\n")
@@ -264,7 +286,7 @@ TDD_MARK = "<!-- agentdeck-tdd -->"
 
 def test_a_new_claude_md_tells_the_agents_to_test_first(tmp_path):
     """28.10.2026: the owner's agents write a test before the code because his own CLAUDE.md
-    says "TDD always"; AgentDeck's agents were never told. Asked to put it in the release."""
+    says "TDD always"; AgentKennel's agents were never told. Asked to put it in the release."""
     md = tmp_path / "CLAUDE.md"
     r = run(tmp_path, "--claude-md", str(md), "--services-dir", "/work/.services")
     assert r.returncode == 0, r.stderr

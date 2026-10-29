@@ -8,7 +8,7 @@ The incident behind it: an agent ran
 and every live Claude terminal on the machine died at once. The pattern of pkill -f is an
 extended regular expression, "|" in it means OR, and the pattern matched every process whose
 command line contains " grep". The tmux server holding all terminals inherits the argv of
-the client that started it, and AgentDeck starts it with `... | grep -i CLAUDE ...` inside.
+the client that started it, and AgentKennel starts it with `... | grep -i CLAUDE ...` inside.
 The server died, and every session with it.
 
 The rule: a signal may only go to processes in your own tree - the descendants of the
@@ -217,7 +217,7 @@ def outside_named(comm_bin):
 
 @pytest.fixture
 def grep_argv_victim():
-    """A foreign process whose argv looks like AgentDeck's tmux server: it has " grep"."""
+    """A foreign process whose argv looks like AgentKennel's tmux server: it has " grep"."""
     m = _marker("inc")
     argv0 = f"{m} bash -lic for v in $(env | cut -d= -f1 | grep -i CLAUDE); do unset x; done"
     _spawn_outside(["bash", "-c", f"exec -a '{argv0}' sleep 1000"])

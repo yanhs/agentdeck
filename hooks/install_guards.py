@@ -20,7 +20,7 @@ that is not valid JSON is left untouched (with a warning) — never overwritten.
   --tracker-state PATH   bake TRACKER_STATE=PATH into the hook commands
   --claude-md PATH       also write a short default CLAUDE.md there, only if none exists
                          (the board, where agents run, the safety rules); a CLAUDE.md
-                         AgentDeck wrote earlier gets the newer blocks once, by their mark
+                         AgentKennel wrote earlier gets the newer blocks once, by their mark
   --tracker PATH         tracker.py path shown in that CLAUDE.md
   --services-dir PATH    with --claude-md: the services rule (programs that outlive a
                          terminal go there); appended once to an existing CLAUDE.md too
@@ -49,7 +49,7 @@ GUARDS = ("guard_task_board.py", "guard_dont_stop.py", "hold_on_timer.py",
           "guard_kill.py", "guard_email.py", "guard_secrets.py")
 
 CLAUDE_MD = """\
-# Working rules (AgentDeck)
+# Working rules (AgentKennel)
 
 ## Put multi-step work on the task board
 Anything beyond a one-line change goes on the board BEFORE you start:
@@ -74,17 +74,20 @@ Otherwise close or park the task on the board.
 
 # What the agents must know about where they run. 27.10.2026 a sandbox agent, asked
 # whether changing the password and opening the web would stop the first terminal,
-# answered "I can't tell how your platform works". Every fact below is AgentDeck's.
+# answered "I can't tell how your platform works". Every fact below is AgentKennel's.
 ENV_MARK = "<!-- agentdeck-environment -->"
 ENV_MD = """\
 {mark}
-## Where you run: an AgentDeck terminal
+## Where you run: an AgentKennel terminal
 The dashboard and the Telegram bot are two windows into the same terminals: closing
 them, logging in elsewhere or changing the password stops nothing. A terminal is one
 conversation; restart or reopening after an idle unload resumes it (claude --resume).
 A new terminal is a new conversation and sees no other: keep shared facts in files or memory.
 """
-AGENTDECK_HEADER = "# Working rules (AgentDeck)"
+# The first line of the CLAUDE.md we write: how a file of ours is told from a person's
+# own. The product was called AgentDeck until 29.10.2026; files written then keep that
+# header and still get the newer blocks.
+OWN_HEADERS = ("# Working rules (AgentKennel)", "# Working rules (AgentDeck)")
 
 # What never happens without the person. 28.10.2026 an agent committed a server's IP and
 # Telegram ids into a public repo; 26.09 a `pkill -f` pattern closed every terminal. The
@@ -108,7 +111,7 @@ SAFETY_MD = """\
   result, not that the command finished.
 """
 # Test before code. 28.10.2026 the owner asked why his agents write tests first: his own
-# CLAUDE.md says "TDD always", AgentDeck's agents were never told. Now they are.
+# CLAUDE.md says "TDD always", AgentKennel's agents were never told. Now they are.
 TDD_MARK = "<!-- agentdeck-tdd -->"
 TDD_MD = """\
 {mark}
@@ -121,7 +124,7 @@ one-off commands.
 """
 # Links last. The person reads replies in Telegram or a terminal, and both glue the next
 # character to an address - "(https://x.y/z)." stops opening. The owner's own agents have
-# had this rule since 26.09.2026; on 28.10 he asked for it in every AgentDeck.
+# had this rule since 26.09.2026; on 28.10 he asked for it in every AgentKennel.
 LINKS_MARK = "<!-- agentdeck-links -->"
 LINKS_MD = """\
 {mark}
@@ -130,7 +133,7 @@ A link the person should open is the LAST line of your message, alone, with noth
 it: no period, bracket, quote or more text (chat apps glue the next character to the
 address and the link stops opening). Several links: one per line, all at the very end.
 """
-# Blocks that go into AgentDeck's own CLAUDE.md (new, or written by AgentDeck earlier), once.
+# Blocks that go into AgentKennel's own CLAUDE.md (new, or written by it earlier), once.
 # Keeping only a block's mark line opts out of it: the block is not added back.
 OWN_BLOCKS = ((ENV_MARK, ENV_MD), (SAFETY_MARK, SAFETY_MD), (TDD_MARK, TDD_MD),
               (LINKS_MARK, LINKS_MD))
@@ -272,7 +275,7 @@ def main(argv=None) -> int:
     if a.check:
         return 0 if ok and installed(data, hooks_dir, skip) else 1
     if not ok:
-        print(f"[agentdeck] {a.settings} is not valid JSON; guard hooks left unchanged",
+        print(f"[agentkennel] {a.settings} is not valid JSON; guard hooks left unchanged",
               file=sys.stderr)
         return 0
 
@@ -282,7 +285,7 @@ def main(argv=None) -> int:
         for event, groups in template(hooks_dir, a.tracker_state, skip).items():
             hooks.setdefault(event, []).extend(groups)
         for g in sorted(skip):
-            print(f"[agentdeck] {g}: {workdir}/.claude already runs one; not added again")
+            print(f"[agentkennel] {g}: {workdir}/.claude already runs one; not added again")
     new = dict(data)
     if hooks:
         new["hooks"] = hooks
@@ -296,10 +299,10 @@ def main(argv=None) -> int:
         with open(a.claude_md, "w") as f:
             f.write(CLAUDE_MD.format(tracker=a.tracker))
     if a.claude_md and not a.remove and os.path.exists(a.claude_md):
-        # once, and only into the file AgentDeck wrote — a person's own CLAUDE.md is theirs
+        # once, and only into the file AgentKennel wrote — a person's own CLAUDE.md is theirs
         for mark, block in OWN_BLOCKS:
             text = open(a.claude_md).read()
-            if text.startswith(AGENTDECK_HEADER) and mark not in text:
+            if text.startswith(OWN_HEADERS) and mark not in text:
                 with open(a.claude_md, "a") as f:
                     f.write(("\n" if not text.endswith("\n\n") else "")
                             + block.format(mark=mark))

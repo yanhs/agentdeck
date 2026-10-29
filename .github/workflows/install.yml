@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v5
       - run: python3 -m pip install --quiet pytest
       - run: python3 -m pytest -q tests/test_install_sh.py
-      # the safety guards on a machine with no claude, no AgentDeck and nothing of ours
+      # the safety guards on a machine with no claude, no AgentKennel and nothing of ours
       - name: safety guards (signals, mail, secrets) and their install
         run: >-
           python3 -m pytest -q tests/test_install_guards.py tests/test_guard_kill.py
@@ -99,7 +99,7 @@ jobs:
           done
           test "$(stat -c %a guests/.env)" = 600
           python3 guests/guestctl.py doctor --json | python3 -m json.tool
-      - name: a sandbox from the guest image runs AgentDeck and the services keeper
+      - name: a sandbox from the guest image runs AgentKennel and the services keeper
         run: |
           tag="$(python3 guests/guestctl.py image-tag)"
           docker run -d --name g1 --init -e AGENTDECK_PASSWORD="$PW" -e AGENTDECK_SITE=:8765 \

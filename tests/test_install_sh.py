@@ -246,6 +246,18 @@ def test_help_mentions_every_flag(box):
     assert not changes(box.calls())
 
 
+def test_help_says_agentkennel_and_the_renamed_repo(box):
+    r = box.run("--help")
+    assert r.returncode == 0
+    assert "AgentKennel installer" in r.stdout and "AgentDeck" not in r.stdout
+    assert "raw.githubusercontent.com/yanhs/agentkennel/master/install.sh" in r.stdout and "yanhs/agentdeck" not in r.stdout
+
+
+def test_default_repo_is_agentkennel(box):
+    r = box.lib('echo "$REPO_URL"', AGENTDECK_REPO_URL="")
+    assert r.stdout.strip() == "https://github.com/yanhs/agentkennel.git", r.stdout
+
+
 def test_unknown_flag_is_refused(box):
     r = box.run("--frobnicate")
     assert r.returncode != 0
@@ -453,10 +465,17 @@ def test_services_run_as_the_user_in_the_repo(box, name):
     assert "LANG=C.UTF-8" in u
 
 
+@pytest.mark.parametrize("name", UNITS)
+def test_unit_descriptions_say_agentkennel(box, name):
+    # the brand changed; the unit FILE names (agentdeck-*) stay: installs depend on them
+    desc = [l for l in render(box, name).splitlines() if l.startswith("Description=")]
+    assert desc and desc[0].startswith("Description=AgentKennel "), desc
+
+
 @pytest.mark.parametrize("name", [u for u in UNITS if u.endswith(".service")])
 def test_agents_get_a_tmux_server_of_their_own(box, name):
     # every tmux call of the stack (and of the agents) goes to this folder's server,
-    # so nothing AgentDeck does can reach the user's own tmux sessions
+    # so nothing AgentKennel does can reach the user's own tmux sessions
     assert "Environment=TMUX_TMPDIR=/home/tester/agentdeck/.sessions/tmux" in render(box, name)
 
 
@@ -579,7 +598,7 @@ def tmux_calls(box):
 def test_uninstall_without_a_record_touches_no_tmux_and_deletes_nothing(box):
     r = box.run("--uninstall --yes")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "AgentDeck services removed" in r.stdout
+    assert "AgentKennel services removed" in r.stdout
     assert tmux_calls(box) == []
     assert not [c for c in box.calls() if c.startswith("rm ")]
 

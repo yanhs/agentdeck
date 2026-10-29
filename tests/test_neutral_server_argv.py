@@ -7,7 +7,7 @@ that started it, and that was `tmux -f …/tmux.conf new-session -d -s cs-<id> -
 bash -lic 'for v in $(env | cut -d= -f1 | grep -i CLAUDE); … exec claude --resume …'`.
 Every terminal died at once.
 
-Now, when no server runs, AgentDeck starts one first with a line that says nothing —
+Now, when no server runs, AgentKennel starts one first with a line that says nothing —
 `tmux [-L sock] -f /dev/null new-session -d -s hold-<hex> tmux wait-for hold-<hex>`: no
 checkout path either, so neither `pkill -f agentdeck` (the default ~/agentdeck, or
 another install) nor `pkill -f <checkout>` matches — sources tmux.conf into it, makes the
@@ -51,8 +51,8 @@ ULTRA_LINE = '{"type":"attachment","attachment":{"type":"ultra_effort_enter"}}\n
 
 
 def kill_words(argv, *checkouts):
-    """The KILL_WORDS AgentDeck put on argv, case-insensitive, as `pkill -f <word>` would
-    find them. Left out: where AgentDeck was cloned (this checkout, the run's launcher
+    """The KILL_WORDS AgentKennel put on argv, case-insensitive, as `pkill -f <word>` would
+    find them. Left out: where AgentKennel was cloned (this checkout, the run's launcher
     copy — conftest — and a test's own copies: the user picks that path, ~/agentdeck by
     default) and a test's own `-L <socket>`."""
     a = list(argv)
@@ -130,7 +130,7 @@ def test_the_server_ensure_starts_has_no_kill_words_on_its_command_line(deck):
     assert neutral_server(argv, deck.socket), argv
     assert not re.search(r"noconftest 2>&1 | grep", " ".join(argv))   # the incident's pattern
     assert sessions(deck.tmux) == ["cs-aaaaaaaa"]      # the placeholder is gone already
-    # tmux.conf was in before the first real pane: its scrollback is AgentDeck's
+    # tmux.conf was in before the first real pane: its scrollback is AgentKennel's
     assert pane(deck, "cs-aaaaaaaa", "#{history_limit}") == "50000"
     # claude still runs in the topic's own folder, with its flags
     sid, args, cwd, leaked = wait_for(deck.calls)[0].split("|")
@@ -248,7 +248,7 @@ def test_tmux_new_windows_in_a_terminal_open_in_its_folder(deck):
                                   "relative-library"])
 def test_the_pane_finds_its_start_whatever_environment_started_the_server(deck, case):
     """The pane's environment is the tmux server's — whoever started it first (the user's
-    own tmux, the bridge, an older AgentDeck). AGENTDECK_LIBRARY there, or a relative one
+    own tmux, the bridge, an older AgentKennel). AGENTDECK_LIBRARY there, or a relative one
     read from another folder, must not send the launcher to another place than ensure's."""
     e = deck.add("A", uuid=U1)
     extra, where = {}, None

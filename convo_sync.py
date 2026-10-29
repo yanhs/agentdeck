@@ -6,7 +6,7 @@ A terminal and its conversation are one thing with one number (the owner's rule,
 all use the first 8 hex of the Claude conversation running in it. Claude changes
 the conversation under a running terminal three ways:
   * its bypass-permissions consent: on "yes" Claude relaunches itself WITHOUT the
-    --session-id AgentDeck gave it, and the conversation gets a new id;
+    --session-id AgentKennel gave it, and the conversation gets a new id;
   * /clear starts a new conversation in the same process;
   * /resume <other> switches the process to another conversation.
 
@@ -24,7 +24,7 @@ Which pane a Claude belongs to comes from the process tree, not from the file's
 Claude started (after our own rename it is stale — seen on the probe). A file
 counts when its pid is alive and still the Claude that wrote it (`procStart` =
 field 22 of /proc/<pid>/stat), it is an interactive CLI Claude, and walking up its
-parents reaches the first pane of a cs-<id> session — the one AgentDeck started; a
+parents reaches the first pane of a cs-<id> session — the one AgentKennel started; a
 Claude in a pane opened later in the session (split-window, new-window) is not the
 terminal's — whose terminal it runs on (same controlling tty: a
 Claude that some command in the pane started on a pty of its own, e.g. under
@@ -154,7 +154,7 @@ _PANE_ID = re.compile(r"%(\d+)")
 
 
 def terminal_panes(run=None):
-    """{pane pid: "cs-<id>"} — the pane AgentDeck started in each library session:
+    """{pane pid: "cs-<id>"} — the pane AgentKennel started in each library session:
     its first pane (the lowest pane id; tmux numbers panes in creation order,
     server-wide). A pane opened later in the session (split-window, new-window —
     by hand, or by the pane's Claude through its Bash tool, where $TMUX points at

@@ -52,7 +52,7 @@ def reply_for(body):
     tools = {t.get("name") for t in body.get("tools") or [] if isinstance(t, dict)}
     if m and "Bash" in tools:
         _n[0] += 1
-        # closed at once: AgentDeck's stop guard would otherwise (rightly) keep the
+        # closed at once: AgentKennel's stop guard would otherwise (rightly) keep the
         # turn going while a task of this session is open on the board
         t = shlex.quote(TRACKER)
         cmd = (f"python3 {t} add-task {m.group(1)} --title 'added by Claude in the pane' "

@@ -15,6 +15,6 @@ _ENV = os.path.join(tempfile.mkdtemp(prefix="guests-env-"), ".env")
 with open(_ENV, "w") as _f:
     _f.write("GUESTS_DOMAIN=example.test\nGUESTS_LANG=ru\n")
 os.environ["GUESTS_ENV_FILE"] = _ENV
-# never the owner's real bot ("Your bot": <AgentDeck>/.sessions/telegram.json): alerts in
+# never the owner's real bot ("Your bot": <AgentKennel>/.sessions/telegram.json): alerts in
 # tests must have nowhere real to go
 os.environ["AGENTDECK_TG_CONF"] = os.path.join(os.path.dirname(_ENV), "no-telegram.json")

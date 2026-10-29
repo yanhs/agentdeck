@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Server — AgentDeck</title>
+  <title>Server — AgentKennel</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%2309090b'/><path d='M3 12a5 5 0 0 1 10 0' fill='none' stroke='%23818cf8' stroke-width='2'/><path d='M8 12l3-4' stroke='%23e4e4e7' stroke-width='1.5' stroke-linecap='round'/></svg>">
   <!-- Theme: the dashboard's choice (localStorage 'agentdeck-theme', same origin),
        applied before first paint and switched live by the storage event. -->
@@ -413,7 +413,7 @@
       <span id="gSum"></span>
       <button type="button" class="gbtn" id="gSetup">Set up guests</button>
     </div>
-    <div id="gOff" hidden>Off. Let other people work on this server: each gets their own sandbox (an AgentDeck of their own, in Docker), works on your Claude subscription with a daily limit, and talks to it through one shared Telegram bot. Someone writes to the bot, you get “Let in?” with a button.</div>
+    <div id="gOff" hidden>Off. Let other people work on this server: each gets their own sandbox (an AgentKennel of their own, in Docker), works on your Claude subscription with a daily limit, and talks to it through one shared Telegram bot. Someone writes to the bot, you get “Let in?” with a button.</div>
     <div id="gList"></div>
     <div class="empty" id="gEmpty" hidden></div>
     <div id="gErr" class="gjob err" hidden></div>
@@ -919,7 +919,7 @@
     const list = $('#svcList'), empty = $('#svcEmpty');
     const names = d.available ? Object.keys(d.services || {}).sort() : [];
     if (!d.available) {
-      empty.textContent = "The services keeper isn't running, so the list is unavailable. It starts with AgentDeck: the agentdeck-services unit on a server, the entrypoint in Docker.";
+      empty.textContent = "The services keeper isn't running, so the list is unavailable. It starts with AgentKennel: the agentdeck-services unit on a server, the entrypoint in Docker.";
     } else if (!names.length) {
       empty.replaceChildren(
         document.createTextNode('No services yet. A service is a program that keeps running without an open terminal: a tunnel, a site\'s server, a bot. Ask an agent to "make this a service" — it puts a start script into '),

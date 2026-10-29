@@ -1,4 +1,4 @@
-"""The login page: AgentDeck branding, and no Username field where it is ignored.
+"""The login page: AgentKennel branding, and no Username field where it is ignored.
 
 Passfile mode (Docker / start.sh: one dashboard password) ignores the username, so the
 page must not ask for it. It stays where it matters: htpasswd mode (no passfile) and the
@@ -36,10 +36,10 @@ def load(tmp_path, monkeypatch):
     sys.modules.pop("status_server", None)
 
 
-def test_title_is_agentdeck(load):
+def test_title_is_agentkennel(load):
     html = load(passfile=True, htpasswd=False, seeded=True).login_html()
-    assert "🛰 AgentDeck" in html and "🖥 Agents" not in html
-    assert "<title>AgentDeck" in html
+    assert "🐾 AgentKennel" in html and "🖥 Agents" not in html
+    assert "<title>AgentKennel" in html and "AgentDeck" not in html
 
 
 def test_passfile_mode_hides_the_username(load):

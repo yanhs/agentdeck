@@ -1,7 +1,7 @@
 #!/bin/bash
 # pane <8-character topic id> | shell
 #
-# What tmux runs in a new AgentDeck pane (library_cli.py ensure / shell-ensure).
+# What tmux runs in a new AgentKennel pane (library_cli.py ensure / shell-ensure).
 #
 # Why a script: a tmux server keeps, as its own command line, the command line of the
 # client that started it. That used to be `tmux … new-session … bash -lic 'for v in

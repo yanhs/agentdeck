@@ -114,7 +114,7 @@ def test_a_malformed_payload_session_falls_back_to_the_pane_variable(reg, bad):
 
 
 def test_payload_session_outside_a_library_pane_is_a_no_op(reg):
-    # a Claude that AgentDeck did not start (no AGENTDECK_SESSION) holds nothing
+    # a Claude that AgentKennel did not start (no AGENTDECK_SESSION) holds nothing
     r = run(reg, {"session_id": UB, "tool_name": "CronCreate", "tool_input": {}}, session=None)
     assert r.returncode == 0
     assert not os.path.exists(os.path.dirname(reg))

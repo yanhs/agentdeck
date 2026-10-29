@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the whole AgentDeck stack WITHOUT Docker, in one command:
+# Start the whole AgentKennel stack WITHOUT Docker, in one command:
 #   1. status_server.py   — backend (all API ports, the session library API) + the login gate
 #   2. the task board      — tasks-dashboard/server.py on :9308 (/tasks/)
 #   3. ONE ttyd            — the session library on 127.0.0.1:3031 (/sess/ -> open-session.sh)
@@ -21,7 +21,7 @@ cd "$(dirname "${BASH_SOURCE[0]:-$0}")"
 export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}"
 
 if ! command -v caddy >/dev/null 2>&1; then
-  echo "[agentdeck] need 'caddy' (one binary, no sudo): https://caddyserver.com/download" >&2
+  echo "[agentkennel] need 'caddy' (one binary, no sudo): https://caddyserver.com/download" >&2
   exit 1
 fi
 
@@ -39,8 +39,8 @@ salt = os.urandom(16); h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 200_
 os.umask(0o077); open(p, "w").write(f"{salt.hex()}${h.hex()}")
 PY
 fi
-[ -s "$AGENTDECK_PASSFILE" ] && echo "[agentdeck] dashboard password is set" \
-  || echo "[agentdeck] no password yet — set it at the one-time link: <dashboard>$(python3 status_server.py --setup-link)"
+[ -s "$AGENTDECK_PASSFILE" ] && echo "[agentkennel] dashboard password is set" \
+  || echo "[agentkennel] no password yet — set it at the one-time link: <dashboard>$(python3 status_server.py --setup-link)"
 
 # Guard hooks (task board before edits, no silent mid-task stop): ON by default in Docker.
 # Here they would go into YOUR ~/.claude/settings.json, which every Claude Code session on
@@ -48,36 +48,36 @@ fi
 if [ "${AGENTDECK_GUARDS:-}" = 1 ]; then
   python3 hooks/install_guards.py --tracker-state "$TRACKER_STATE" \
     --claude-md "$HOME/.claude/CLAUDE.md" \
-    && echo "[agentdeck] guard hooks: on in ~/.claude/settings.json"
+    && echo "[agentkennel] guard hooks: on in ~/.claude/settings.json"
 elif [ "${AGENTDECK_GUARDS:-}" != 0 ] && ! python3 hooks/install_guards.py --check; then
-  echo "[agentdeck] tip: AGENTDECK_GUARDS=1 ./start.sh keeps agents on the task board (guard hooks; AGENTDECK_GUARDS=0 hides this)"
+  echo "[agentkennel] tip: AGENTDECK_GUARDS=1 ./start.sh keeps agents on the task board (guard hooks; AGENTDECK_GUARDS=0 hides this)"
 fi
 
 pids=()
-cleanup() { echo; echo "[agentdeck] stopping…"; kill "${pids[@]}" 2>/dev/null || true; }
+cleanup() { echo; echo "[agentkennel] stopping…"; kill "${pids[@]}" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-echo "[agentdeck] backend: status_server.py"
+echo "[agentkennel] backend: status_server.py"
 python3 status_server.py & pids+=($!)
 sleep 1
 
 # task board (the 📋 Tasks button) on :9308, behind the same login
 [ -f "$TRACKER_STATE" ] || echo '{"title":"Task Tracker","tasks":[]}' > "$TRACKER_STATE"
-echo "[agentdeck] task board: tasks-dashboard/server.py"
+echo "[agentkennel] task board: tasks-dashboard/server.py"
 python3 tasks-dashboard/server.py & pids+=($!)
 
 # Session library: ONE ttyd for every topic (/sess/?arg=<8-hex id> or ?arg=shell ->
 # open-session.sh). -a passes ?arg= to the script; -O: websocket Origin must equal Host.
-echo "[agentdeck] sessions ttyd :3031 (/sess) -> open-session.sh"
+echo "[agentkennel] sessions ttyd :3031 (/sess) -> open-session.sh"
 ttyd -W -a -O -i lo -p 3031 --base-path /sess bash "$PWD/open-session.sh" & pids+=($!)
 
 # idle reaper: unloads topics nobody uses, once a minute
-echo "[agentdeck] idle reaper: idle_reaper.py once a minute"
+echo "[agentkennel] idle reaper: idle_reaper.py once a minute"
 ( while true; do python3 idle_reaper.py >> .sessions/idle_reaper.log 2>&1; sleep 60; done ) & pids+=($!)
 
 # services: programs that must outlive a terminal (<work folder>/.services/<name>.sh);
 # the keeper runs, restarts and stops them — and is itself brought back if it dies
-echo "[agentdeck] services keeper: services_keeper.py (<work folder>/.services)"
+echo "[agentkennel] services keeper: services_keeper.py (<work folder>/.services)"
 ( while true; do python3 services_keeper.py >> .sessions/services_keeper.log 2>&1; sleep 3; done ) & pids+=($!)
 
 CADDYFILE=Caddyfile
@@ -90,12 +90,12 @@ case "${AGENTDECK_SITE:-}" in
       openssl req -x509 -newkey rsa:2048 -keyout "$CD/key.pem" -out "$CD/cert.pem" \
         -days 3650 -nodes -subj "/CN=agentdeck" \
         -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
-      echo "[agentdeck] generated a self-signed TLS certificate (first run)"
+      echo "[agentkennel] generated a self-signed TLS certificate (first run)"
     fi
     CD="$CD" python3 -c 'import os;cd=os.environ["CD"];s=open("Caddyfile").read().replace("{$AGENTDECK_SITE::8765} {","{$AGENTDECK_SITE::8765} {\n\ttls "+cd+"/cert.pem "+cd+"/key.pem");open(".sessions/Caddyfile.gen","w").write(s)'
     CADDYFILE=.sessions/Caddyfile.gen
     ;;
 esac
-echo "[agentdeck] caddy -> ${AGENTDECK_SITE:-:8765}"
+echo "[agentkennel] caddy -> ${AGENTDECK_SITE:-:8765}"
 caddy run --config "$CADDYFILE" --adapter caddyfile & pids+=($!)
 wait

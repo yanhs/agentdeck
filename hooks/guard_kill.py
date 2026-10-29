@@ -10,7 +10,7 @@ A guard against every terminal dying at once.
 and every live Claude terminal on the machine died at the same moment. The pattern of
 `pkill -f` is an extended regular expression: "|" means OR, so it matched every process
 whose command line contains " grep". The tmux server that hosts all the terminals inherits
-the argv of the client that started it, and AgentDeck starts it with `tmux -f ...
+the argv of the client that started it, and AgentKennel starts it with `tmux -f ...
 new-session ... bash -lic 'for v in $(env | cut -d= -f1 | grep -i CLAUDE); do unset "$v";
 done; ... exec claude --resume ...'`. That line contains "grep", "claude", "bash" and "env",
 so any careless pkill/killall/pgrep|xargs kill with one of those words kills the server and

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke test of an installed AgentDeck, from outside, through Caddy (stdlib only).
+"""Smoke test of an installed AgentKennel, from outside, through Caddy (stdlib only).
 
     smoke.py BASE_URL --password PW [--first-run] [--new-terminal] [--expect-id ID]
              [--id-file PATH] [--insecure] [--connect HOST:PORT]

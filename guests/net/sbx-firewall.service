@@ -1,6 +1,6 @@
 # Template: guests/install.sh fills in @GUESTS_DIR@ and writes it to /etc/systemd/system.
 [Unit]
-Description=AgentDeck guests: sandbox network + firewall (re-applied by the timer)
+Description=AgentKennel guests: sandbox network + firewall (re-applied by the timer)
 After=docker.service
 Requires=docker.service
 

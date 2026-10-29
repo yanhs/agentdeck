@@ -676,10 +676,10 @@ def tg_invite_htmls():
     guest = [out("/start", "10:02"), inc(texts.t("invite_sent"), "10:02"), inc(welcome, "10:04")]
     owner = [inc(ask, "10:02", [[label for label, _ in buttons]])]   # a tap turns it into "created"
     return (tg_frame(guest, "10:04", title="Deck guests", sub="Maria's chat with the guest bot"),
-            tg_frame(owner, "10:04", title="AgentDeck", sub="your own bot"))
+            tg_frame(owner, "10:04", title="AgentKennel", sub="your own bot"))
 
 
-def tg_frame(msgs, clock, title="AgentDeck", sub="bot") -> str:
+def tg_frame(msgs, clock, title="AgentKennel", sub="bot") -> str:
     dots = "".join(f'<i class="bokeh" style="left:{x}px;top:{y}px;width:{r}px;height:{r}px"></i>'
                    for x, y, r in [(40, 80, 20), (310, 140, 16), (160, 330, 20), (360, 390, 18),
                                    (70, 620, 14), (300, 760, 20), (120, 930, 16), (340, 1080, 14)])
@@ -744,7 +744,7 @@ finish
         "PATH": os.environ["PATH"], "HOME": "/home/deck"}, capture_output=True, text=True,
         check=True, timeout=30).stdout
     ask, _, rest = out.partition("[y/N] ")
-    lines = [("cmd", "deck@vps:~$ curl -fsSL https://raw.githubusercontent.com/yanhs/agentdeck/master/install.sh | bash"),
+    lines = [("cmd", "deck@vps:~$ curl -fsSL https://raw.githubusercontent.com/yanhs/agentkennel/master/install.sh | bash"),
              ("dim", "…")]
     lines += [("ask", l) for l in ask.strip("\n").split("\n")[:-1]]
     lines.append(("ask", ask.strip("\n").split("\n")[-1] + "[y/N] " + "y"))
@@ -755,7 +755,7 @@ finish
 
 
 def agents_md_lines() -> list[tuple[str, str]]:
-    """What AgentDeck tells its agents about where they run: hooks/install_guards.py's
+    """What AgentKennel tells its agents about where they run: hooks/install_guards.py's
     own block, as `cat` shows it in a terminal."""
     sys.path.insert(0, str(ROOT / "hooks"))
     import install_guards

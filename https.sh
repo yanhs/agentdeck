@@ -177,7 +177,7 @@ esac
 
 command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1 \
   || die "docker compose not found — install Docker (with the compose plugin) first"
-[ -f docker-compose.yml ] || die "run this from the AgentDeck folder (docker-compose.yml not found)"
+[ -f docker-compose.yml ] || die "run this from the AgentKennel folder (docker-compose.yml not found)"
 
 if [ "$MODE" = off ]; then
   cf=$(env_get COMPOSE_FILE)
@@ -240,7 +240,7 @@ fi
 env_set AGENTDECK_SITE "$NAME"
 
 URL="https://$NAME"; [ "$HTTPS_PORT" = 443 ] || URL="$URL:$HTTPS_PORT"
-say "Site name: $NAME — starting AgentDeck with HTTPS..."
+say "Site name: $NAME — starting AgentKennel with HTTPS..."
 compose "$(env_get COMPOSE_FILE)" up -d || die "docker compose up failed (settings are in .env; ./https.sh --off undoes them)"
 
 say "Waiting for the certificate (up to ${WAIT}s)..."

@@ -4,7 +4,7 @@
 The guest bot's real token lives only here (``guests/.env``, GUEST_BOT_TOKEN). This process
 long-polls Telegram, gives each update to the guest whose Telegram ID sent it, and
 serves every guest sandbox a Bot API of its own at ``http://<relay>/bot<pass>/<method>``
-(the sandbox's AgentDeck bridge points TG_BRIDGE_API_BASE here and uses its turnstile
+(the sandbox's AgentKennel bridge points TG_BRIDGE_API_BASE here and uses its turnstile
 pass as the "token"). A guest may only write to its own chat, answer its own buttons,
 download files from its own messages, and set commands for its own chat; webhook /
 logout calls are harmless no-ops; anything else is refused. A stranger is told once
@@ -221,7 +221,7 @@ def web_text(info: Optional[Dict], welcome: bool, domain: Optional[str] = None) 
 
 # --------------------------------------------------------------------------- #
 # invitations, the guest bot's side: a stranger's request is only RECORDED here.
-# "Let in?" is asked and answered in the owner's own bot (AgentDeck's tg_bridge with
+# "Let in?" is asked and answered in the owner's own bot (AgentKennel's tg_bridge with
 # guests/invites.py Desk) — this bot is open to everyone, so it can't create sandboxes.
 # --------------------------------------------------------------------------- #
 class Invitations:

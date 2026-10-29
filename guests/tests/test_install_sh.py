@@ -1,4 +1,4 @@
-"""guests/install.sh — sets the guests module up on a server where AgentDeck is installed.
+"""guests/install.sh — sets the guests module up on a server where AgentKennel is installed.
 
 Same safety as the root installer's tests (tests/test_install_sh.py): a COPY of the script
 runs in a throwaway fake clone; PATH holds only shims that record their argv and change
@@ -225,7 +225,7 @@ def test_check_reports_docker_missing(box):
 def test_check_needs_agentdeck_itself(box):
     (box.repo / "services_keeper.py").unlink()
     r = box.run("--check")
-    assert r.returncode == 1 and "AgentDeck" in r.stdout + r.stderr
+    assert r.returncode == 1 and "AgentKennel" in r.stdout + r.stderr
 
 
 def test_check_mentions_missing_settings(box):
@@ -275,7 +275,7 @@ def test_full_install(box):
     # network + firewall before the services that bind to its gateway
     i_fw = calls.index("systemctl enable -q --now sbx-firewall.timer")
     assert "systemctl start sbx-firewall.service" in calls
-    # the image: AgentDeck of this checkout, then the guest image on top
+    # the image: AgentKennel of this checkout, then the guest image on top
     i_base = calls.index(f"docker build -t agentdeck:v9.9.9 {box.repo}")
     i_guest = calls.index(f"docker build -t agentdeck-guest:v9.9.9 --build-arg "
                           f"BASE=agentdeck:v9.9.9 {box.guests}/image")

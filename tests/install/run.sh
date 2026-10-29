@@ -320,7 +320,7 @@ docker exec -u ubuntu -w /home/ubuntu "${INSTALL_ENV[@]}" "$NAME" \
 rc=${PIPESTATUS[0]}
 set -e
 expect "re-run exit 0" test "$rc" = 0
-expect "re-run keeps the mode (same URL)" grep -qF "AgentDeck is running:  $(sed -n 's/^AgentDeck is running:  //p' "$WORK/install1.log" | tail -n 1)" "$WORK/install2.log"
+expect "re-run keeps the mode (same URL)" grep -qF "AgentKennel is running:  $(sed -n 's/^AgentKennel is running:  //p' "$WORK/install1.log" | tail -n 1)" "$WORK/install2.log"
 docker exec "$NAME" systemctl list-units 'agentdeck*' --all --no-legend --plain > "$WORK/units2"
 expect "same units after re-run" diff <(awk '{print $1}' "$WORK/units1") <(awk '{print $1}' "$WORK/units2")
 expect "guard hooks not duplicated" test "$(guards)" = "$G1"

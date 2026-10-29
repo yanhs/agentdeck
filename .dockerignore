@@ -20,7 +20,7 @@ pre-public-backup
 # guests' public files must never be baked into an image (a guest sandbox is one)
 guests
 
-# author-specific OpenOrchestra launchers (token-bearing, not part of AgentDeck)
+# author-specific OpenOrchestra launchers (token-bearing, not part of AgentKennel)
 launch-claude-9.sh
 launch-claude-10.sh
 launch-orchestra.sh

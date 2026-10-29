@@ -1312,7 +1312,7 @@ def guests_write_env(values):
     try:
         lines = path.read_text().splitlines()
     except OSError:
-        lines = ["# AgentDeck guests module (written by the dashboard's Guests setup)"]
+        lines = ["# AgentKennel guests module (written by the dashboard's Guests setup)"]
     left = dict(values)
     for i, line in enumerate(lines):
         key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
@@ -1413,7 +1413,7 @@ class GuestsPanel:
 
     def setup(self, body):
         if not guests_installed():
-            raise LibError(409, "the guests module is not in this AgentDeck")
+            raise LibError(409, "the guests module is not in this AgentKennel")
         admin = guests_admin()
         if not admin["bot_set"]:
             raise LibError(409, "Set up your own Telegram bot first (the dashboard's Telegram "
@@ -2101,7 +2101,7 @@ def _check_password(user, pw):
 
 
 LOGIN_HTML = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentDeck — login</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentKennel — login</title>
 <style>
 *{box-sizing:border-box} html,body{height:100%}
 body{margin:0;display:flex;align-items:center;justify-content:center;background:#0d1117;
@@ -2119,7 +2119,7 @@ button:hover{background:#2ea043}
 .err{margin:14px 0 0;color:#ff7b72;font-size:13px;text-align:center}
 </style>__BREAKOUT__</head><body>
 <form class="card" method="POST" action="/login">
-  <h1>🛰 AgentDeck</h1><p class="sub">Sign in to open the panel</p>
+  <h1>🐾 AgentKennel</h1><p class="sub">Sign in to open the panel</p>
   __USER__<label for="p">Password</label>
   <input id="p" name="pass" type="password" autocomplete="current-password"__PFOCUS__>
   <button type="submit">Sign in</button>
@@ -2154,7 +2154,7 @@ def login_html(error=False):
 
 
 _AUTH_HEAD = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
-  '<meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentDeck</title><style>'
+  '<meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentKennel</title><style>'
   '*{box-sizing:border-box}html,body{height:100%}'
   'body{margin:0;display:flex;align-items:center;justify-content:center;background:#0d1117;'
   'color:#e6edf3;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}'
@@ -2174,7 +2174,7 @@ _AUTH_HEAD = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
 
 def _setup_form(error="", token=""):
     return (_AUTH_HEAD + '<form class="card" method="POST" action="/login">'
-      '<h1>🛰 AgentDeck</h1><p class="sub">Set a password to protect the dashboard</p>'
+      '<h1>🐾 AgentKennel</h1><p class="sub">Set a password to protect the dashboard</p>'
       f'<input type="hidden" name="setup" value="{token}">'
       '<label for="p">New password</label>'
       '<input id="p" name="pass" type="password" autocomplete="new-password" autofocus>'
@@ -2186,10 +2186,10 @@ def _setup_form(error="", token=""):
 
 def _setup_locked():
     return (_AUTH_HEAD + '<div class="card">'
-      '<h1>🛰 AgentDeck</h1><p class="sub">No password yet</p>'
+      '<h1>🐾 AgentKennel</h1><p class="sub">No password yet</p>'
       '<p>Open the <b>setup link</b> the installer printed — only that link can set the '
       'password. To show it again, on the server run <code>~/agentdeck/install.sh</code> '
-      'again, or <code>python3 status_server.py --setup-link</code> in the AgentDeck folder '
+      'again, or <code>python3 status_server.py --setup-link</code> in the AgentKennel folder '
       '(Docker: <code>docker compose logs agentdeck | grep setup</code>).</p>'
       '</div></body></html>')
 

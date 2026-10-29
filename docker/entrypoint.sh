@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start the AgentDeck stack inside the container — the same layout as production
+# Start the AgentKennel stack inside the container — the same layout as production
 # (nginx/agents-subdomain.conf): backend (status_server: all API ports + the session
 # library API) + the task board + ONE ttyd for the session library (/sess/) + the idle
 # reaper (once a minute) + Caddy (login gate + automatic HTTPS) in front.
@@ -29,14 +29,14 @@ salt = os.urandom(16)
 h = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, 200_000)
 os.umask(0o077); open(path, "w").write(f"{salt.hex()}${h.hex()}")
 PY
-  echo "[agentdeck] dashboard password seeded from AGENTDECK_PASSWORD"
+  echo "[agentkennel] dashboard password seeded from AGENTDECK_PASSWORD"
 fi
 if [ -s "$AGENTDECK_PASSFILE" ]; then
-  echo "[agentdeck] dashboard password is set"
+  echo "[agentkennel] dashboard password is set"
 else   # only this one-time link can set it (a stranger opening the port first can't)
-  echo "[agentdeck] no password yet — set it at the one-time setup link: your dashboard"
-  echo "[agentdeck] address (e.g. http://<your-vps-ip>:8765) followed by"
-  echo "[agentdeck]   $(python3 status_server.py --setup-link)"
+  echo "[agentkennel] no password yet — set it at the one-time setup link: your dashboard"
+  echo "[agentkennel] address (e.g. http://<your-vps-ip>:8765) followed by"
+  echo "[agentkennel]   $(python3 status_server.py --setup-link)"
 fi
 
 # ~/.claude.json (claude's home-level config) is NOT inside the ~/.claude volume on its own —
@@ -54,38 +54,38 @@ ln -sfn /root/.claude/.claude.json /root/.claude.json
 if [ "${AGENTDECK_GUARDS:-1}" = 0 ]; then
   python3 /app/hooks/install_guards.py --settings /root/.claude/settings.json \
     --hooks-dir /app/hooks --remove
-  echo "[agentdeck] guard hooks: off (AGENTDECK_GUARDS=0)"
+  echo "[agentkennel] guard hooks: off (AGENTDECK_GUARDS=0)"
 else
   python3 /app/hooks/install_guards.py --settings /root/.claude/settings.json \
     --hooks-dir /app/hooks --tracker-state "$TRACKER_STATE" \
     --claude-md /root/.claude/CLAUDE.md --tracker /app/tasks-dashboard/tracker.py \
     --services-dir "${AGENTDECK_WORKDIR:-/work}/.services" \
-    && echo "[agentdeck] guard hooks: on (task board before edits, no silent mid-task stop, timers keep the terminal loaded)"
+    && echo "[agentkennel] guard hooks: on (task board before edits, no silent mid-task stop, timers keep the terminal loaded)"
 fi
 
-echo "[agentdeck] backend: status_server.py"
+echo "[agentkennel] backend: status_server.py"
 python3 status_server.py &
 sleep 1
 
 # task board (the 📋 Tasks button in the dashboard) on :9308, behind the same login
 [ -f "$TRACKER_STATE" ] || echo '{"title":"Task Tracker","tasks":[]}' > "$TRACKER_STATE"
-echo "[agentdeck] task board: tasks-dashboard/server.py"
+echo "[agentkennel] task board: tasks-dashboard/server.py"
 python3 tasks-dashboard/server.py &
 
 # Session library: ONE ttyd for every topic. The dashboard opens /sess/?arg=<8-hex id>
 # (or ?arg=shell); -a hands ?arg= to open-session.sh, which validates it and attaches the
 # tab to the topic's tmux session (loading it first). -O: the websocket's Origin must equal
 # its Host (Caddy passes Host through). Localhost only — Caddy fronts it behind the login.
-echo "[agentdeck] sessions ttyd :3031 (/sess) -> open-session.sh"
+echo "[agentkennel] sessions ttyd :3031 (/sess) -> open-session.sh"
 ttyd -W -a -O -i lo -p 3031 --base-path /sess bash /app/open-session.sh &
 
 # idle reaper: unloads topics nobody uses (no cron in the container — a loop instead)
-echo "[agentdeck] idle reaper: idle_reaper.py once a minute"
+echo "[agentkennel] idle reaper: idle_reaper.py once a minute"
 ( while true; do python3 idle_reaper.py >> /app/.sessions/idle_reaper.log 2>&1; sleep 60; done ) &
 
 # services: programs that must outlive a terminal (<work folder>/.services/<name>.sh);
 # the keeper runs, restarts and stops them — and is itself brought back if it dies
-echo "[agentdeck] services keeper: services_keeper.py (<work folder>/.services)"
+echo "[agentkennel] services keeper: services_keeper.py (<work folder>/.services)"
 ( while true; do python3 services_keeper.py >> /app/.sessions/services_keeper.log 2>&1; sleep 3; done ) &
 
 CADDYFILE=/app/docker/Caddyfile
@@ -105,11 +105,11 @@ case "${AGENTDECK_SITE:-}" in
       openssl req -x509 -newkey rsa:2048 -keyout "$CD/key.pem" -out "$CD/cert.pem" \
         -days 3650 -nodes -subj "/CN=agentdeck" \
         -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" 2>/dev/null
-      echo "[agentdeck] generated a self-signed TLS certificate (first run)"
+      echo "[agentkennel] generated a self-signed TLS certificate (first run)"
     fi
     CD="$CD" SRC="$CADDYFILE" python3 -c 'import os;cd=os.environ["CD"];p=os.environ["SRC"];s=open(p).read().replace("{$AGENTDECK_SITE::8765} {","{$AGENTDECK_SITE::8765} {\n\ttls "+cd+"/cert.pem "+cd+"/key.pem");open("/tmp/Caddyfile","w").write(s)'
     CADDYFILE=/tmp/Caddyfile
     ;;
 esac
-echo "[agentdeck] caddy -> ${AGENTDECK_SITE:-:8765}  (domain=auto-HTTPS, https://:port=self-signed)"
+echo "[agentkennel] caddy -> ${AGENTDECK_SITE:-:8765}  (domain=auto-HTTPS, https://:port=self-signed)"
 exec caddy run --config "$CADDYFILE" --adapter caddyfile

@@ -1,4 +1,4 @@
-"""TDD: the dashboard's Guests block API on the status server (AgentDeck 2.0).
+"""TDD: the dashboard's Guests block API on the status server (AgentKennel 2.0).
 
 The guests module lives in <repo>/guests (GUESTS_DIR overrides); the panel only drives
 its command, guests/guestctl.py:

@@ -1,4 +1,4 @@
-# AgentDeck — everything in one container: status_server (Python stdlib) + ONE ttyd for
+# AgentKennel — everything in one container: status_server (Python stdlib) + ONE ttyd for
 # the session library (/sess/) + the task board + Caddy (login gate + automatic HTTPS).
 # `docker compose up` builds this and serves the dashboard, password-protected, ready
 # for an internet-facing VPS.

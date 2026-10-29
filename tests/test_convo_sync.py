@@ -301,7 +301,7 @@ def test_a_claude_in_another_pane_of_the_session_is_not_the_terminals(w, how):
     # tool — $TMUX points at cs-A) opens a second pane in the terminal and starts
     # another interactive Claude there. It is started later, on its own pane's tty,
     # and its parent chain ends at a pane of cs-A — but the terminal's conversation
-    # is the Claude in the pane AgentDeck started, not this one.
+    # is the Claude in the pane AgentKennel started, not this one.
     w.add(UA)
     w.transcript(UA)
     first = w.start("cs-" + A)

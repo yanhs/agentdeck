@@ -320,7 +320,7 @@ class RealOps:
             raise RuntimeError("this server's IP is unknown: set SERVER_IP in guests/.env")
         self._cf("POST", f"zones/{z}/dns_records", {
             "type": "A", "name": host, "content": self._ip, "proxied": True, "ttl": 1,
-            "comment": "AgentDeck guest site (sitegate)"})
+            "comment": "AgentKennel guest site (sitegate)"})
 
     def dns_delete(self, host: str) -> None:
         if not self._dns_by_cloudflare():

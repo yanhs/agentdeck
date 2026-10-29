@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""guestctl — guest sandboxes: one AgentDeck container per person.
+"""guestctl — guest sandboxes: one AgentKennel container per person.
 
     guestctl.py add <name> --tg <telegram id> [--limit N]   create + start, prints access
     guestctl.py web <name>                                   https://sb-<name>.<domain>
@@ -41,7 +41,7 @@ from texts import t as _t  # noqa: E402
 import turnstile as ts  # noqa: E402
 
 GW = "172.31.250.1"
-IMAGE_NAME = "agentdeck-guest"  # tag = the AgentDeck version (install.sh builds it)
+IMAGE_NAME = "agentdeck-guest"  # tag = the AgentKennel version (install.sh builds it)
 PORT_BASE = 18100
 DATA = HERE / "turnstile" / "data"
 REGISTRY = DATA / "sandboxes.json"
@@ -53,7 +53,7 @@ UNITS = ("agentdeck-guest-turnstile.service", "agentdeck-guest-tgrelay.service",
 
 
 def repo_version() -> str:
-    """This checkout's AgentDeck version (git describe), usable as an image tag."""
+    """This checkout's AgentKennel version (git describe), usable as an image tag."""
     try:
         r = subprocess.run(["git", "-C", str(HERE.parent), "describe", "--tags", "--always"],
                            capture_output=True, text=True, timeout=10)
@@ -86,7 +86,7 @@ def dashboard_host(name: str) -> str:
 
 
 def dashboard_vhost(name: str, port: int) -> str:
-    """nginx for the guest's own AgentDeck dashboard (its password is AgentDeck's)."""
+    """nginx for the guest's own AgentKennel dashboard (its password is AgentKennel's)."""
     sys.path.insert(0, str(HERE / "sitegate"))
     import sitegate  # noqa: E402
 
