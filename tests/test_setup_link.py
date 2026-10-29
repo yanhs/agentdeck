@@ -136,3 +136,20 @@ def test_cli_prints_the_link(tmp_path):
     p = subprocess.run([sys.executable, str(ROOT / "status_server.py"), "--setup-link"],
                        env=env, capture_output=True, text=True, timeout=20)
     assert p.returncode == 1 and p.stdout.strip() == ""
+
+
+def test_installer_counts_a_fresh_403_login_as_up():
+    # a fresh install answers /login with 403 (waiting for the setup link): the installer's
+    # health and certificate checks must take that as "up", or every install dies at the end
+    src = (ROOT / "install.sh").read_text()
+    for fn in ("wait_healthy()", "wait_cert()"):
+        body = src.split(fn, 1)[1].split("\n}\n", 1)[0]
+        case = [l for l in body.splitlines() if 'case "$code" in' in l]
+        assert case and "403" in case[0], fn
+
+
+def test_container_log_line_holds_only_the_real_link():
+    # README/tests grep `/login?setup=…` from `docker compose logs`: an example link in the
+    # message would be grabbed instead of the real one
+    src = (ROOT / "docker" / "entrypoint.sh").read_text()
+    assert src.count("/login?setup=") == 0 and "--setup-link" in src

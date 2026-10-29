@@ -34,8 +34,9 @@ fi
 if [ -s "$AGENTDECK_PASSFILE" ]; then
   echo "[agentdeck] dashboard password is set"
 else   # only this one-time link can set it (a stranger opening the port first can't)
-  echo "[agentdeck] no password yet — set it at the one-time setup link (your dashboard address +):"
-  echo "[agentdeck]   $(python3 status_server.py --setup-link)   e.g. http://<your-vps-ip>:8765/login?setup=…"
+  echo "[agentdeck] no password yet — set it at the one-time setup link: your dashboard"
+  echo "[agentdeck] address (e.g. http://<your-vps-ip>:8765) followed by"
+  echo "[agentdeck]   $(python3 status_server.py --setup-link)"
 fi
 
 # ~/.claude.json (claude's home-level config) is NOT inside the ~/.claude volume on its own —

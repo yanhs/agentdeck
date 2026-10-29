@@ -906,7 +906,7 @@ wait_cert() {
   while :; do
     code="$(curl -s "${k[@]}" -o /dev/null -w '%{http_code}' --max-time 5 \
               --resolve "$name:$port:127.0.0.1" "https://$name:$port/login" 2>/dev/null || true)"
-    case "$code" in 200|302) return 0 ;; esac
+    case "$code" in 200|302|403) return 0 ;; esac   # 403: fresh, waits for the setup link
     [ "$SECONDS" -ge "$end" ] && return 1
     sleep "$CERT_POLL"
   done
@@ -948,7 +948,7 @@ wait_healthy() {
   esac
   for i in $(seq 1 45); do
     code="$(curl -s "${k[@]}" -o /dev/null -w '%{http_code}' --max-time 3 "$url" || true)"
-    case "$code" in 200|301|302|308) return 0 ;; esac
+    case "$code" in 200|301|302|308|403) return 0 ;; esac   # 403: no password yet
     sleep 1
   done
   $SUDO systemctl --no-pager status $RUN_UNITS | tail -n 40 >&2 || true

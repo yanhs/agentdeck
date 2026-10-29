@@ -214,7 +214,7 @@ case "$SCENARIO" in cert-timeout|port80-busy)
   expect "explains the browser warning" grep -q "your browser will warn once" "$L1"
   expect "says it is still encrypted" grep -q "the connection and your password are still encrypted" "$L1" ;;
 esac
-expect "says first visit sets the password" grep -qi "first visit sets the password" "$L1"
+expect "prints the one-time setup link" grep -q "one-time link" "$L1"
 expect "says + New terminal / sign in to Claude" grep -qi "sign in to Claude" "$L1"
 expect "says terminals open in ~/projects" grep -q "New terminals open in ~/projects" "$L1"
 [ "$rc" = 0 ] || exit 1
