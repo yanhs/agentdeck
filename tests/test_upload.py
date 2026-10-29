@@ -1,5 +1,5 @@
 """📎 File: any file from the browser lands in a PRIVATE folder on the server and the
-terminal gets its PATH (owner 29.10.2026: «загрузить файл ... и вставить в терминал»).
+terminal gets its PATH (owner 29.10.2026: «upload a file ... and paste it into the terminal»).
 
 A path, not a link: Claude runs on the same machine and reads the file directly, and a
 public link would expose client documents. POST /api/upload?name=<original name> with the
@@ -32,7 +32,8 @@ import status_server as ss  # noqa: E402
 # ── the file name ───────────────────────────────────────────────────────────
 @pytest.mark.parametrize("raw, want", [
     ("report.pdf", "report.pdf"),
-    ("договор аренды.docx", "договор_аренды.docx"),   # letters kept, no spaces in a path
+    ("Résumé final.pdf", "Résumé_final.pdf"),         # letters kept, no spaces in a path
+    ("報告 最終.docx", "報告_最終.docx"),               # any script
     ("../../etc/passwd", "passwd"),                     # no way out of the folder
     ("C:\\Users\\me\\photo 1.JPG", "photo_1.JPG"),       # a Windows path → its last part
     (".env", "env"),                                    # never a hidden file
@@ -51,10 +52,10 @@ def test_upload_name_is_capped_and_keeps_the_extension():
 # ── saving ──────────────────────────────────────────────────────────────────
 def test_save_upload_streams_into_a_private_dated_folder(tmp_path):
     data = os.urandom(3 * 1024 * 1024 + 7)               # several chunks
-    res = ss.save_upload(io.BytesIO(data), len(data), "отчёт.pdf", dest_dir=str(tmp_path))
+    res = ss.save_upload(io.BytesIO(data), len(data), "報告.pdf", dest_dir=str(tmp_path))
     p = Path(res["path"])
     assert p.read_bytes() == data
-    assert p.name == "отчёт.pdf" and res["name"] == "отчёт.pdf" and res["size"] == len(data)
+    assert p.name == "報告.pdf" and res["name"] == "報告.pdf" and res["size"] == len(data)
     assert p.parent.name == time.strftime("%Y-%m-%d") and p.parent.parent == tmp_path
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
     assert stat.S_IMODE(p.parent.stat().st_mode) == 0o700
@@ -111,10 +112,10 @@ def server(tmp_path, monkeypatch):
 
 def test_http_upload_returns_the_path(server):
     post, up = server
-    status, body = post("/api/upload?name=" + quote("план работ.txt"), b"hello")
+    status, body = post("/api/upload?name=" + quote("naïve plan.txt"), b"hello")
     assert status == 200, body
     d = json.loads(body)
-    assert d["name"] == "план_работ.txt" and d["size"] == 5
+    assert d["name"] == "naïve_plan.txt" and d["size"] == 5
     assert Path(d["path"]).read_bytes() == b"hello" and up in Path(d["path"]).parents
 
 
@@ -176,7 +177,7 @@ def test_real_browser_to_real_server(tmp_path, monkeypatch):
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     data = os.urandom(2 * 1024 * 1024 + 3)
-    src = tmp_path / "фото отпуск.jpg"
+    src = tmp_path / "photo été.jpg"
     src.write_bytes(data)
     try:
         with pw.sync_playwright() as p:
@@ -194,5 +195,5 @@ def test_real_browser_to_real_server(tmp_path, monkeypatch):
     finally:
         srv.shutdown()
     saved = [f for f in (tmp_path / "up").rglob("*") if f.is_file()]
-    assert [f.name for f in saved] == ["фото_отпуск.jpg"]
+    assert [f.name for f in saved] == ["photo_été.jpg"]
     assert saved[0].read_bytes() == data

@@ -40,12 +40,12 @@ op.open(urllib.request.Request(base + "/login", data=urllib.parse.urlencode({"pa
                                method="POST"), timeout=30)
 check("logged in", any(c.name == "agents_session" for c in jar))
 data = os.urandom(3 * 1024 * 1024 + 11)
-st, body = post("/api/upload?name=" + urllib.parse.quote("отчёт за май.pdf"), data, op)
+st, body = post("/api/upload?name=" + urllib.parse.quote("report für Mai.pdf"), data, op)
 d = {}
 try: d = json.loads(body)
 except Exception: pass
 check("upload 3 MB through the proxy", st == 200 and bool(d.get("path")), f"status {st} {body[:120]!r}")
-check("name kept, made safe", d.get("name") == "отчёт_за_май.pdf", d.get("name"))
+check("name kept, made safe", d.get("name") == "report_für_Mai.pdf", d.get("name"))
 check("size", d.get("size") == len(data), d.get("size"))
 check("private folder, not a link", "/.sessions/uploads/" in d.get("path", "") and "http" not in d.get("path", ""), d.get("path"))
 print(f"PATH={d.get('path','')} SHA={hashlib.sha256(data).hexdigest()}")

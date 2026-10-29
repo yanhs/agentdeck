@@ -39,7 +39,7 @@ def run(deck, *args, **extra):
 # ── refusals ────────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("args", [[], ["aaaaaaaa", "bbbbbbbb"]] + [[b] for b in BAD_IDS])
 def test_refuses_anything_but_one_known_id(deck, args):
-    deck.add("живая", uuid=U1)
+    deck.add("live one", uuid=U1)
     r = run(deck, *args)
     assert r.returncode == 2, (args, r.stdout, r.stderr)
     assert "unknown session" in (r.stdout + r.stderr)
@@ -54,7 +54,7 @@ def test_unknown_valid_id_is_refused_without_creating_anything(deck):
 
 
 def test_archived_id_is_refused(deck):
-    e = deck.add("архив", uuid=U1, archived=True)
+    e = deck.add("archived one", uuid=U1, archived=True)
     r = run(deck, e["id"])
     assert r.returncode == 2 and "unknown session" in (r.stdout + r.stderr)
 
@@ -67,7 +67,7 @@ def test_pauses_so_the_message_stays_readable_in_the_tab(deck):
 
 # ── dry run ─────────────────────────────────────────────────────────────────
 def test_dry_run_prints_the_pane_command_and_starts_nothing(deck):
-    e = deck.add("новая", uuid=U1)
+    e = deck.add("newer one", uuid=U1)
     r = run(deck, e["id"], DRY_RUN="1")
     assert r.returncode == 0, r.stderr
     assert f"--session-id {U1}" in r.stdout and "AGENTKENNEL_SESSION=aaaaaaaa" in r.stdout
@@ -76,7 +76,7 @@ def test_dry_run_prints_the_pane_command_and_starts_nothing(deck):
 
 
 def test_dry_run_resume_when_transcript_exists(deck):
-    e = deck.add("старая", uuid=U2)
+    e = deck.add("older one", uuid=U2)
     deck.transcript(e)
     r = run(deck, e["id"], DRY_RUN="1")
     assert r.returncode == 0 and f"--resume {U2}" in r.stdout
@@ -136,7 +136,7 @@ def test_pm2_app_runs_one_ttyd_with_url_args_on_localhost_3031():
     for flag in ('"-W"', '"-a"', '"-i", "lo"', '"-p", "3031"', '"--base-path", "/sess"'):
         assert flag in cfg, flag
     # -O: websocket Origin must equal Host. The login cookie is SameSite=Lax, so any
-    # *.reimake.com page is "same-site" and would otherwise get a shell here.
+    # other page on the same parent domain is "same-site" and would otherwise get a shell here.
     assert '"-O"' in cfg
     assert "open-session.sh" in cfg and '"bash"' in cfg
 

@@ -147,7 +147,7 @@ def test_get_carries_system_stats_like_the_terminal_status(api):
 
 
 def test_get_lists_registry_in_display_order_with_tmux_state(api):
-    _seed(api, (U1, "ImmAppeal деплой", 10), (U2, "Налоги", 20), (U3, "Старое", 5))
+    _seed(api, (U1, "API deploy", 10), (U2, "Taxes", 20), (U3, "Old one", 5))
     _start(api, "cs-c0ffee00")                          # loaded, but the list doesn't jump
     code, data = get(api)
     assert code == 200 and data["max_active"] == library.MAX_ACTIVE
@@ -158,7 +158,7 @@ def test_get_lists_registry_in_display_order_with_tmux_state(api):
     by = _by_id(data)
     assert by["c0ffee00"]["active"] is True and by["c0ffee00"]["attached"] is False
     assert by["c0ffee00"]["status"] == "idle"
-    assert by["aaaa1111"] == {"id": "aaaa1111", "name": "ImmAppeal деплой", "cwd": "/home/ubuntu/pr",
+    assert by["aaaa1111"] == {"id": "aaaa1111", "name": "API deploy", "cwd": "/home/ubuntu/pr",
                               "created": 10, "last_used": 10, "archived": False,
                               "active": False, "attached": False, "status": "off", "legacy_path": None,
                               "pos": by["aaaa1111"]["pos"]}
@@ -176,7 +176,7 @@ def test_status_working_is_the_terminal_cards_cpu_measure(api, monkeypatch):
 
 
 def test_attached_true_while_a_client_views_the_session(api):
-    _seed(api, (U1, "в браузере", 10), (U2, "никто не смотрит", 20))
+    _seed(api, (U1, "in the browser", 10), (U2, "nobody watching", 20))
     _start(api, "cs-aaaa1111")
     _start(api, "cs-bbbb2222")
     # a real tmux client attached to cs-aaaa1111, run from a helper session on the same socket
@@ -196,7 +196,7 @@ def test_attached_true_while_a_client_views_the_session(api):
 
 
 def test_tmux_sessions_outside_the_registry_are_ignored(api):
-    _seed(api, (U1, "есть в реестре", 10))
+    _seed(api, (U1, "in the registry", 10))
     for name in ("cs-deadbeef", "claude-terminal-3", "cs-AAAA1111", "cs-aaaa1111x"):
         _start(api, name)
     data = get(api)[1]
@@ -205,7 +205,7 @@ def test_tmux_sessions_outside_the_registry_are_ignored(api):
 
 
 def test_archived_hidden_by_default_listed_with_query(api):
-    _seed(api, (U1, "живая", 10), (U2, "в архиве", 20, True))
+    _seed(api, (U1, "live one", 10), (U2, "archived one", 20, True))
     assert [s["id"] for s in get(api)[1]["sessions"]] == ["aaaa1111"]
     by = _by_id(get(api, "/api/library?archived=1")[1])
     assert set(by) == {"aaaa1111", "bbbb2222"} and by["bbbb2222"]["archived"] is True
@@ -214,16 +214,16 @@ def test_archived_hidden_by_default_listed_with_query(api):
 # ── POST /api/library/new ────────────────────────────────────────────────────
 def test_new_creates_entry_without_starting_tmux(api, monkeypatch):
     monkeypatch.setenv("AGENTKENNEL_WORKDIR", "/srv/work")
-    _seed(api, (U1, "старая", 10))
+    _seed(api, (U1, "old one", 10))
     t0 = int(time.time())
-    code, e = post(api, "new", {"name": "ImmAppeal деплой"})
+    code, e = post(api, "new", {"name": "API deploy"})
     assert code == 200
     assert set(e) == ROW_KEYS and library.valid_id(e["id"])
-    assert e["name"] == "ImmAppeal деплой" and e["cwd"] == "/srv/work"
+    assert e["name"] == "API deploy" and e["cwd"] == "/srv/work"
     assert e["archived"] is False and e["active"] is False and e["status"] == "off"
     assert t0 <= e["created"] == e["last_used"] <= int(time.time()) + 1
     stored = library.find(library.load(api.lib), e["id"])
-    assert stored["uuid"].replace("-", "")[:8] == e["id"] and stored["name"] == "ImmAppeal деплой"
+    assert stored["uuid"].replace("-", "")[:8] == e["id"] and stored["name"] == "API deploy"
     assert not _alive(api, "cs-" + e["id"])
     # newest inactive first, the older one after it
     assert [s["id"] for s in get(api)[1]["sessions"]] == [e["id"], "aaaa1111"]
@@ -242,12 +242,12 @@ def test_new_blank_or_missing_name_gets_a_dated_default(api):
 
 
 def test_new_collapses_whitespace_and_drops_control_chars(api):
-    code, e = post(api, "new", {"name": "  Налоги\n2026 \x1b[31mкрасное\t "})
-    assert code == 200 and e["name"] == "Налоги 2026 [31mкрасное"
+    code, e = post(api, "new", {"name": "  Taxes\n2026 \x1b[31mcafé\t "})
+    assert code == 200 and e["name"] == "Taxes 2026 [31mcafé"
 
 
 def test_new_rejects_bad_names(api):
-    for body in ({"name": 5}, {"name": ["a"]}, {"name": "я" * 201}):
+    for body in ({"name": 5}, {"name": ["a"]}, {"name": "é" * 201}):
         code, err = post(api, "new", body)
         assert code == 400 and "error" in err, body
     assert library.load(api.lib)["sessions"] == []
@@ -255,26 +255,26 @@ def test_new_rejects_bad_names(api):
 
 # ── POST /api/library/rename ─────────────────────────────────────────────────
 def test_rename(api):
-    _seed(api, (U1, "старое имя", 10))
-    code, e = post(api, "rename", {"id": "aaaa1111", "name": " Новое \n имя "})
-    assert code == 200 and e["id"] == "aaaa1111" and e["name"] == "Новое имя"
+    _seed(api, (U1, "old name", 10))
+    code, e = post(api, "rename", {"id": "aaaa1111", "name": " New \n name "})
+    assert code == 200 and e["id"] == "aaaa1111" and e["name"] == "New name"
     assert set(e) == ROW_KEYS
-    assert library.find(library.load(api.lib), "aaaa1111")["name"] == "Новое имя"
+    assert library.find(library.load(api.lib), "aaaa1111")["name"] == "New name"
 
 
 def test_rename_errors(api):
-    _seed(api, (U1, "имя", 10))
+    _seed(api, (U1, "name", 10))
     assert post(api, "rename", {"id": "aaaa1111", "name": "  "})[0] == 400
     assert post(api, "rename", {"id": "aaaa1111"})[0] == 400
-    assert post(api, "rename", {"id": "aaaa1111", "name": "я" * 201})[0] == 400
+    assert post(api, "rename", {"id": "aaaa1111", "name": "é" * 201})[0] == 400
     assert post(api, "rename", {"id": "deadbeef", "name": "x"})[0] == 404
     assert post(api, "rename", {"id": "../x", "name": "x"})[0] == 400
-    assert library.find(library.load(api.lib), "aaaa1111")["name"] == "имя"
+    assert library.find(library.load(api.lib), "aaaa1111")["name"] == "name"
 
 
 # ── POST /api/library/archive ────────────────────────────────────────────────
 def test_archive_and_unarchive(api):
-    _seed(api, (U1, "тема", 10))
+    _seed(api, (U1, "topic", 10))
     code, e = post(api, "archive", {"id": "aaaa1111"})             # default: archive
     assert code == 200 and e["archived"] is True
     assert library.find(library.load(api.lib), "aaaa1111")["archived"] is True
@@ -284,7 +284,7 @@ def test_archive_and_unarchive(api):
 
 
 def test_archive_errors(api):
-    _seed(api, (U1, "тема", 10))
+    _seed(api, (U1, "topic", 10))
     assert post(api, "archive", {"id": "aaaa1111", "archived": "yes"})[0] == 400
     assert post(api, "archive", {"id": "deadbeef"})[0] == 404
     assert post(api, "archive", {"id": "AAAA1111"})[0] == 400
@@ -294,7 +294,7 @@ def test_archive_errors(api):
 # ── POST /api/library/close ──────────────────────────────────────────────────
 def test_close_kills_only_its_own_session_and_keeps_the_entry(api, monkeypatch):
     monkeypatch.setattr(api.ss, "CLOSE_QUIET_SECONDS", 0)     # "no output for 30 min"
-    _seed(api, (U1, "выгрузить", 10), (U2, "соседка", 20))
+    _seed(api, (U1, "to unload", 10), (U2, "neighbour", 20))
     _start(api, "cs-aaaa1111")
     _start(api, "cs-bbbb2222")
     code, e = post(api, "close", {"id": "aaaa1111"})
@@ -310,7 +310,7 @@ def test_close_kills_only_its_own_session_and_keeps_the_entry(api, monkeypatch):
 
 
 def test_close_matches_the_session_name_exactly_not_by_prefix(api):
-    _seed(api, (U1, "не загружена", 10))
+    _seed(api, (U1, "not loaded", 10))
     _start(api, "cs-aaaa1111x")                   # tmux would prefix-match "-t cs-aaaa1111"
     code, e = post(api, "close", {"id": "aaaa1111"})
     assert code == 200 and e["killed"] is False
@@ -318,7 +318,7 @@ def test_close_matches_the_session_name_exactly_not_by_prefix(api):
 
 
 def test_close_rejects_bad_and_unknown_ids_and_kills_nothing(api):
-    _seed(api, (U1, "тема", 10))
+    _seed(api, (U1, "topic", 10))
     _start(api, "cs-aaaa1111")
     _start(api, "cs-deadbeef")                    # a session, but not a registry topic
     for body in ({"id": "; tmux kill-server"}, {"id": "../x"}, {"id": "AAAA1111"},
@@ -387,7 +387,7 @@ def test_post_rejects_a_foreign_origin(api, monkeypatch):
     body = json.dumps({"name": "x"}).encode()
     own = api.base                                   # http://127.0.0.1:<port> = own scheme+Host
     for origin in ("https://evil.example", "null", "", own.replace("http://", "https://"),
-                   own + ".evil.example", own + "/", "https://agents.reimake.com"):
+                   own + ".evil.example", own + "/", "https://agents.example.com"):
         code, _, err = _raw_req(api, "POST", "/api/library/new", body,
                                 {"Content-Type": "application/json", "Origin": origin})
         assert code == 403 and "error" in err, origin
@@ -425,7 +425,7 @@ def test_default_origin_refuses_without_a_host(api, monkeypatch):
     assert ss.lib_origin_ok("http://x", {"Host": ""}) is False
     assert ss.lib_origin_ok("http://x", {}) is False
     assert ss.lib_origin_ok("http://x", {"Host": "x"}) is True
-    assert "agents.reimake.com" not in repr(getattr(ss, "DEFAULT_ORIGIN", ""))
+    assert "://" not in repr(getattr(ss, "DEFAULT_ORIGIN", ""))   # no hard-coded host
 
 
 def test_allowed_origin_is_configurable(api, monkeypatch):
@@ -433,7 +433,7 @@ def test_allowed_origin_is_configurable(api, monkeypatch):
     body = json.dumps({"name": "x"}).encode()
     hdr = lambda o: {"Content-Type": "application/json", "Origin": o}
     assert _raw_req(api, "POST", "/api/library/new", body, hdr("https://deck.test"))[0] == 200
-    assert _raw_req(api, "POST", "/api/library/new", body, hdr("https://agents.reimake.com"))[0] == 403
+    assert _raw_req(api, "POST", "/api/library/new", body, hdr("https://agents.example.com"))[0] == 403
 
 
 def test_library_responses_have_no_wildcard_cors(api):
@@ -454,7 +454,7 @@ def test_library_responses_have_no_wildcard_cors(api):
 
 # ── close refuses a topic someone is using, unless forced ────────────────────
 def test_close_refuses_a_session_with_recent_output(api):
-    _seed(api, (U1, "свежий вывод", 10))
+    _seed(api, (U1, "fresh output", 10))
     _start(api, "cs-aaaa1111")                    # just started = output right now
     code, err = post(api, "close", {"id": "aaaa1111"})
     assert code == 409 and "error" in err
@@ -465,7 +465,7 @@ def test_close_refuses_a_session_with_recent_output(api):
 
 def test_close_refuses_an_attached_session_even_when_quiet(api, monkeypatch):
     monkeypatch.setattr(api.ss, "CLOSE_QUIET_SECONDS", 0)
-    _seed(api, (U1, "смотрят", 10))
+    _seed(api, (U1, "watched", 10))
     _start(api, "cs-aaaa1111")
     _start(api, "viewer", f"env -u TMUX tmux -L {api.sock} attach -t =cs-aaaa1111")
     deadline = time.time() + 5
@@ -483,7 +483,7 @@ def test_close_refuses_an_attached_session_even_when_quiet(api, monkeypatch):
 
 def test_close_quiet_detached_session_without_force(api, monkeypatch):
     monkeypatch.setattr(api.ss, "CLOSE_QUIET_SECONDS", 0)
-    _seed(api, (U1, "тихая", 10))
+    _seed(api, (U1, "quiet one", 10))
     _start(api, "cs-aaaa1111")
     code, e = post(api, "close", {"id": "aaaa1111"})
     assert code == 200 and e["killed"] is True
@@ -510,10 +510,10 @@ def test_page_version_watches_index_lib_for_the_library_page(api, tmp_path, monk
             with urllib.request.urlopen(urllib.request.Request(base, headers=headers), timeout=5) as r:
                 return float(r.read())
         assert version({}) == 1000
-        assert version({"Referer": "https://agents.reimake.com/"}) == 1000
-        assert version({"Referer": "https://agents.reimake.com/index-lib.html"}) == 2000
-        assert version({"Referer": "https://agents.reimake.com/index-lib.html?x=1#y"}) == 2000
-        assert version({"Referer": "https://agents.reimake.com/../../etc/passwd"}) == 1000
+        assert version({"Referer": "https://agents.example.com/"}) == 1000
+        assert version({"Referer": "https://agents.example.com/index-lib.html"}) == 2000
+        assert version({"Referer": "https://agents.example.com/index-lib.html?x=1#y"}) == 2000
+        assert version({"Referer": "https://agents.example.com/../../etc/passwd"}) == 1000
     finally:
         srv.shutdown()
         srv.server_close()
@@ -653,7 +653,7 @@ def quiet(api, monkeypatch):
 
 def test_archive_unloads_a_loaded_quiet_terminal_at_once(quiet):
     api = quiet
-    _seed(api, (U1, "в архив", 10), (U2, "соседка", 20))
+    _seed(api, (U1, "to archive", 10), (U2, "neighbour", 20))
     _start(api, "cs-aaaa1111")
     _start(api, "cs-bbbb2222")
     code, e = post(api, "archive", {"id": "aaaa1111"})
@@ -666,7 +666,7 @@ def test_archive_unloads_a_loaded_quiet_terminal_at_once(quiet):
 
 def test_archive_unloads_even_with_a_tab_open(quiet, monkeypatch):
     api = quiet
-    _seed(api, (U1, "во вкладке", 10))
+    _seed(api, (U1, "in a tab", 10))
     _start(api, "cs-aaaa1111")
     real = api.ss.lib_live
     monkeypatch.setattr(api.ss, "lib_live",
@@ -678,7 +678,7 @@ def test_archive_unloads_even_with_a_tab_open(quiet, monkeypatch):
 
 def test_archive_keeps_a_terminal_that_printed_in_the_last_seconds(quiet, monkeypatch):
     api = quiet
-    _seed(api, (U1, "печатает", 10))
+    _seed(api, (U1, "typing", 10))
     _start(api, "cs-aaaa1111")
     monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 5)
     code, e = post(api, "archive", {"id": "aaaa1111"})
@@ -691,7 +691,7 @@ def test_archive_keeps_a_terminal_that_printed_in_the_last_seconds(quiet, monkey
 def test_archive_busy_window_is_about_fifteen_seconds(quiet, monkeypatch):
     api = quiet
     assert api.ss.ARCHIVE_BUSY_SECONDS == 15
-    _seed(api, (U1, "затихла", 10))
+    _seed(api, (U1, "went quiet", 10))
     _start(api, "cs-aaaa1111")
     monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 20)
     assert post(api, "archive", {"id": "aaaa1111"})[1]["unloaded"] is True
@@ -699,7 +699,7 @@ def test_archive_busy_window_is_about_fifteen_seconds(quiet, monkeypatch):
 
 def test_archive_unknown_output_time_counts_as_working(quiet, monkeypatch):
     api = quiet
-    _seed(api, (U1, "неясно", 10))
+    _seed(api, (U1, "unclear", 10))
     _start(api, "cs-aaaa1111")
     monkeypatch.setattr(api.ss, "lib_last_output", lambda name: None)
     e = post(api, "archive", {"id": "aaaa1111"})[1]
@@ -709,7 +709,7 @@ def test_archive_unknown_output_time_counts_as_working(quiet, monkeypatch):
 
 def test_archive_keeps_a_terminal_with_a_hold_marker(quiet):
     api = quiet
-    _seed(api, (U1, "таймер", 10))
+    _seed(api, (U1, "timer", 10))
     _start(api, "cs-aaaa1111")
     library.set_hold("aaaa1111", time.time() + 600, api.lib)
     e = post(api, "archive", {"id": "aaaa1111"})[1]
@@ -719,7 +719,7 @@ def test_archive_keeps_a_terminal_with_a_hold_marker(quiet):
 
 def test_archive_ignores_an_expired_hold_marker(quiet):
     api = quiet
-    _seed(api, (U1, "старый таймер", 10))
+    _seed(api, (U1, "old timer", 10))
     _start(api, "cs-aaaa1111")
     library.set_hold("aaaa1111", time.time() - 5, api.lib)
     assert post(api, "archive", {"id": "aaaa1111"})[1]["unloaded"] is True
@@ -727,7 +727,7 @@ def test_archive_ignores_an_expired_hold_marker(quiet):
 
 def test_archive_keeps_a_terminal_with_a_background_task(quiet, monkeypatch):
     api = quiet
-    _seed(api, (U1, "фон", 10))
+    _seed(api, (U1, "background", 10))
     _start(api, "cs-aaaa1111")
     monkeypatch.setattr(api.ss.idle_reaper, "tree_has_task_output", lambda pid: True)
     e = post(api, "archive", {"id": "aaaa1111"})[1]
@@ -746,14 +746,14 @@ def test_archive_keeps_a_terminal_whose_status_is_working(quiet, monkeypatch):
 
 
 def test_archive_of_an_unloaded_terminal_has_nothing_pending(api):
-    _seed(api, (U1, "выгружена", 10))
+    _seed(api, (U1, "unloaded", 10))
     code, e = post(api, "archive", {"id": "aaaa1111"})
     assert code == 200 and e["unload_pending"] is False and e["active"] is False
     assert e["unloaded"] is False and e["reason"] == "not-loaded"
 
 
 def test_restore_never_unloads(api, monkeypatch):
-    _seed(api, (U1, "вернуть", 10, True))
+    _seed(api, (U1, "bring back", 10, True))
     _start(api, "cs-aaaa1111")
     monkeypatch.setattr(api.ss, "lib_last_output", lambda name: time.time() - 1000)
     code, e = post(api, "archive", {"id": "aaaa1111", "archived": False})
@@ -895,7 +895,7 @@ def rs(api, tmp_path, monkeypatch):
                 pass
 
 
-def _rs_seed(A, u=U1, name="перезапуск", archived=False):
+def _rs_seed(A, u=U1, name="restart", archived=False):
     """A topic in A.work with a transcript, so every start is `--resume <uuid>`."""
     with library.update(A.lib) as L:
         e = library.create(L, name, cwd=str(A.work), now=int(time.time()), uuid=u)
@@ -1118,7 +1118,7 @@ def test_restart_refuses_when_the_conversation_runs_in_another_claude(rs):
 
 def test_restart_errors(rs):
     sid = _rs_seed(rs)
-    _rs_seed(rs, u=U2, name="в архиве", archived=True)
+    _rs_seed(rs, u=U2, name="archived one", archived=True)
     _start(rs, "cs-bbbb2222")
     assert post(rs, "restart", {"id": "deadbeef"})[0] == 404
     assert post(rs, "restart", {"id": "AAAA1111"})[0] == 400
@@ -1141,7 +1141,7 @@ def test_restart_has_the_same_csrf_checks(rs, monkeypatch):
     assert _pane_pid(rs, "cs-" + sid) is not None and _starts(rs) == []
 
 
-# ── ⟳ asks once (owner 2026-10-23: "два диалога подряд неудобно"): POST
+# ── ⟳ asks once (owner 2026-10-23: "two dialogs in a row is awkward"): POST
 # /api/library/restart-check {id} answers whether the terminal is busy — {"busy": reason
 # | null} — and touches nothing, so the page can show ONE question: a plain one, or a
 # red one naming what it is doing. Its own route: a server that predates it answers
@@ -1220,7 +1220,7 @@ def _fake_claude_on(u):
 
 
 def test_trash_of_an_unloaded_terminal_hides_it_everywhere_but_the_trash(api, projects):
-    _seed(api, (U1, "в корзину", 10), (U2, "соседка", 20))
+    _seed(api, (U1, "to trash", 10), (U2, "neighbour", 20))
     (projects / f"{U1}.jsonl").write_text("talk")
     t0 = int(time.time())
     code, e = post(api, "trash", {"id": "aaaa1111"})

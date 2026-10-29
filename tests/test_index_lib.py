@@ -44,16 +44,16 @@ def base_sessions():
     # Deliberately NOT in display order: the page itself must sort by place (pos)
     # — dddd, bbbb, aaaa, cccc — and never by loaded state or last use.
     return [
-        {"id": "aaaa0001", "name": "ImmAppeal деплой", "cwd": "/home/ubuntu/pr",
+        {"id": "aaaa0001", "name": "API deploy", "cwd": "/home/ubuntu/pr",
          "created": 1, "last_used": 100, "archived": False, "pos": 2,
          "active": False, "attached": False, "status": "off"},
-        {"id": "bbbb0002", "name": "Светлота сайт", "cwd": "/home/ubuntu/pr",
+        {"id": "bbbb0002", "name": "Éclair site", "cwd": "/home/ubuntu/pr",
          "created": 2, "last_used": 50, "archived": False, "pos": 1,
          "active": True, "attached": False, "status": "working"},
-        {"id": "cccc0003", "name": "Старая тема", "cwd": "/home/ubuntu/pr",
+        {"id": "cccc0003", "name": "Old notes", "cwd": "/home/ubuntu/pr",
          "created": 3, "last_used": 10, "archived": False, "pos": 3,
          "active": False, "attached": False, "status": "off"},
-        {"id": "dddd0004", "name": "TG мост", "cwd": "/home/ubuntu/pr",
+        {"id": "dddd0004", "name": "TG bridge", "cwd": "/home/ubuntu/pr",
          "created": 4, "last_used": 200, "archived": False, "pos": 0,
          "active": True, "attached": True, "status": "idle"},
     ]
@@ -171,7 +171,7 @@ class FakeAPI:
 
         if path == "/api/library/new":
             if self.fail_new:
-                return self._json(route, {"error": "диск полон"}, 500)
+                return self._json(route, {"error": "disk full"}, 500)
             self._n += 1
             sid = f"eeee000{self._n}"
             e = {"id": sid, "name": (body.get("name") or "").strip() or "Terminal 24.09 10:00",
@@ -357,7 +357,7 @@ def test_existing_features_are_kept_in_the_source():
 def test_rows_show_name_and_short_code(page):
     shot(page, "index-lib-desktop.png")
     assert sorted(row_ids(page)) == ["aaaa0001", "bbbb0002", "cccc0003", "dddd0004"]
-    assert page.inner_text(row("bbbb0002") + " .proj") == "Светлота сайт"
+    assert page.inner_text(row("bbbb0002") + " .proj") == "Éclair site"
     assert page.inner_text(row("bbbb0002") + " .sid") == "bbbb0002"
     # the code is small — smaller than the name
     name_px = float(page.eval_on_selector(row("bbbb0002") + " .proj",
@@ -403,46 +403,46 @@ def test_status_dots_and_greyed_unloaded(page):
 
 def test_names_are_text_not_html(browser, site):
     api = FakeAPI()
-    api.sessions[0]["name"] = "<img src=x onerror=\"window.__xss=1\"><b>жирно</b>"
-    api.sessions.append({"id": "BAD'); x(", "name": "плохой код", "active": True,
+    api.sessions[0]["name"] = "<img src=x onerror=\"window.__xss=1\"><b>bold</b>"
+    api.sessions.append({"id": "BAD'); x(", "name": "bad code", "active": True,
                          "status": "idle", "last_used": 1, "archived": False})
     ctx, pg = _open(browser, site, api)
     try:
         assert pg.inner_text(row("aaaa0001") + " .proj").startswith("<img")
         assert pg.evaluate("window.__xss") is None
-        assert "плохой код" not in pg.inner_text("#list")   # invalid id → row skipped
+        assert "bad code" not in pg.inner_text("#list")   # invalid id → row skipped
     finally:
         ctx.close()
 
 
 # ── search ──────────────────────────────────────────────────────────────────
 def test_search_filters_by_name_and_code(page):
-    page.fill("#search", "свет")
+    page.fill("#search", "écl")
     assert row_ids(page) == ["bbbb0002"]
-    page.fill("#search", "IMMAPPEAL")                  # case-insensitive
+    page.fill("#search", "API DEPLOY")                 # case-insensitive
     assert row_ids(page) == ["aaaa0001"]
     page.fill("#search", "cccc")                       # code prefix
     assert row_ids(page) == ["cccc0003"]
-    page.fill("#search", "нет такого")
+    page.fill("#search", "no such thing")
     assert row_ids(page) == []
     page.fill("#search", "")
     assert len(row_ids(page)) == 4
 
 
 def test_search_enter_opens_the_top_match(page):
-    page.fill("#search", "тем")                        # «Старая тема» only
+    page.fill("#search", "notes")                      # «Old notes» only
     page.press("#search", "Enter")
     page.wait_for_selector("#wrap iframe")
     assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=cccc0003"
 
 
 def test_search_survives_a_poll(page, api):
-    page.fill("#search", "свет")
+    page.fill("#search", "écl")
     n = len(api.gets())
     page.wait_for_timeout(4600)                        # one poll period (4 s)
     assert len(api.gets()) > n, "the list is not polled every ~4 s"
     assert row_ids(page) == ["bbbb0002"]
-    assert page.input_value("#search") == "свет"
+    assert page.input_value("#search") == "écl"
 
 
 # ── open ────────────────────────────────────────────────────────────────────
@@ -454,7 +454,7 @@ def test_click_opens_the_session_endpoint(page):
     assert page.get_attribute("#tOpen", "href") == "/sess/?arg=cccc0003"
     assert page.is_visible("#topbar")
     assert page.inner_text("#tNum") == "cccc0003"
-    assert "Старая тема" in page.inner_text("#tInfo")
+    assert "Old notes" in page.inner_text("#tInfo")
     assert "sel" in page.get_attribute(row("cccc0003"), "class")
     shot(page, "index-lib-opened.png")
 
@@ -482,20 +482,20 @@ def test_new_theme_posts_then_opens_it(page, api):
     assert page.inner_text("#newBtn").strip() == "＋ New terminal"
     page.click("#newBtn")
     page.wait_for_selector("#newName:visible")
-    page.fill("#newName", "Разбор логов")
+    page.fill("#newName", "Log review")
     page.press("#newName", "Enter")
     page.wait_for_selector("#wrap iframe")
-    assert api.posts("/api/library/new")[-1][2] == {"name": "Разбор логов"}
+    assert api.posts("/api/library/new")[-1][2] == {"name": "Log review"}
     assert page.get_attribute("#wrap iframe", "src") == "/sess/?arg=eeee0001"
     page.wait_for_selector(row("eeee0001"))
-    assert page.inner_text(row("eeee0001") + " .proj") == "Разбор логов"
+    assert page.inner_text(row("eeee0001") + " .proj") == "Log review"
     assert "sel" in page.get_attribute(row("eeee0001"), "class")
     assert not page.is_visible("#newName")
 
 
 def test_new_theme_escape_cancels(page, api):
     page.click("#newBtn")
-    page.fill("#newName", "передумал")
+    page.fill("#newName", "changed my mind")
     page.press("#newName", "Escape")
     assert not page.is_visible("#newName")
     assert api.posts("/api/library/new") == []
@@ -505,10 +505,10 @@ def test_new_theme_escape_cancels(page, api):
 def test_new_theme_error_is_shown_and_nothing_opens(page, api):
     api.fail_new = True
     page.click("#newBtn")
-    page.fill("#newName", "не выйдет")
+    page.fill("#newName", "won't work")
     page.press("#newName", "Enter")
     page.wait_for_function(
-        "() => (document.getElementById('_imgToast')||{}).textContent?.includes('диск полон')",
+        "() => (document.getElementById('_imgToast')||{}).textContent?.includes('disk full')",
         timeout=3000)
     assert page.query_selector("#wrap iframe") is None
 
@@ -518,35 +518,35 @@ def test_rename_posts_and_shows_new_name(page, api):
     page.click(row("aaaa0001") + " .card-btn.edit")
     inp = row("aaaa0001") + " input.proj-edit"
     page.wait_for_selector(inp)
-    assert page.input_value(inp) == "ImmAppeal деплой"
-    page.fill(inp, "ImmAppeal прод")
+    assert page.input_value(inp) == "API deploy"
+    page.fill(inp, "API prod")
     page.press(inp, "Enter")
-    assert page.inner_text(row("aaaa0001") + " .proj") == "ImmAppeal прод"
+    assert page.inner_text(row("aaaa0001") + " .proj") == "API prod"
     assert api.posts("/api/library/rename") == [
-        ("POST", "/api/library/rename", {"id": "aaaa0001", "name": "ImmAppeal прод"})]
+        ("POST", "/api/library/rename", {"id": "aaaa0001", "name": "API prod"})]
 
 
 def test_rename_escape_or_empty_changes_nothing(page, api):
     page.click(row("aaaa0001") + " .card-btn.edit")
     inp = row("aaaa0001") + " input.proj-edit"
-    page.fill(inp, "что-то")
+    page.fill(inp, "something")
     page.press(inp, "Escape")
-    assert page.inner_text(row("aaaa0001") + " .proj") == "ImmAppeal деплой"
+    assert page.inner_text(row("aaaa0001") + " .proj") == "API deploy"
     page.click(row("aaaa0001") + " .card-btn.edit")
     page.fill(inp, "   ")
     page.press(inp, "Enter")
-    assert page.inner_text(row("aaaa0001") + " .proj") == "ImmAppeal деплой"
+    assert page.inner_text(row("aaaa0001") + " .proj") == "API deploy"
     assert api.posts("/api/library/rename") == []
 
 
 def test_poll_does_not_clobber_a_rename_in_progress(page, api):
     page.click(row("aaaa0001") + " .card-btn.edit")
     inp = row("aaaa0001") + " input.proj-edit"
-    page.fill(inp, "набираю медленно")
+    page.fill(inp, "typing slowly")
     n = len(api.gets())
     page.wait_for_timeout(4600)
     assert len(api.gets()) > n
-    assert page.input_value(inp) == "набираю медленно"
+    assert page.input_value(inp) == "typing slowly"
     assert api.posts("/api/library/rename") == []
 
 
@@ -782,10 +782,10 @@ def test_clearing_search_hides_archived_again(page, api):
 
 def test_search_enter_skips_archived_matches(page, api):
     s = archived_session()
-    s["name"] = "Старая тема archived"
+    s["name"] = "Old notes archived"
     s["last_used"] = 10**6                             # would sort first if it counted
     api.sessions.append(s)
-    page.fill("#search", "старая")
+    page.fill("#search", "old")
     page.wait_for_selector(row("ffff0005"), timeout=3000)
     page.press("#search", "Enter")
     page.wait_for_selector("#wrap iframe")
@@ -1079,7 +1079,7 @@ def test_works_at_400px(browser, site):
           return [...document.querySelectorAll('#list .card')]
             .filter(c => c.getBoundingClientRect().bottom <= l.bottom + 1).length; }""")
         assert visible_rows >= 2
-        pg.fill("#search", "мост")
+        pg.fill("#search", "bridge")
         assert row_ids(pg) == ["dddd0004"]
         pg.tap(row("dddd0004") + " .proj")
         pg.wait_for_selector("#wrap iframe")
@@ -1186,7 +1186,7 @@ def test_shell_row_hidden_by_an_unrelated_search(browser, site):
     ctx, pg = _open(browser, site, api)
     try:
         pg.wait_for_selector("#list .shell-row")
-        pg.fill("#search", "свет")
+        pg.fill("#search", "écl")
         assert shell_row(pg) is None or not shell_row(pg).is_visible()
         pg.fill("#search", "cmd")
         assert shell_row(pg).is_visible()
@@ -2066,7 +2066,7 @@ def test_board_message_from_the_same_origin_opens_the_terminal(browser, site):
     try:
         fr = _board_frame(pg)
         # cccc0003 is hidden by the search filter: still opens
-        pg.fill("#search", "свет")
+        pg.fill("#search", "écl")
         fr.evaluate("() => parent.postMessage({type: 'agentkennel:open-terminal', id: 'cccc0003'},"
                     " location.origin)")
         pg.wait_for_function("() => document.querySelector('#wrap iframe').getAttribute('src')"
@@ -3224,7 +3224,7 @@ RESTART = " .card-btn.restart"
 def test_restart_button_only_on_loaded_topic_rows(browser, site):
     api = FakeAPI()
     api.shell = dict(SHELL_ON)
-    api.sessions.append({"id": "ffff0005", "name": "в архиве", "cwd": "/home/ubuntu/pr",
+    api.sessions.append({"id": "ffff0005", "name": "archived one", "cwd": "/home/ubuntu/pr",
                          "created": 5, "last_used": 5, "archived": True,
                          "active": True, "attached": False, "status": "idle"})
     ctx, pg = _open(browser, site, api)
@@ -3250,7 +3250,7 @@ def test_restart_button_never_on_a_new_unloaded_or_archived_row(browser, site):
     # a row new to the page is filled before it is put in the list: the button must
     # leave it then too, not only on the next render (review 2026-10-23)
     api = FakeAPI()
-    api.sessions.append({"id": "ffff0005", "name": "в архиве", "cwd": "/home/ubuntu/pr",
+    api.sessions.append({"id": "ffff0005", "name": "archived one", "cwd": "/home/ubuntu/pr",
                          "created": 5, "last_used": 5, "archived": True,
                          "active": True, "attached": False, "status": "idle"})
     ctx, pg = _open(browser, site, api)
@@ -3266,7 +3266,7 @@ def test_restart_button_never_on_a_new_unloaded_or_archived_row(browser, site):
         ctx.close()
 
 
-# One question, not two (owner 2026-10-23: "два диалога подряд неудобно"): ⟳ first asks
+# One question, not two (owner 2026-10-23: "two dialogs in a row is awkward"): ⟳ first asks
 # the server whether the terminal is busy (check:true), then shows ONE dialog — a plain
 # "Restart?" for an idle terminal, a red one with "!" naming what it is doing for a busy
 # one, which then sends force:true. No native confirm() any more.
@@ -3304,7 +3304,7 @@ def test_restart_of_an_idle_terminal_asks_once_then_posts(page, api):
     page.click(row("dddd0004") + RESTART)
     d = _dlg(page)
     assert not d["busy"]
-    assert "Restart “TG мост”?" in d["text"] and "same conversation" in d["text"]
+    assert "Restart “TG bridge”?" in d["text"] and "same conversation" in d["text"]
     assert "!" not in d["text"]
     assert "dlg-ok" in d["focus"]                              # Enter restarts an idle one
     _answer(page, True)
@@ -3350,7 +3350,7 @@ def test_restart_of_a_busy_terminal_asks_once_in_red_then_forces(page, api, reas
     page.click(row("dddd0004") + RESTART)
     d = _dlg(page)
     assert d["busy"]
-    assert "TG мост" in d["text"] and BUSY_TITLE[reason] in d["text"]
+    assert "TG bridge" in d["text"] and BUSY_TITLE[reason] in d["text"]
     assert words in d["text"] and "interrupt" in d["text"]
     assert page.is_visible(DLG + " .dlg-icon")                # the "!" mark
     assert "dlg-cancel" in d["focus"]                          # Enter does NOT interrupt work
@@ -3482,13 +3482,13 @@ def test_restart_one_question_at_a_time_across_rows(page, api):
     api.hold_restart = False
     api.release()
     d = _dlg(page)
-    assert d["busy"] and "TG мост" in d["text"]
+    assert d["busy"] and "TG bridge" in d["text"]
     _answer(page, False)
     page.wait_for_timeout(300)
     assert _restart_posts(api) == []
     page.click(row("bbbb0002") + RESTART)                        # free again: asks for B
     d = _dlg(page)
-    assert not d["busy"] and "Светлота" in d["text"]
+    assert not d["busy"] and "Éclair" in d["text"]
     _answer(page, False)
 
 
@@ -3609,13 +3609,13 @@ def test_move_to_trash_asks_once_plainly_then_posts(page, api):
     page.click(row("cccc0003") + TRASH)
     d = _dlg(page)
     assert not d["busy"] and "!" not in d["text"]
-    assert "Move “Старая тема” to Trash?" in d["text"]
+    assert "Move “Old notes” to Trash?" in d["text"]
     assert page.inner_text(DLG + " .dlg-ok").strip() == "Move to Trash"
     assert "dlg-ok" in d["focus"]
     assert page.query_selector("#wrap iframe") is None            # the click did not open it
     _answer(page, True)
     page.wait_for_selector(row("cccc0003"), state="detached")
-    _toast_has(page, "Moved “Старая тема” to Trash")
+    _toast_has(page, "Moved “Old notes” to Trash")
     assert _trash_posts(api, "trash-check") == [{"id": "cccc0003"}]
     assert _trash_posts(api) == [{"id": "cccc0003"}]
     assert native == []
@@ -3646,7 +3646,7 @@ def test_move_to_trash_of_a_busy_terminal_asks_in_red_then_forces(page, api, rea
     api.trash_busy["dddd0004"] = reason
     page.click(row("dddd0004") + TRASH)
     d = _dlg(page)
-    assert d["busy"] and "TG мост" in d["text"] and BUSY_TITLE[reason] in d["text"]
+    assert d["busy"] and "TG bridge" in d["text"] and BUSY_TITLE[reason] in d["text"]
     assert words in d["text"] and "interrupt" in d["text"]
     assert page.is_visible(DLG + " .dlg-icon")                    # the "!" mark
     assert "dlg-cancel" in d["focus"]                              # Enter does NOT interrupt work
@@ -3719,7 +3719,7 @@ def test_one_question_at_a_time_across_restart_and_trash(page, api):
                   ".card-btn.restart').click()")              # under the open dialog
     page.wait_for_timeout(300)
     assert api.posts("/api/library/restart-check") == []
-    assert "Старая тема" in _dlg(page)["text"]                   # the first question stays
+    assert "Old notes" in _dlg(page)["text"]                   # the first question stays
     _answer(page, False)
 
 
@@ -4056,7 +4056,7 @@ def test_file_button_uploads_each_chosen_file_with_its_name(browser, site, tmp_p
         pg.click(row("bbbb0002"))
         btn = pg.locator("#tPasteImg")
         assert btn.inner_text().strip() == "📎 File"
-        a, b = tmp_path / "отчёт.pdf", tmp_path / "b.txt"
+        a, b = tmp_path / "résumé.pdf", tmp_path / "b.txt"
         a.write_bytes(b"%PDF-1"), b.write_bytes(b"bee")
         with pg.expect_file_chooser() as fc:
             btn.click()
@@ -4066,7 +4066,7 @@ def test_file_button_uploads_each_chosen_file_with_its_name(browser, site, tmp_p
                              "?.includes('✅')")
         assert [m for m, _, _ in ups] == ["POST", "POST"]
         from urllib.parse import unquote
-        assert [unquote(u.split("name=", 1)[1]) for _, u, _ in ups] == ["отчёт.pdf", "b.txt"]
+        assert [unquote(u.split("name=", 1)[1]) for _, u, _ in ups] == ["résumé.pdf", "b.txt"]
         # the bytes themselves: Playwright hides a disk file's body from route();
         # test_touch_select_e2e checks them through the real upload server
     finally:

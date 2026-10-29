@@ -719,7 +719,7 @@ def test_on_text_releases_lock_before_streaming(monkeypatch, tmp_path):
     assert seen["locked_during_stream"] is False   # released before streaming
 
 
-# --- file storage: name sanitization + public reimake.com URL --------------
+# --- file storage: name sanitization + public URL ---------------------------
 
 def test_stored_name_with_readable_original():
     assert tb._stored_name("Quarterly Report.pdf", ".pdf", "abcd1234") == "abcd1234_Quarterly_Report.pdf"
@@ -741,9 +741,9 @@ def test_stored_name_sanitizes_unsafe_chars():
 
 
 def test_public_url_uses_the_configured_base(monkeypatch):
-    monkeypatch.setattr(tb, "TGFILES_URL", "https://reimake.com/tgfiles/")
+    monkeypatch.setattr(tb, "TGFILES_URL", "https://files.example.com/tgfiles/")
     u = tb._public_url("tok_file.pdf")
-    assert u == "https://reimake.com/tgfiles/tok_file.pdf"
+    assert u == "https://files.example.com/tgfiles/tok_file.pdf"
     assert "yanhs.stream" not in u           # the deprecated host must never appear
 
 
@@ -779,7 +779,7 @@ def test_defaults_are_generic_not_the_authors_server():
     assert d["url"] == ""
     assert d["py"] == d["exe"]                   # its own python (has faster-whisper if installed)
     assert d["cwd"] == os.path.expanduser("~")
-    assert not any("reimake.com" in v or "pypoetry" in v for v in d.values())
+    assert not any("://" in v or "pypoetry" in v for v in d.values())   # no hard-coded host
 
 
 def test_env_overrides_the_defaults():
@@ -867,12 +867,12 @@ def test_transcribe_voice_raises_on_failure(monkeypatch):
     assert "boom" in str(e.value)
 
 
-# --- on_file: save + reimake link; caption → also deliver to terminal ------
+# --- on_file: save + public link; caption → also deliver to terminal -------
 
 def test_on_file_saves_and_replies_with_link(monkeypatch, tmp_path):
     import asyncio
     monkeypatch.setattr(tb, "TGFILES_DIR", str(tmp_path))
-    monkeypatch.setattr(tb, "TGFILES_URL", "https://reimake.com/tgfiles")
+    monkeypatch.setattr(tb, "TGFILES_URL", "https://files.example.com/tgfiles")
     monkeypatch.setattr(tb._uuid, "uuid4", lambda: type("U", (), {"hex": "abcd1234ef"})())
     monkeypatch.setattr(tb, "get_current", lambda c: None)   # no terminal → just the link
     saved = {}
@@ -899,14 +899,14 @@ def test_on_file_saves_and_replies_with_link(monkeypatch, tmp_path):
 
     asyncio.run(tb.on_file(Upd(), None))
     assert saved["dest"].endswith("abcd1234_report.txt")     # uuid4().hex[:8] = "abcd1234"
-    assert any("https://reimake.com/tgfiles/abcd1234_report.txt" in r for r in replies)
+    assert any("https://files.example.com/tgfiles/abcd1234_report.txt" in r for r in replies)
     assert all("yanhs.stream" not in r for r in replies)
 
 
 def test_on_file_with_caption_delivers_path_to_terminal(monkeypatch, tmp_path):
     import asyncio
     monkeypatch.setattr(tb, "TGFILES_DIR", str(tmp_path))
-    monkeypatch.setattr(tb, "TGFILES_URL", "https://reimake.com/tgfiles")
+    monkeypatch.setattr(tb, "TGFILES_URL", "https://files.example.com/tgfiles")
     monkeypatch.setattr(tb._uuid, "uuid4", lambda: type("U", (), {"hex": "ffff0000aa"})())
     monkeypatch.setattr(tb, "get_current", lambda c: "6")
     monkeypatch.setattr(tb, "has_session", lambda s: True)
@@ -936,7 +936,7 @@ def test_on_file_with_caption_delivers_path_to_terminal(monkeypatch, tmp_path):
     asyncio.run(tb.on_file(Upd(), None))
     assert "check this log" in delivered["text"]             # caption forwarded
     assert "ffff0000_log.txt" in delivered["text"]            # local path included for the agent
-    assert "https://reimake.com/tgfiles/ffff0000_log.txt" in delivered["text"]
+    assert "https://files.example.com/tgfiles/ffff0000_log.txt" in delivered["text"]
 
 
 def test_on_file_rejects_oversize(monkeypatch):
@@ -1199,7 +1199,7 @@ def test_session_for_rejects_malformed_ids():
 
 
 def test_transcript_path_for_topic_uses_registry_uuid_and_cwd(world):
-    world.add("тема", uuid=U1, cwd="/home/ubuntu/pr")
+    world.add("chores", uuid=U1, cwd="/home/ubuntu/pr")
     assert tb.transcript_path("aaaa1111") == os.path.expanduser(
         f"~/.claude/projects/-home-ubuntu-pr/{U1}.jsonl")
 
@@ -1211,35 +1211,35 @@ def test_transcript_path_unknown_topic_is_none(world):
 # --- /use <name | id> ------------------------------------------------------
 
 def test_use_by_name_selects_topic_by_id_and_loads_it(world):
-    world.add("ImmAppeal деплой", uuid=U1)
-    world.add("Налоги 2026", uuid=U2)
-    replies = run_cmd(tb.cmd_use, ["НАЛОГИ"])
+    world.add("API deploy", uuid=U1)
+    world.add("Café taxes 2026", uuid=U2)
+    replies = run_cmd(tb.cmd_use, ["CAFÉ TAXES"])
     assert tb.get_current(CHAT) == "bbbb2222"            # stored by id, not by name
     assert world.ensured() == ["bbbb2222"]                # loaded via library_cli ensure
     text = replies[-1][0]
-    assert text.splitlines() == ["✅ Current terminal: «Налоги 2026» · bbbb2222",
+    assert text.splitlines() == ["✅ Current terminal: «Café taxes 2026» · bbbb2222",
                                  "▶️ was unloaded — loading…"]
 
 
 def test_use_multiword_name(world):
-    world.add("ImmAppeal деплой", uuid=U1)
-    world.add("Налоги 2026", uuid=U2)
-    run_cmd(tb.cmd_use, ["immappeal", "деплой"])
+    world.add("API deploy", uuid=U1)
+    world.add("Café taxes 2026", uuid=U2)
+    run_cmd(tb.cmd_use, ["api", "deploy"])
     assert tb.get_current(CHAT) == "aaaa1111"
 
 
 def test_use_by_id_prefix(world):
-    world.add("ImmAppeal деплой", uuid=U1)
-    world.add("Налоги 2026", uuid=U2)
+    world.add("API deploy", uuid=U1)
+    world.add("Café taxes 2026", uuid=U2)
     run_cmd(tb.cmd_use, ["aaaa"])
     assert tb.get_current(CHAT) == "aaaa1111"
 
 
 def test_use_several_matches_offers_buttons_and_selects_nothing(world):
-    world.add("Налоги 2025", uuid=U1, last_used=10)
-    world.add("Налоги 2026", uuid=U2, last_used=20)
+    world.add("Café taxes 2025", uuid=U1, last_used=10)
+    world.add("Café taxes 2026", uuid=U2, last_used=20)
     world.loaded.append("aaaa1111")                      # loaded, but the list doesn't jump
-    replies = run_cmd(tb.cmd_use, ["налоги"])
+    replies = run_cmd(tb.cmd_use, ["café"])
     assert tb.get_current(CHAT) is None
     assert world.ensured() == []                          # nothing loaded until a pick
     text, markup = replies[-1]
@@ -1248,20 +1248,20 @@ def test_use_several_matches_offers_buttons_and_selects_nothing(world):
 
 
 def test_use_unknown_topic_says_so_and_points_to_new(world):
-    world.add("Налоги 2026", uuid=U2)
-    replies = run_cmd(tb.cmd_use, ["нет такой"])
+    world.add("Café taxes 2026", uuid=U2)
+    replies = run_cmd(tb.cmd_use, ["no such"])
     assert tb.get_current(CHAT) is None and world.ensured() == []
     assert "/new" in replies[-1][0] and "/list" in replies[-1][0]
 
 
 def test_use_archived_topic_is_not_selectable(world):
-    world.add("Старая тема", uuid=U1, archived=True)
-    run_cmd(tb.cmd_use, ["старая"])
+    world.add("Old chores", uuid=U1, archived=True)
+    run_cmd(tb.cmd_use, ["old"])
     assert tb.get_current(CHAT) is None and world.ensured() == []
 
 
 def test_use_reports_busy_but_keeps_selection(world):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     world.codes["aaaa1111"] = (3, "All 12 loaded topics are busy")
     replies = run_cmd(tb.cmd_use, ["aaaa1111"])
     assert tb.get_current(CHAT) == "aaaa1111"             # a later message retries ensure
@@ -1271,14 +1271,14 @@ def test_use_reports_busy_but_keeps_selection(world):
 
 
 def test_use_relays_the_unload_notice(world):
-    world.add("тема", uuid=U1)
-    world.codes["aaaa1111"] = (0, "unloaded topic cs-bbbb2222 «Налоги» — unused for a while")
-    replies = run_cmd(tb.cmd_use, ["тема"])
+    world.add("chores", uuid=U1)
+    world.codes["aaaa1111"] = (0, "unloaded topic cs-bbbb2222 «Taxes» — unused for a while")
+    replies = run_cmd(tb.cmd_use, ["chores"])
     assert "ℹ️ unloaded topic cs-bbbb2222" in replies[-1][0]
 
 
 def test_use_callback_selects_topic(world):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     sink = run_cb(tb.on_use_cb, "use:aaaa1111")
     assert tb.get_current(CHAT) == "aaaa1111" and world.ensured() == ["aaaa1111"]
     assert "aaaa1111" in sink[-1][0]
@@ -1290,8 +1290,8 @@ def test_use_callback_rejects_unknown_topic(world):
 
 
 def test_use_without_args_lists_topics_then_running_legacy_terminals(world, monkeypatch):
-    world.add("Старая", uuid=U1, last_used=10)
-    world.add("Новая", uuid=U2, last_used=20)
+    world.add("Older", uuid=U1, last_used=10)
+    world.add("Newer", uuid=U2, last_used=20)
     world.loaded.append("aaaa1111")
     monkeypatch.setattr(tb, "has_session",
                         lambda s: s == "claude-terminal-6" or (s.startswith("cs-") and s[3:] in world.loaded))
@@ -1305,7 +1305,7 @@ def test_use_without_args_lists_topics_then_running_legacy_terminals(world, monk
 # --- numeric /use N: transition fallback to the legacy terminals ------------
 
 def test_use_number_falls_back_to_legacy_terminal(world, monkeypatch):
-    world.add("Налоги 2026", uuid=U2)          # the name contains "6": must not steal /use 6
+    world.add("Café taxes 2026", uuid=U2)          # the name contains "6": must not steal /use 6
     monkeypatch.setattr(tb, "has_session", lambda s: True)
     run_cmd(tb.cmd_use, ["6"])
     assert tb.get_current(CHAT) == "6" and world.ensured() == []
@@ -1326,44 +1326,44 @@ def test_legacy_callback_still_works(world, monkeypatch):
 # --- /list -----------------------------------------------------------------
 
 def test_list_keeps_its_fixed_order_and_marks_current(world):
-    world.add("Старая загруженная", uuid=U1, last_used=10)
-    world.add("Новая выгруженная", uuid=U2, last_used=20)
-    world.add("В архиве", uuid=U3, archived=True)
+    world.add("Older loaded", uuid=U1, last_used=10)
+    world.add("Newer unloaded", uuid=U2, last_used=20)
+    world.add("Shelved one", uuid=U3, archived=True)
     world.loaded.append("aaaa1111")
     tb.set_current(CHAT, "bbbb2222")
     text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
     assert ("active",) in world.log                       # asks library_cli what is loaded
-    assert text.startswith("Current: «Новая выгруженная» · bbbb2222\n\n")  # header names the current one
+    assert text.startswith("Current: «Newer unloaded» · bbbb2222\n\n")  # header names the current one
     assert "Terminals (🟢 loaded · ⚪️ unloaded · ⚙️ working):" in text
     rows = [l for l in text.splitlines() if l.startswith(("🟢", "⚪"))]
     # fixed order (newest place first), loaded or not — the list never jumps
-    assert [("Старая" in l, "Новая" in l) for l in rows] == [(False, True), (True, False)]
+    assert [("Older" in l, "Newer" in l) for l in rows] == [(False, True), (True, False)]
     cur, loaded = rows
     assert "🟢" in loaded and "aaaa1111" in loaded
     assert "⚪" in cur and "bbbb2222" in cur and cur.endswith(" ← current")
-    assert "В архиве" not in text
+    assert "Shelved one" not in text
 
 
 def test_list_says_so_when_loaded_state_is_unknown(world):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     world.active_code = 1
     text = "\n".join(t for t, _ in run_cmd(tb.cmd_list, []))
-    assert "тема" in text and "couldn't tell which terminals are loaded" in text
+    assert "chores" in text and "couldn't tell which terminals are loaded" in text
 
 
 # --- /new ------------------------------------------------------------------
 
 def test_new_creates_topic_selects_and_loads_it(world, monkeypatch, tmp_path):
     monkeypatch.setenv("AGENTKENNEL_WORKDIR", str(tmp_path))
-    replies = run_cmd(tb.cmd_new, ["Разбор", "логов"])
+    replies = run_cmd(tb.cmd_new, ["Log", "review"])
     rows = library.load(world.lib)["sessions"]
     assert len(rows) == 1
     e = rows[0]
-    assert e["name"] == "Разбор логов" and library.valid_id(e["id"])
+    assert e["name"] == "Log review" and library.valid_id(e["id"])
     assert e["cwd"] == str(tmp_path)
     assert tb.get_current(CHAT) == e["id"]
     assert world.ensured() == [e["id"]]
-    assert replies[-1][0] == (f"🆕 ✅ Current terminal: «Разбор логов» · {e['id']}\n"
+    assert replies[-1][0] == (f"🆕 ✅ Current terminal: «Log review» · {e['id']}\n"
                               "▶️ was unloaded — loading…")
 
 
@@ -1381,7 +1381,7 @@ def test_new_strips_control_chars_and_caps_the_name(world):
 
 # --- typing text into a topic ------------------------------------------------
 
-def _deliver(world, monkeypatch, text="привет", screens=None):
+def _deliver(world, monkeypatch, text="hello", screens=None):
     """Run on_text with keystrokes/stream faked; returns (sink, streamed)."""
     streamed = {}
     seq = list(screens or ["❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)"])
@@ -1408,19 +1408,19 @@ def _deliver(world, monkeypatch, text="привет", screens=None):
 
 
 def test_text_to_topic_ensures_then_types_into_cs_session(world, monkeypatch):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     world.loaded.append("aaaa1111")
     tb.set_current(CHAT, "aaaa1111")
-    sink, streamed = _deliver(world, monkeypatch, "привет")
+    sink, streamed = _deliver(world, monkeypatch, "hello")
     ens = world.log.index(("ensure", "aaaa1111"))
-    send = world.log.index(("send", "cs-aaaa1111", "привет"))
+    send = world.log.index(("send", "cs-aaaa1111", "hello"))
     assert ens < send                                     # ensure BEFORE the keystrokes
     assert streamed["session"] == "cs-aaaa1111" and streamed["aid"] == "aaaa1111"
     assert streamed["path"].endswith(f"{U1}.jsonl")
 
 
 def test_text_to_topic_not_typed_when_all_busy(world, monkeypatch):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     tb.set_current(CHAT, "aaaa1111")
     world.codes["aaaa1111"] = (3, "All 12 loaded topics are busy")
     sink, streamed = _deliver(world, monkeypatch)
@@ -1436,13 +1436,13 @@ def test_text_to_vanished_topic_not_typed(world, monkeypatch):
 
 
 def test_text_to_freshly_loaded_topic_waits_for_claude(world, monkeypatch):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     tb.set_current(CHAT, "aaaa1111")                      # not loaded: ensure starts it
     shell = "ubuntu@vps:~/pr$ claude --session-id x --dangerously-skip-permissions"
     ready = "❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)"
-    _deliver(world, monkeypatch, "привет", screens=[shell, shell, ready])
+    _deliver(world, monkeypatch, "hello", screens=[shell, shell, ready])
     looks = [i for i, e in enumerate(world.log) if e[0] == "visible"]
-    send = world.log.index(("send", "cs-aaaa1111", "привет"))
+    send = world.log.index(("send", "cs-aaaa1111", "hello"))
     assert len([i for i in looks if i < send]) >= 3       # polled until Claude was up
 
 
@@ -1461,7 +1461,7 @@ def test_tui_ready():
 # --- AskUserQuestion buttons work on a topic too -----------------------------
 
 def test_menu_select_on_topic_drives_the_cs_session(world, monkeypatch):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     world.loaded.append("aaaa1111")
     keys = []
     screens = [MENU_PANE, MENU_PANE, ""]
@@ -1514,7 +1514,7 @@ def test_text_reaches_a_real_topic_on_a_private_tmux(tmp_path, monkeypatch):
     monkeypatch.setattr(tb, "STATE_FILE", str(tmp_path / "state.json"))
     monkeypatch.setattr(tb, "_fresh", {})
     with library.update(lib) as L:
-        library.create(L, "Живая тема", cwd=str(work), now=int(_time.time()), uuid=U1)
+        library.create(L, "Live chores", cwd=str(work), now=int(_time.time()), uuid=U1)
     tb.set_current(CHAT, "aaaa1111")
     streamed = {}
 
@@ -1538,12 +1538,12 @@ def test_text_reaches_a_real_topic_on_a_private_tmux(tmp_path, monkeypatch):
     assert tb._tmux("list-sessions").args[:3] == ["tmux", "-L", sock]   # the bridge uses OUR socket
     try:
         sink = []
-        asyncio.run(tb.on_text(_Upd(sink, "привет из телеграма"), None))
+        asyncio.run(tb.on_text(_Upd(sink, "héllo from Télégram"), None))
         typed = home / "typed.log"
         end = _time.time() + 10
-        while _time.time() < end and not (typed.exists() and "привет" in typed.read_text()):
+        while _time.time() < end and not (typed.exists() and "héllo" in typed.read_text()):
             _time.sleep(0.1)
-        assert typed.exists() and "привет из телеграма" in typed.read_text(), sink
+        assert typed.exists() and "héllo from Télégram" in typed.read_text(), sink
         calls = (home / "claude-calls.log").read_text()
         assert f"aaaa1111|--session-id {U1} --dangerously-skip-permissions" in calls
         assert tm("has-session", "-t", "=cs-aaaa1111").returncode == 0
@@ -1568,8 +1568,8 @@ def test_saved_legacy_selection_follows_its_migrated_topic(world, monkeypatch):
     world.add("app - PIPE", uuid=U1, legacy_slot=6)
     world.loaded.append("aaaa1111")
     tb.set_current(CHAT, "6")
-    sink, streamed = _deliver(world, monkeypatch, "дальше")
-    assert ("send", "cs-aaaa1111", "дальше") in world.log
+    sink, streamed = _deliver(world, monkeypatch, "go on")
+    assert ("send", "cs-aaaa1111", "go on") in world.log
     assert tb.get_current(CHAT) == "aaaa1111"
 
 
@@ -1627,24 +1627,24 @@ def test_saved_legacy_selection_with_archived_topic_is_not_sent(world, monkeypat
     world.codes["aaaa1111"] = (2, "topic is archived")
     started = _no_legacy_start(monkeypatch)
     tb.set_current(CHAT, "6")
-    sink, streamed = _deliver(world, monkeypatch, "дальше")
+    sink, streamed = _deliver(world, monkeypatch, "go on")
     assert started == [] and not streamed
     assert not [e for e in world.log if e[0] == "send"]
 
 
 def test_ensure_exit_4_already_running_elsewhere(world, monkeypatch):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     world.codes["aaaa1111"] = (4, "conversation already running in claude-terminal-6")
     tb.set_current(CHAT, "aaaa1111")
     sink, streamed = _deliver(world, monkeypatch)
     assert not [e for e in world.log if e[0] == "send"] and not streamed
     assert "already open" in sink[-1][0]
-    replies = run_cmd(tb.cmd_use, ["тема"])
+    replies = run_cmd(tb.cmd_use, ["chores"])
     assert "already open" in replies[-1][0]
 
 
 def test_text_not_typed_when_the_topic_pane_is_not_claude(world, monkeypatch):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     world.loaded.append("aaaa1111")
     world.not_claude.add("aaaa1111")                       # Claude exited: a bare shell
     tb.set_current(CHAT, "aaaa1111")
@@ -1656,7 +1656,7 @@ def test_text_not_typed_when_the_topic_pane_is_not_claude(world, monkeypatch):
 
 def test_pane_check_runs_off_the_event_loop(world, monkeypatch):
     import threading
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     world.loaded.append("aaaa1111")
     tb.set_current(CHAT, "aaaa1111")
     _deliver(world, monkeypatch)
@@ -1669,7 +1669,7 @@ def test_text_not_typed_when_the_legacy_pane_is_not_claude(world, monkeypatch):
     tb.set_current(CHAT, "6")
     monkeypatch.setattr(tb, "has_session", lambda s: True)
     monkeypatch.setattr(tb, "legacy_pane_command", lambda s: "bash")
-    sink, streamed = _deliver(world, monkeypatch, "привет")
+    sink, streamed = _deliver(world, monkeypatch, "hello")
     assert not [e for e in world.log if e[0] == "send"] and not streamed
     assert "not Claude" in sink[-1][0]
 
@@ -1693,22 +1693,22 @@ def test_legacy_pane_command_reads_list_panes_exactly(monkeypatch):
 
 
 def test_ready_timeout_refuses_instead_of_sending(world, monkeypatch):
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     tb.set_current(CHAT, "aaaa1111")                      # not loaded: ensure starts it
     monkeypatch.setattr(tb, "READY_TIMEOUT", 0)
     shell = "ubuntu@vps:~/pr$ claude --session-id x"
-    sink, streamed = _deliver(world, monkeypatch, "привет", screens=[shell])
+    sink, streamed = _deliver(world, monkeypatch, "hello", screens=[shell])
     assert not [e for e in world.log if e[0] == "send"] and not streamed
     assert any("not sent" in t for t, _ in sink)
 
 
 def test_library_cli_active_runs_off_the_event_loop(world):
     import threading
-    world.add("тема", uuid=U1)
+    world.add("chores", uuid=U1)
     run_cmd(tb.cmd_list, [])
     run_cmd(tb.cmd_use, [])
-    world.add("тема два", uuid=U2)
-    run_cmd(tb.cmd_use, ["тема"])                         # several hits → buttons
+    world.add("chores two", uuid=U2)
+    run_cmd(tb.cmd_use, ["chores"])                         # several hits → buttons
     main = threading.get_ident()
     act = [t for c, t in world.threads if c == "active"]
     assert len(act) >= 3 and all(t != main for t in act)

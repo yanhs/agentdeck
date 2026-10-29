@@ -29,10 +29,10 @@ PAGE = "index-legacy.html"
 # and a long task string on purpose — that is what stresses the narrow column).
 API_PAYLOAD = {
     "1": {"active": True, "working": True, "path": "terminal", "project": "Terminal",
-          "task": "agents.reimake.com сделай левую колонку уже", "locked": True},
+          "task": "agents.example.com make the left column narrower", "locked": True},
     "2": {"active": True, "working": False, "path": "terminal2",
           "project": "app - news, seo, encription, magiclink",
-          "task": "давай делай проверку законов через eCFR API", "locked": True},
+          "task": "go ahead and check the regulations via the eCFR API", "locked": True},
     "3": {"active": False, "working": False, "path": "terminal3",
           "project": "Instagram infuencers", "task": "", "locked": True},
     "4": {"active": False, "working": False, "path": "terminal4",

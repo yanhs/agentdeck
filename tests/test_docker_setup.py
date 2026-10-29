@@ -270,7 +270,7 @@ def test_page_title_is_the_product_not_the_authors_domain(page):
     html = (ROOT / "web" / page).read_text()
     title = re.search(r"<title>(.*?)</title>", html, re.S).group(1)
     assert "AgentKennel" in title and "AgentDeck" not in title, title
-    assert "ianprog" not in html and "reimake" not in title
+    assert "ianprog" not in html and re.fullmatch(r"(\w+ — )?AgentKennel", title.strip()), title
 
 
 @pytest.mark.parametrize("name", CADDYFILES)

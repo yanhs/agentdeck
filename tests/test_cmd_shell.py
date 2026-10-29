@@ -167,7 +167,7 @@ def test_api_shell_off_when_not_running(api):  # noqa: F811
 
 
 def test_api_shell_active_and_not_mixed_into_sessions(api):  # noqa: F811
-    _seed(api, (API_U1, "тема", 10))
+    _seed(api, (API_U1, "notes", 10))
     _start(api, SHELL)
     code, data = get(api)
     assert code == 200
@@ -204,7 +204,7 @@ from tests.test_library_api import _alive, _raw_req, post  # noqa: E402
 
 
 def test_shell_close_kills_only_the_shell(api):  # noqa: F811
-    _seed(api, (API_U1, "тема", 10))
+    _seed(api, (API_U1, "notes", 10))
     for n in (SHELL, "cmd-shellx", "cs-aaaa1111"):
         _start(api, n)
     code, out = post(api, "shell-close", {})
@@ -270,7 +270,7 @@ def test_exit_in_the_shell_keeps_the_tab_open_and_does_not_respawn(deck, tmp_pat
 
 
 def test_topic_tab_still_ends_when_its_session_ends(deck, tmp_path):
-    e = deck.add("тема", uuid=U1)
+    e = deck.add("notes", uuid=U1)
     tab = _tab(deck, e["id"], tmp_path / "tab.log")
     assert wait_for(lambda: deck.has("cs-aaaaaaaa"))
     time.sleep(0.3)

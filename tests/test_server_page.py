@@ -311,7 +311,7 @@ def test_phone_390_has_no_sideways_scroll(browser, site, api):
 
 def test_english_only(page):
     text = page.inner_text("body")
-    assert not re.search(r"[А-Яа-яЁё]", text)
+    assert not re.search(r"[\u0400-\u04FF]", text)   # no Cyrillic
 
 
 def test_standalone_has_a_way_back_but_not_inside_the_dashboard(browser, site, api):

@@ -108,7 +108,7 @@ class Deck:
         self.env = env
 
     # registry
-    def add(self, name="тема", uuid=None, archived=False, cwd=None, last_used=None):
+    def add(self, name="topic", uuid=None, archived=False, cwd=None, last_used=None):
         with library.update(self.lib) as L:
             e = library.create(L, name, cwd=cwd or str(self.work), now=int(time.time()),
                                uuid=uuid or str(_uuid.uuid4()))
@@ -210,7 +210,7 @@ def test_slug_matches_claude_project_dirs():
 # a character above U+FFFF becomes "--"; past 200 chars the name is cut and
 # "-" + base-36 of |Java string hash| of the cwd is appended. Values from node.
 CLAUDE_DIR_NAMES = [
-    ("/home/ubuntu/pr/Светлота 💡 (Rus)", "-home-ubuntu-pr--------------Rus-"),
+    ("/home/ubuntu/pr/Café 💡 (v2)", "-home-ubuntu-pr-Caf------v2-"),
     ("/" + "b" * 199, "-" + "b" * 199),                                 # 200: not cut
     ("/" + "b" * 200, "-" + "b" * 199 + "-86ms41"),
     ("/home/ubuntu/" + "deep/" * 45 + "end",
@@ -228,7 +228,7 @@ def test_slug_is_claudes_name_for_emoji_and_long_paths(cwd, name):
 def test_slug_agrees_with_claudes_own_code_on_random_paths():
     import random
     rnd = random.Random(7)
-    alphabet = "abcXYZ019/._- ~é€Ωж日💡😀\U0001f9ea"
+    alphabet = "abcXYZ019/._- ~é€Ωש日💡😀\U0001f9ea"
     cwds = ["/" + "".join(rnd.choice(alphabet) for _ in range(rnd.randint(1, 260)))
             for _ in range(300)]
     js = ("function KJ(t){let e=0;for(let n=0;n<t.length;n++)e=(e<<5)-e+t.charCodeAt(n)|0;return e}"
@@ -245,7 +245,7 @@ def test_slug_agrees_with_claudes_own_code_on_random_paths():
 
 def test_pane_command_resumes_a_topic_in_an_emoji_folder(tmp_path):
     m = _mod()
-    cwd = tmp_path / "Светлота 💡 (Rus)"
+    cwd = tmp_path / "Café 💡 (v2)"
     cwd.mkdir()
     name = "".join(c if c.isascii() and c.isalnum() else "-" * (len(c.encode("utf-16-le")) // 2)
                    for c in str(cwd))
@@ -319,10 +319,10 @@ def test_pane_command_scrubs_claude_vars_and_sources_oauth(tmp_path):
 
 def test_pane_command_never_contains_the_topic_name(tmp_path):
     m = _mod()
-    evil = "Налоги'; touch /tmp/pwned; echo \"$(id)\" `id` $HOME"
+    evil = "Taxes'; touch /tmp/pwned; echo \"$(id)\" `id` $HOME"
     e = {"id": "aaaaaaaa", "uuid": U1, "name": evil, "cwd": str(tmp_path)}
     cmd = m.pane_command(e, home="/home/u", claude_bin="/opt/claude")
-    assert "Налоги" not in cmd and "pwned" not in cmd and "$(id)" not in cmd
+    assert "Taxes" not in cmd and "pwned" not in cmd and "$(id)" not in cmd
 
 
 def test_pane_command_rejects_a_bad_uuid_or_mismatched_id(tmp_path):
@@ -344,7 +344,7 @@ def test_pane_command_quotes_the_claude_path(tmp_path):
 # ── ensure: refusals ────────────────────────────────────────────────────────
 @pytest.mark.parametrize("bad", BAD_IDS)
 def test_ensure_rejects_malformed_ids_before_any_tmux(deck, bad):
-    deck.add("живая", uuid=U1)
+    deck.add("live one", uuid=U1)
     r = deck.cli("ensure", bad)
     assert r.returncode == 2, (bad, r.stdout, r.stderr)
     assert r.stdout == ""
@@ -360,7 +360,7 @@ def test_ensure_unknown_id_exits_2_and_does_not_create_the_registry(deck):
 
 
 def test_ensure_archived_id_exits_2(deck):
-    e = deck.add("в архиве", uuid=U1, archived=True)
+    e = deck.add("archived one", uuid=U1, archived=True)
     r = deck.cli("ensure", e["id"])
     assert r.returncode == 2 and "unknown session" in r.stderr
     assert not deck.server_up()
@@ -370,7 +370,7 @@ def test_ensure_archived_id_exits_2(deck):
 def test_ensure_trashed_id_exits_2_and_starts_nothing(deck, archived):
     # the trash (owner 2026-10-23): a trashed terminal is never loaded again until
     # it is restored — not from a tab, a link or the Telegram bridge
-    e = deck.add("в корзине", uuid=U1, archived=archived)
+    e = deck.add("in the trash", uuid=U1, archived=archived)
     deck.transcript(e)
     with library.update(deck.lib) as L:
         library.trash(L, e["id"], now=int(time.time()))
@@ -396,7 +396,7 @@ def test_ensure_refuses_registry_entry_with_corrupt_uuid(deck):
 
 # ── ensure: start / reuse / resume ─────────────────────────────────────────
 def test_ensure_starts_detached_session_and_prints_tmux_name(deck):
-    e = deck.add("ImmAppeal деплой", uuid=U1, last_used=100)
+    e = deck.add("API deploy", uuid=U1, last_used=100)
     r = deck.cli("ensure", e["id"])
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "cs-aaaaaaaa"
@@ -412,7 +412,7 @@ def test_ensure_starts_detached_session_and_prints_tmux_name(deck):
 
 
 def test_ensure_twice_reuses_the_running_session(deck):
-    e = deck.add("одна", uuid=U1)
+    e = deck.add("only one", uuid=U1)
     assert deck.cli("ensure", e["id"]).returncode == 0
     wait_for(deck.calls)
     deck.set_last_used(e["id"], 5)
@@ -424,7 +424,7 @@ def test_ensure_twice_reuses_the_running_session(deck):
 
 
 def test_ensure_resumes_when_transcript_exists(deck):
-    e = deck.add("старая", uuid=U2)
+    e = deck.add("old one", uuid=U2)
     deck.transcript(e)
     assert deck.cli("ensure", e["id"]).returncode == 0
     calls = wait_for(deck.calls)

@@ -19,13 +19,13 @@ import pytest
 
 STATIC = Path(__file__).resolve().parent.parent / "tasks-dashboard" / "static"
 
-LONG = "https://agents.reimake.com/" + "verylongunbrokensegment" * 6  # ~150 chars, no spaces
+LONG = "https://agents.example.com/" + "verylongunbrokensegment" * 6  # ~150 chars, no spaces
 STATE = {
     "updated": "2026-08-29T18:00:00+00:00",
     "tasks": [
         {
-            "id": "svetlota-errcheck-" + "x" * 40,
-            "title": "Светлота: проверить сайт на ошибки — " + LONG,
+            "id": "site-errcheck-" + "x" * 40,
+            "title": "Website: check the site for errors — " + LONG,
             "agent": "claude · " + "a" * 60,
             "status": "active",
             "activity": "working",
@@ -35,14 +35,14 @@ STATE = {
             "items": [
                 {"status": "done", "title": "short one", "note": ""},
                 {"status": "active", "title": LONG, "note": "Fixed: " + LONG},
-                {"status": "todo", "title": "нормальный пункт", "note": ""},
+                {"status": "todo", "title": "a normal item", "note": ""},
             ],
         },
         {
-            "id": "plain", "title": "Обычная задача", "agent": "claude · x",
+            "id": "plain", "title": "An ordinary task", "agent": "claude · x",
             "status": "done", "created": "2026-08-29T16:00:00+00:00",
             "updated": "2026-08-29T16:30:00+00:00",
-            "items": [{"status": "done", "title": "готово", "note": ""}],
+            "items": [{"status": "done", "title": "done", "note": ""}],
         },
     ],
 }

@@ -26,15 +26,15 @@ def test_paste_ext_rejects_non_images():
 
 
 def test_save_paste_image_writes_file_and_returns_path_url(tmp_path, monkeypatch):
-    monkeypatch.setattr(ss, "PASTE_URL", "https://reimake.com/tgimg")
+    monkeypatch.setattr(ss, "PASTE_URL", "https://files.example.com/tgimg")
     data = b"\x89PNG\r\n\x1a\n" + b"fake-png-bytes"
     res = ss.save_paste_image(data, "image/png", token="abcd1234", dest_dir=str(tmp_path))
     assert res["path"] == str(tmp_path / "paste_abcd1234.png")
     assert os.path.exists(res["path"])
     assert open(res["path"], "rb").read() == data
-    # public URL must be reimake.com (never the deprecated yanhs.stream)
+    # public URL is the configured base (never the deprecated yanhs.stream)
     assert res["url"].endswith("/paste_abcd1234.png")
-    assert res["url"].startswith("https://reimake.com/tgimg/")
+    assert res["url"].startswith("https://files.example.com/tgimg/")
     assert "yanhs.stream" not in res["url"]
 
 

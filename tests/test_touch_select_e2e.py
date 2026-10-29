@@ -297,7 +297,7 @@ def test_swipe_scrolls_with_wheel_reports_and_no_press(phone):
 
 
 # ── desktop: touchpad vs mouse wheel ────────────────────────────────────────
-# 26.10.2026 «очень быстро идёт прокрутка на тачпаде»: xterm.js sends a wheel report
+# 26.10.2026 «scrolling on the touchpad is way too fast»: xterm.js sends a wheel report
 # per cell height of touchpad travel and tmux (or Claude) scrolls several lines on each.
 # The dashboard now lets one report through per three cell heights (like a phone swipe);
 # a mouse-wheel notch (one big delta) stays exactly one report.

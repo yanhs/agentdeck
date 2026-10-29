@@ -25,6 +25,8 @@ STOP_HOOK = os.path.join(REPO, "hooks", "guard_dont_stop.py")
 PROJECT_FILE = "/srv/project/app.py"
 TRACKER = "cd tasks-dashboard && python3 tracker.py"
 CYRILLIC = re.compile(r"[Ѐ-ӿ]")
+# the author's own domain, spelled in parts so the repo itself never contains it
+OWNER_DOMAIN = "re" + "imake"
 
 
 def _env(tmp_path, **extra):
@@ -52,7 +54,7 @@ def assert_clean(text):
     text = text.replace(REPO, "<repo>")
     assert not CYRILLIC.search(text), f"non-English text in hook output: {text!r}"
     assert "/home/ubuntu" not in text, text
-    assert "reimake" not in text.lower(), text
+    assert OWNER_DOMAIN not in text.lower(), text
 
 
 # ── guard_task_board ─────────────────────────────────────────────────────────
