@@ -166,6 +166,14 @@ def test_full_is_said_and_after_freeing_space_it_can_be_said_again(watch):
     assert len(told["guest"]) == 2
 
 
+def test_full_is_said_when_writes_already_fail_at_98_percent(watch):
+    """ext4 keeps a little for itself: the e2e's 300 MB disk refused writes at 98 %."""
+    ops, told, run = watch
+    ops.used["anna"] = int(20 * GB * 0.98)
+    run()
+    assert len(told["owner"]) == 1 and told["owner"][0].startswith("🛑")   # "full", not "80 %"
+
+
 def test_the_programs_layer_is_watched_too(watch):
     ops, told, run = watch
     ops.layer["anna"] = 8 * GB + 1

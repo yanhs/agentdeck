@@ -85,6 +85,9 @@ def main(image):
                 time.sleep(1)
         df = sh("docker", "exec", f"sbx-{NAME}", "df", "-B1M", "--output=size", "/work").stdout.split()
         check(df and int(df[-1]) <= MB, f"/work inside the sandbox is the disk: {df[-1] if df else '?'} MB")
+        sh("docker", "exec", f"sbx-{NAME}", "sh", "-c", "echo hello > /work/public/hi.txt")
+        check((public_dir / "hi.txt").read_text().strip() == "hello",
+              "the shared-files folder on the host sees the sandbox's file")
         w = sh("docker", "exec", f"sbx-{NAME}", "sh", "-c",
                f"dd if=/dev/zero of=/work/big bs=1M count={MB + 100} 2>&1", check_=False)
         check(w.returncode != 0 and "No space left" in w.stdout, "a write past the size fails: "
@@ -93,19 +96,16 @@ def main(image):
         check(alive.stdout.strip() == "alive" and
               sh("docker", "inspect", "-f", "{{.State.Running}}", f"sbx-{NAME}").stdout.strip() == "true",
               "the sandbox keeps running")
-        sh("docker", "exec", f"sbx-{NAME}", "sh", "-c", "echo hello > /work/public/hi.txt")
-        check((public_dir / "hi.txt").read_text().strip() == "hello",
-              "the shared-files folder on the host sees the sandbox's file")
         jar = http.cookiejar.CookieJar()
         op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
         op.open(base + "/login", data=urllib.parse.urlencode({"pass": pw}).encode(), timeout=10)
         h = {}
-        for _ in range(15):
+        for _ in range(30):                     # the collector samples every few seconds
             h = json.loads(op.open(base + "/api/server", timeout=10).read()).get("host", {})
-            if h:
+            if h.get("disk_pct", 0) >= 97:
                 break
             time.sleep(1)
-        check(0 < h.get("disk_total_gb", 0) <= 0.4 and h.get("disk_pct", 0) >= 99,
+        check(0 < h.get("disk_total_gb", 0) <= 0.4 and h.get("disk_pct", 0) >= 97,
               f"its Server page shows its disk: {h.get('disk_used_gb')} of {h.get('disk_total_gb')} GB "
               f"({h.get('disk_pct')}%)")
         told = {"owner": [], "guest": []}
@@ -114,7 +114,8 @@ def main(image):
                        tell_owner=told["owner"].append,
                        tell_guest=lambda tid, text: told["guest"].append((tid, text)),
                        mounted=lambda n: True)
-        check(len(told["owner"]) == 1 and len(told["guest"]) == 1 and told["guest"][0][0] == 42,
+        check(len(told["owner"]) == 1 and len(told["guest"]) == 1 and told["guest"][0][0] == 42
+              and "full" in told["owner"][0],
               f"the watchman warned once: {told['owner'][:1]}")
     except Exception as e:
         check(False, f"the check itself stopped: {e!r}")

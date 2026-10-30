@@ -29,7 +29,8 @@ DISKS = HERE / "disks"
 DIRS: Tuple[Tuple[str, str], ...] = (("claude", "/root/.claude"), ("sessions", "/app/.sessions"),
                                      ("data", "/data"), ("work", "/work"), ("public", "/work/public"))
 DEFAULT_GB = 20
-FOLDERS_WARN_PCT, FOLDERS_FULL_PCT = 80, 99
+# ext4 keeps a few % for itself: when writes already fail, a small disk shows ~98 %
+FOLDERS_WARN_PCT, FOLDERS_FULL_PCT = 80, 97
 PROGRAMS_WARN, PROGRAMS_HIGH = 8 * 1024 ** 3, 10 * 1024 ** 3
 FSTAB_TAG = "# agentkennel guest disk"
 
