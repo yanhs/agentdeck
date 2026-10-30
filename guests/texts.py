@@ -70,7 +70,7 @@ EN = {
     "invite_failed": "Couldn't create the sandbox — the owner already knows and will sort it out.",
     "who_noname": "no name",
     "invite_request": "🔔 Access request: {who}, Telegram ID {uid}.\n"
-                      "Let them in? A sandbox \"{name}\" will be created with the default daily limit.",
+                      "Let them in? A sandbox \"{name}\" will be created with the default limits.",
     "invite_not_yours": "This is not your button.",
     "invite_decided": "Already decided or in progress.",
     "invite_rejected": "✖ Refused: {who}.",
@@ -84,7 +84,9 @@ EN = {
     "gate_bad_pass": "Invalid pass.",
     "gate_disabled": "Guest access is turned off.",
     "gate_path": "This address is closed.",
-    "gate_limit": "Daily limit used up ({spent} of {limit}). It resets at midnight, Los Angeles time.",
+    "gate_limit_5h": "5-hour limit used up ({spent} of {limit}). It resets at {at}, Los Angeles time.",
+    "gate_limit_week": "Weekly limit used up ({spent} of {limit}). It resets on Monday at midnight, "
+                       "Los Angeles time.",
     "gate_upstream": "The Claude server is unreachable.",
     "spend_alert": "⚠️ Sandbox {guest}: ≈{hour_pct:.1f}% of the subscription week spent in the "
                    "last hour ({hour_m:.1f}M). Today in total ≈{today_pct:.1f}%.\n"
@@ -93,8 +95,8 @@ EN = {
     "ts_on": "on",
     "ts_off": "OFF",
     "ts_unlimited_until": " NO LIMIT until {until}",
-    "ts_list_line": "{name}\t{state}\ttoday {spent} of {limit} "
-                    "(≈{spent_pct:.2f}% of the week, limit ≈{limit_pct:.1f}%){lifted}\ttg={tg}",
+    "ts_list_line": "{name}\t{state}\t5h {five_used} of {five_limit} · week {week_used} of "
+                    "{week_limit} (≈{week_pct:.2f}% of the subscription week){lifted}\ttg={tg}",
     "ts_unlimited_set": "{name}: no limit until {until} (Los Angeles)",
     # -- the site gate ---------------------------------------------------------------- #
     "site_bad_name": "site name: latin a-z, digits and hyphens, 1–20 characters",
@@ -142,7 +144,8 @@ EN = {
     "ctl_recreate_busy": "{name} has terminals open ({n}): recreating would cut them off. "
                          "Wait, or use --force.",
     "ctl_no_container": "no container",
-    "ctl_list_line": "{name}\ttg={tg}\t:{port}\t{state}\t{on}\ttoday {spent} of {limit}",
+    "ctl_list_line": "{name}\ttg={tg}\t:{port}\t{state}\t{on}\t5h {five_used} of {five_limit}"
+                     " · week {week_used} of {week_limit}",
     "ctl_open": "OPEN",
     "ctl_closed": "closed",
     "ctl_wall_claude": "Claude turnstile",
@@ -217,7 +220,7 @@ RU = {
     "invite_failed": "Не получилось создать песочницу — владелец уже знает и разберётся.",
     "who_noname": "без имени",
     "invite_request": "🔔 Запрос на доступ: {who}, Telegram ID {uid}.\n"
-                      "Пустить? Будет создана песочница «{name}» с дневным лимитом по умолчанию.",
+                      "Пустить? Будет создана песочница «{name}» с лимитами по умолчанию.",
     "invite_not_yours": "Это не ваша кнопка.",
     "invite_decided": "Уже решено или в работе.",
     "invite_rejected": "✖ Отказано: {who}.",
@@ -230,7 +233,9 @@ RU = {
     "gate_bad_pass": "Неверный пропуск.",
     "gate_disabled": "Доступ гостя выключен.",
     "gate_path": "Этот адрес закрыт.",
-    "gate_limit": "Дневной лимит исчерпан ({spent} из {limit}). Сбросится в полночь по Лос-Анджелесу.",
+    "gate_limit_5h": "Лимит на 5 часов исчерпан ({spent} из {limit}). Сбросится в {at} по Лос-Анджелесу.",
+    "gate_limit_week": "Недельный лимит исчерпан ({spent} из {limit}). "
+                       "Сбросится в понедельник в полночь по Лос-Анджелесу.",
     "gate_upstream": "Сервер Claude недоступен.",
     "spend_alert": "⚠️ Песочница {guest}: за последний час потрачено ≈{hour_pct:.1f}% "
                    "недели подписки ({hour_m:.1f} млн). Сегодня всего ≈{today_pct:.1f}%.\n"
@@ -239,8 +244,8 @@ RU = {
     "ts_on": "вкл",
     "ts_off": "ВЫКЛ",
     "ts_unlimited_until": " БЕЗ ЛИМИТА до {until}",
-    "ts_list_line": "{name}\t{state}\tсегодня {spent} из {limit} "
-                    "(≈{spent_pct:.2f}% недели, лимит ≈{limit_pct:.1f}%){lifted}\ttg={tg}",
+    "ts_list_line": "{name}\t{state}\t5 ч {five_used} из {five_limit} · неделя {week_used} из "
+                    "{week_limit} (≈{week_pct:.2f}% недели подписки){lifted}\ttg={tg}",
     "ts_unlimited_set": "{name}: без лимита до {until} (Лос-Анджелес)",
     "site_bad_name": "имя сайта: латиница a-z, цифры и дефис, 1–20 знаков",
     "site_bad_port": "порт — число от 1024 до 65535",
@@ -285,7 +290,8 @@ RU = {
     "ctl_recreate_busy": "у {name} открыты терминалы ({n}): пересоздание их оборвёт. "
                          "Подождите или --force.",
     "ctl_no_container": "нет контейнера",
-    "ctl_list_line": "{name}\ttg={tg}\t:{port}\t{state}\t{on}\tсегодня {spent} из {limit}",
+    "ctl_list_line": "{name}\ttg={tg}\t:{port}\t{state}\t{on}\t5 ч {five_used} из {five_limit}"
+                     " · неделя {week_used} из {week_limit}",
     "ctl_open": "ОТКРЫТ",
     "ctl_closed": "закрыт",
     "ctl_wall_claude": "турникет Claude",

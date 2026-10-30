@@ -77,14 +77,30 @@ def test_english_bot_samples(monkeypatch, tmp_path):
 def test_turnstile_refusals_follow_the_language(monkeypatch, tmp_path):
     import turnstile as ts
     use(monkeypatch, tmp_path, "ru")
-    assert texts.t("gate_limit", spent=5, limit=3) == \
-        "Дневной лимит исчерпан (5 из 3). Сбросится в полночь по Лос-Анджелесу."
+    assert texts.t("gate_limit_5h", spent=5, limit=3, at="14:35") == \
+        "Лимит на 5 часов исчерпан (5 из 3). Сбросится в 14:35 по Лос-Анджелесу."
+    assert texts.t("gate_limit_week", spent=5, limit=3) == \
+        "Недельный лимит исчерпан (5 из 3). Сбросится в понедельник в полночь по Лос-Анджелесу."
     assert [texts.t(k) for k in ("gate_bad_pass", "gate_disabled", "gate_path", "gate_upstream")] \
         == ["Неверный пропуск.", "Доступ гостя выключен.", "Этот адрес закрыт.",
             "Сервер Claude недоступен."]
     use(monkeypatch, tmp_path, "en")
-    assert "Daily limit used up (5 of 3)" in texts.t("gate_limit", spent=5, limit=3)
+    five = texts.t("gate_limit_5h", spent=5, limit=3, at="14:35")
+    assert "5-hour limit used up (5 of 3)" in five and "14:35" in five
+    week = texts.t("gate_limit_week", spent=5, limit=3)
+    assert "Weekly limit used up (5 of 3)" in week and "Monday" in week
+    assert "gate_limit" not in texts.EN          # no daily limit any more (30.10.2026)
     assert ts.texts is texts
+
+
+def test_the_list_lines_show_both_limits_in_english(monkeypatch, tmp_path):
+    use(monkeypatch, tmp_path, "en")
+    ts_line = texts.t("ts_list_line", name="maria", state="on", five_used=1, five_limit=2,
+                      week_used=3, week_limit=14, week_pct=0.01, lifted="", tg=7)
+    assert "5h 1 of 2 · week 3 of 14" in ts_line
+    ctl_line = texts.t("ctl_list_line", name="maria", tg=7, port=18101, state="running", on="on",
+                       five_used=1, five_limit=2, week_used=3, week_limit=14)
+    assert "5h 1 of 2 · week 3 of 14" in ctl_line
 
 
 def test_the_wall_check_labels_follow_the_language(monkeypatch, tmp_path):

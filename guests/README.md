@@ -1,7 +1,7 @@
 # AgentKennel guests
 
 An optional module: other people work on your server, each in a sandbox of their own, on
-your Claude subscription with a daily limit, through one shared Telegram bot. Off until
+your Claude subscription with a 5-hour and a weekly limit, through one shared Telegram bot. Off until
 you set it up.
 
 - **A sandbox per person.** Each guest gets their own AgentKennel in a Docker container
@@ -9,10 +9,12 @@ you set it up.
   `https://sb-<name>.<domain>` with its own password. Guests can't see each other or your
   server: the `sbx` network lets a sandbox reach the internet and the three gates below,
   nothing else on the host or in private ranges.
-- **Your subscription, a daily limit.** The Claude turnstile holds your login; a sandbox
-  only has a personal pass. The turnstile counts every guest's usage and stops them at
-  the daily limit (default 20M weighted tokens; it resets at midnight, Los Angeles time),
-  and tells you if a guest burns more than 1% of your week in an hour.
+- **Your subscription, a 5-hour and a weekly limit.** The Claude turnstile holds your
+  login; a sandbox only has a personal pass. The turnstile counts every guest's usage and
+  stops them at either limit, like the subscription's own: the 5-hour window opens with
+  the first request and lasts 5 hours, the week runs from Monday midnight, Los Angeles
+  time (default 140M weighted tokens a week, a seventh of it — 20M — per 5 hours). It
+  tells you if a guest burns more than 1% of your week in an hour.
 - **One bot for everyone.** The Telegram turnstile holds the real bot token and gives each
   sandbox a Bot API of its own: a guest's agent writes only to that guest's chat.
 - **You decide in your own bot.** Someone new writes `/start` to the guest bot; it only
@@ -63,8 +65,8 @@ your user may use, systemd, and — for web addresses — nginx and certbot.
 python3 guests/guestctl.py add <name> --tg <telegram id> [--limit N]   new sandbox
 python3 guests/guestctl.py web <name>              https://sb-<name>.<domain> (DNS, certificate)
 python3 guests/guestctl.py session <name>          your login to their dashboard (the panel's Open)
-python3 guests/guestctl.py list [--json]           guests, state, today's usage and limit
-python3 guests/guestctl.py limit <name> <tokens>   change the daily limit
+python3 guests/guestctl.py list [--json]           guests, state, 5-hour and weekly use and limits
+python3 guests/guestctl.py limit <name> <tokens>   the weekly limit (5 hours: a seventh)
 python3 guests/guestctl.py stop|start <name>       pause / resume (the pass stops working too)
 python3 guests/guestctl.py recreate <name>         new container on the current image, same data
 python3 guests/guestctl.py remove <name>           container, pass and address go; volumes stay

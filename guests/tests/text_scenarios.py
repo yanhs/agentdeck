@@ -70,7 +70,7 @@ def _desk(tmp: Path, ok: bool, told: list, taken=()):
 def _invitation_flow(tmp: Path, ok: bool) -> list:
     """The guest bot records and answers; the owner's bot (Desk) asks and decides."""
     book = ts.GuestBook(tmp / "guests.json")
-    book.add("anna", daily_limit=10, telegram_id=1001)
+    book.add("anna", week_limit=10, telegram_id=1001)
     tg = Recorder()
     inv = tr.Invitations(invites.RequestBook(tmp / "requests.json"), owner_tid=OWNER)
     relay = tr.Relay(book, tg, invites=inv)
@@ -104,7 +104,7 @@ def _rejection_flow(tmp: Path) -> list:
 
 def _services_flow(tmp: Path) -> list:
     book = ts.GuestBook(tmp / "guests.json")
-    book.add("anna", daily_limit=10, telegram_id=1001)
+    book.add("anna", week_limit=10, telegram_id=1001)
     tg = Recorder()
     relay = tr.Relay(book, tg, services=Keeper(), background=False, settle=0)
     relay.route({"update_id": 1, "message": {"message_id": 1, "chat": {"id": 1001},

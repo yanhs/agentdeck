@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """guestctl — guest sandboxes: one AgentKennel container per person.
 
-    guestctl.py add <name> --tg <telegram id> [--limit N]   create + start, prints access
+    guestctl.py add <name> --tg <telegram id> [--limit N]   create + start, prints access (N: per week)
     guestctl.py web <name>                                   https://sb-<name>.<domain>
     guestctl.py session <name>                               the owner's login to it (JSON)
     guestctl.py disk-move <name> [--gb 20]                   an existing guest onto its own disk
     guestctl.py disk-watch                                   warn about full disks (a timer runs it)
-    guestctl.py list [--json]                                who, port, state, today's spend
-    guestctl.py limit <name> <tokens per day>                change the daily limit
+    guestctl.py list [--json]                                who, port, state, 5-hour + weekly use
+    guestctl.py limit <name> <tokens per week>               change the weekly limit (5 h: a seventh)
     guestctl.py check <name>                                 network walls from inside
     guestctl.py stop|start <name>                            pause / resume a sandbox
     guestctl.py recreate <name> [--image I] [--force]        new container, same volumes
@@ -54,7 +54,9 @@ DATA = HERE / "turnstile" / "data"
 REGISTRY = DATA / "sandboxes.json"
 PUBLIC_ROOT = str(HERE / "public")  # host side of each guest's /work/public
 SERVICES_MAX = 10  # services one sandbox may run (keeper + the agent's rule read it)
-DEFAULT_LIMIT = 20_000_000  # weighted tokens per day (my default; change with `limit`)
+# weighted tokens per week (= 7 old days of 20M; the 5 hours get a seventh, 20M);
+# change with `limit`
+DEFAULT_LIMIT = 140_000_000
 UNITS = ("agentkennel-guest-turnstile.service", "agentkennel-guest-tgrelay.service",
          "agentkennel-guest-sitegate.service")
 # compat: the same services under their names before v2.1.0 (setups not moved yet)
@@ -494,7 +496,7 @@ def cmd_add(a) -> int:
     pw_file.write_text(password + "\n")
     pw_file.chmod(0o600)
     print(f"guest {a.name}: tg={a.tg} dashboard=127.0.0.1:{port} "
-          f"limit={a.limit}/day password-file={pw_file}")
+          f"limit={a.limit}/week password-file={pw_file}")
     return 0
 
 
@@ -577,8 +579,8 @@ def guests_report() -> list:
             "port": int(info.get("port") or 0),
             "state": container_state(name),
             "enabled": bool(g and g.enabled),
-            "spent_today": int(ledger.spent_today(name)),
-            "limit": int(g.daily_limit if g else 0),
+            # "five_hour", "seven_day": {used, limit, resets_at} (decision 30.10.2026)
+            **ts.usage_windows(g or ts.Guest(name, 0, 0, None, False), ledger),
             "url": f"https://{dashboard_host(name)}" if has_domain and web_exists(name) else None,
             "created": str(info.get("created") or ""),
         })
@@ -593,20 +595,21 @@ def cmd_list(a) -> int:
     for r in rows:
         print(_t("ctl_list_line", name=r["name"], tg=r["telegram_id"], port=r["port"],
                  state=r["state"] if r["state"] != "missing" else _t("ctl_no_container"),
-                 on=_t("ts_on") if r["enabled"] else _t("ts_off"), spent=r["spent_today"],
-                 limit=r["limit"]))
+                 on=_t("ts_on") if r["enabled"] else _t("ts_off"),
+                 five_used=r["five_hour"]["used"], five_limit=r["five_hour"]["limit"],
+                 week_used=r["seven_day"]["used"], week_limit=r["seven_day"]["limit"]))
     return 0
 
 
 def cmd_limit(a) -> int:
     if a.tokens < 0:
-        raise SystemExit("the limit is a number of weighted tokens per day, 0 or more")
+        raise SystemExit("the limit is a number of weighted tokens per week, 0 or more")
     book = ts.GuestBook(DATA / "guests.json")
     try:
         book.set_limit(a.name, a.tokens)
     except KeyError:
         raise SystemExit(f"no guest {a.name}")
-    print(f"{a.name}: limit {a.tokens} per day")
+    print(f"{a.name}: limit {a.tokens} per week, {ts.five_hour_of(a.tokens)} per 5 hours")
     return 0
 
 

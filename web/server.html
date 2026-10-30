@@ -413,11 +413,11 @@
 
   <section class="card" id="guests" hidden>
     <div class="card-h">
-      <h3 title="Other people working on this server, each in their own sandbox, on your subscription with a daily limit">Guests</h3>
+      <h3 title="Other people working on this server, each in their own sandbox, on your subscription with a 5-hour and a weekly limit, like the subscription's own">Guests</h3>
       <span id="gSum"></span>
       <button type="button" class="gbtn" id="gSetup">Set up guests</button>
     </div>
-    <div id="gOff" hidden>Off. Let other people work on this server: each gets their own sandbox (an AgentKennel of their own, in Docker), works on your Claude subscription with a daily limit, and talks to it through one shared Telegram bot. Someone writes to the bot, you get “Let in?” with a button.</div>
+    <div id="gOff" hidden>Off. Let other people work on this server: each gets their own sandbox (an AgentKennel of their own, in Docker), works on your Claude subscription with a 5-hour and a weekly limit, and talks to it through one shared Telegram bot. Someone writes to the bot, you get “Let in?” with a button.</div>
     <div id="gList"></div>
     <div class="empty" id="gEmpty" hidden></div>
     <div id="gErr" class="gjob err" hidden></div>
@@ -1038,6 +1038,11 @@
     if (n >= 1e3) return Math.round(n / 1e3) + 'K';
     return String(Math.round(n));
   }
+  // a limit window {used, limit, resets_at} as a percent, 0–100; no limit at all is full
+  function gPct(w) { return w.limit > 0 ? Math.min(100, (w.used || 0) / w.limit * 100) : 100; }
+  function gWhen(t) {
+    return new Date(t * 1000).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  }
   async function gPost(what, body) {
     const r = await fetch(`${G_API}/${what}`, { method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
@@ -1089,9 +1094,16 @@
       link.textContent = g.url.replace(/^https?:\/\//, '');
     } else if (link) link.remove();
     note.textContent = on ? '' : g.state === 'missing' ? 'off · no container' : 'off';
-    const pct = g.limit > 0 ? Math.min(100, g.spent_today / g.limit * 100) : 0;
-    r.querySelector('.gspend .v').textContent = `today ${fmtTok(g.spent_today)} of ${fmtTok(g.limit)} tokens`;
-    const bar = r.querySelector('.gspend .bar i');
+    // a 5-hour and a weekly limit, like the subscription's (30.10.2026); the bar is the fuller
+    const five = g.five_hour || {}, week = g.seven_day || {};
+    const p5 = gPct(five), pw = gPct(week), pct = Math.max(p5, pw);
+    const spend = r.querySelector('.gspend');
+    spend.querySelector('.v').textContent = `5h ${Math.round(p5)}% · wk ${Math.round(pw)}%`;
+    spend.title = `5 hours: ${fmtTok(five.used)} of ${fmtTok(five.limit)} tokens, `
+      + (five.resets_at ? `resets ${gWhen(five.resets_at)}` : 'no window open')
+      + `\nWeek: ${fmtTok(week.used)} of ${fmtTok(week.limit)} tokens`
+      + (week.resets_at ? `, resets ${gWhen(week.resets_at)}` : '');
+    const bar = spend.querySelector('.bar i');
     bar.style.width = pct.toFixed(1) + '%';
     bar.style.background = level(pct);
     const want = gButtons(g), box = r.querySelector('.svc-btns');
@@ -1101,7 +1113,7 @@
         b.type = 'button';
         b.dataset.act = act;
         b.title = { open: `Open ${g.name}'s dashboard signed in as you, the owner — no password needed; theirs stays as it is`,
-                    limit: `Change ${g.name}'s daily token limit`, stop: `Stop ${g.name}'s sandbox (files stay)`,
+                    limit: `Change ${g.name}'s weekly token limit (the 5 hours get a seventh)`, stop: `Stop ${g.name}'s sandbox (files stay)`,
                     start: `Start ${g.name}'s sandbox`, remove: `Remove ${g.name}'s sandbox (files stay on disk)` }[act];
         return b;
       }));
@@ -1119,10 +1131,10 @@
       lim = el('div', 'glimit');
       const inp = el('input', 'glimit-in');
       inp.type = 'number'; inp.min = '1'; inp.step = '1';
-      inp.value = String(Math.round(g.limit / 1e6));
+      inp.value = String(Math.round(((g.seven_day || {}).limit || 0) / 1e6));
       const save = el('button', 'gbtn glimit-save', 'Save'); save.type = 'button';
       const cancel = el('button', 'gbtn glimit-cancel', 'Cancel'); cancel.type = 'button';
-      lim.append(document.createTextNode('Daily limit:'), inp, document.createTextNode('million tokens'), save, cancel);
+      lim.append(document.createTextNode('Weekly limit:'), inp, document.createTextNode('million tokens · 5 hours: a seventh'), save, cancel);
       r.append(lim);
       inp.focus();
     } else if (!gLimitOpen.has(g.name) && lim) lim.remove();
@@ -1152,10 +1164,10 @@
     $('#gSetup').hidden = gWizardOpen;
     const sum = $('#gSum');
     if (d.configured && guests.length) {
-      const spent = guests.reduce((a, g) => a + (g.spent_today || 0), 0);
+      const spent = guests.reduce((a, g) => a + ((g.seven_day || {}).used || 0), 0);
       const on = guests.filter(g => g.enabled && g.state === 'running').length;
       sum.replaceChildren(el('b', null, String(guests.length)), document.createTextNode(guests.length === 1 ? ' guest' : ' guests'),
-        document.createTextNode(' · on '), el('b', null, String(on)), document.createTextNode(' · today '), el('b', null, fmtTok(spent)), document.createTextNode(' tokens'));
+        document.createTextNode(' · on '), el('b', null, String(on)), document.createTextNode(' · week '), el('b', null, fmtTok(spent)), document.createTextNode(' tokens'));
     } else sum.textContent = d.configured ? 'on' : '';
     const empty = $('#gEmpty');
     empty.textContent = d.configured && Array.isArray(d.guests) && !guests.length

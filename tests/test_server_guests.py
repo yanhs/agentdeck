@@ -13,12 +13,16 @@ import pytest
 
 from tests.test_server_page import FakeServerAPI, browser, shot, site  # noqa: F401
 
+# `guestctl list --json` rows: a 5-hour and a weekly limit, like the subscription's (30.10.2026)
 GUESTS = [
     {"name": "masha", "telegram_id": 111, "port": 18101, "state": "running", "enabled": True,
-     "spent_today": 4_500_000, "limit": 20_000_000, "url": "https://sb-masha.example.com",
-     "created": "2026-10-20 10:00:00"},
+     "five_hour": {"used": 8_000_000, "limit": 20_000_000, "resets_at": 1793430000},
+     "seven_day": {"used": 16_800_000, "limit": 140_000_000, "resets_at": 1793689200},
+     "url": "https://sb-masha.example.com", "created": "2026-10-20 10:00:00"},
     {"name": "petya", "telegram_id": 222, "port": 18102, "state": "exited", "enabled": False,
-     "spent_today": 0, "limit": 10_000_000, "url": None, "created": "2026-10-21 10:00:00"},
+     "five_hour": {"used": 0, "limit": 10_000_000, "resets_at": 0},
+     "seven_day": {"used": 35_000_000, "limit": 70_000_000, "resets_at": 1793689200},
+     "url": None, "created": "2026-10-21 10:00:00"},
 ]
 CHECKS_BAD = [
     {"id": "docker", "title": "Docker", "ok": True, "detail": "Docker 26.1 works", "fix": ""},
@@ -77,8 +81,9 @@ class FakeGuests:
                     g.update(state="running", enabled=True)
                 elif what == "remove":
                     self.guests.remove(g)
-                elif what == "limit":
-                    g["limit"] = body["limit"]
+                elif what == "limit":            # guestctl: the week; 5 hours = a seventh
+                    g["seven_day"]["limit"] = body["limit"]
+                    g["five_hour"]["limit"] = round(body["limit"] / 7)
                 self.jobs[body["name"]] = {"action": what, "done": True, "ok": True, "output": ""}
             return route.fulfill(status=200, content_type="application/json", body='{"ok": true}')
         state = {"installed": True, "configured": self.configured, "dir": "/home/me/agentkennel/guests",
@@ -134,15 +139,34 @@ def acts(pg, name):
                                    "els => els.map(e => e.dataset.act)")
 
 
-def test_lists_guests_with_todays_spend(page):
+def bar_width(pg, name):
+    return pg.eval_on_selector(f'#guests .guest[data-name="{name}"] .gspend .bar i',
+                               "e => parseFloat(e.style.width)")
+
+
+def test_lists_guests_with_their_five_hours_and_week(page):
     got = dict(guest_rows(page))
     assert set(got) == {"masha", "petya"}
-    assert "4.5M of 20M" in got["masha"]
+    assert "5h 40% · wk 12%" in got["masha"]
+    assert "5h 0% · wk 50%" in got["petya"]
     assert "sb-masha.example.com" in got["masha"]
     assert "off" in got["petya"].lower()
     assert page.get_attribute('#guests .guest[data-name="masha"] a', "href") == "https://sb-masha.example.com"
     assert "2 guests" in page.inner_text("#gSum")
+    assert "week 52M" in page.inner_text("#gSum")          # the summary counts the week
     shot(page, "server-guests-desktop.png")
+
+
+def test_the_bar_is_the_fuller_of_the_two(page):
+    guest_rows(page)
+    assert bar_width(page, "masha") == 40                  # 5 hours 40%, week 12%
+    assert bar_width(page, "petya") == 50                  # 5 hours 0%, week 50%
+
+
+def test_the_numbers_behind_the_percents_are_in_the_title(page):
+    guest_rows(page)
+    title = page.get_attribute('#guests .guest[data-name="masha"] .gspend', "title")
+    assert "8M of 20M" in title and "17M of 140M" in title, title
 
 
 def test_buttons_match_the_state(page):
@@ -215,16 +239,18 @@ def test_remove_asks_first(page, fake):
     assert fake.posts[-1][:2] == ("/api/guests/remove", {"name": "petya"})
 
 
-def test_change_the_daily_limit(page, fake):
+def test_change_the_weekly_limit(page, fake):
     guest_rows(page)
     page.click('#guests .guest[data-name="masha"] button[data-act="limit"]')
     inp = page.wait_for_selector('#guests .guest[data-name="masha"] input.glimit-in')
-    assert inp.input_value() == "20"
-    inp.fill("35")
+    assert inp.input_value() == "140"
+    editor = page.inner_text('#guests .guest[data-name="masha"] .glimit')
+    assert "Weekly limit" in editor and "5 hours: a seventh" in editor, editor
+    inp.fill("210")
     page.click('#guests .guest[data-name="masha"] button.glimit-save')
     page.wait_for_function(
-        "() => document.querySelector('#guests .guest[data-name=\"masha\"]').innerText.includes('of 35M')")
-    assert fake.posts[-1][:2] == ("/api/guests/limit", {"name": "masha", "limit": 35_000_000})
+        "() => document.querySelector('#guests .guest[data-name=\"masha\"]').innerText.includes('5h 27% · wk 8%')")
+    assert fake.posts[-1][:2] == ("/api/guests/limit", {"name": "masha", "limit": 210_000_000})
 
 
 def test_off_offers_the_wizard(browser, site):  # noqa: F811

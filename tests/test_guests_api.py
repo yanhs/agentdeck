@@ -9,6 +9,7 @@ its command, guests/guestctl.py:
     POST /api/guests/check      -> run `guestctl.py doctor --json` (in the background)
     POST /api/guests/setup      {bot_token?, owner_id?, domain?} -> guests/.env, then a check
     POST /api/guests/stop|start|remove {name}, /limit {name, limit} -> `guestctl.py <action>`
+                                    (limit: the weekly one; the 5 hours get a seventh)
     POST /api/guests/open {name} -> {url}: a one-time link that opens the guest's dashboard
                                     signed in as the owner (`guestctl.py session <name>`)
     GET  /api/guests/enter?t=   -> reached only through the guest's nginx (/_owner-entry):
@@ -64,8 +65,11 @@ else:
     print(cmd + " done")
 '''
 
+# `guestctl list --json` rows: a 5-hour and a weekly limit, like the subscription's (30.10.2026)
 GUESTS = [{"name": "masha", "telegram_id": 111, "port": 18101, "state": "running",
-           "enabled": True, "spent_today": 1_500_000, "limit": 20_000_000,
+           "enabled": True,
+           "five_hour": {"used": 1_500_000, "limit": 20_000_000, "resets_at": 1793430000},
+           "seven_day": {"used": 9_000_000, "limit": 140_000_000, "resets_at": 1793689200},
            "url": "https://sb-masha.example.com", "created": "2026-10-20 10:00:00"}]
 CHECKS = [{"id": "docker", "title": "Docker", "ok": True, "detail": "26.1", "fix": ""},
           {"id": "bot", "title": "Guest bot", "ok": False, "detail": "no token",
@@ -264,7 +268,8 @@ def test_limit(g):
     configure(g)
     assert post(g.base, "/api/guests/limit", {"name": "masha", "limit": 5_000_000})[0] == 200
     assert until(lambda: ["limit", "masha", "5000000"] in g.calls())
-    assert post(g.base, "/api/guests/limit", {"name": "masha", "limit": -1})[0] == 400
+    code, d = post(g.base, "/api/guests/limit", {"name": "masha", "limit": -1})
+    assert code == 400 and "per week" in d["error"]              # the limit is the week's
     assert post(g.base, "/api/guests/limit", {"name": "masha", "limit": "lots"})[0] == 400
 
 

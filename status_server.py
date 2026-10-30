@@ -1462,7 +1462,7 @@ class GuestsPanel:
         if action == "limit":
             limit = body.get("limit")
             if not isinstance(limit, int) or isinstance(limit, bool) or not 0 < limit <= 10**10:
-                raise LibError(400, "the limit is a positive number of tokens per day")
+                raise LibError(400, "the limit is a positive number of tokens per week")
             args.append(str(limit))
         if not self.state()["configured"]:
             raise LibError(409, "the guests module is not set up")

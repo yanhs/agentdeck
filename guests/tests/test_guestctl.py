@@ -257,27 +257,59 @@ def data(tmp_path, monkeypatch):
     return d
 
 
-def test_list_json_shape(data, monkeypatch, capsys):
+def next_monday() -> int:
+    """Monday 00:00 (DAY_TZ) after now, worked out at test time."""
+    from datetime import datetime, time as dtime, timedelta
+    today = datetime.now(gc.ts.DAY_TZ).date()
+    monday = today + timedelta(days=7 - today.weekday())
+    return int(datetime.combine(monday, dtime(0), gc.ts.DAY_TZ).timestamp())
+
+
+def _two_guests(data, monkeypatch):
+    import math
+    import time as _time
     book = gc.ts.GuestBook(data / "guests.json")
-    book.add("anna", 20_000_000, 111)
-    book.add("boris", 5_000, 222)
+    book.add("anna", 140_000_000, 111)
+    book.add("boris", 35_000, 222)
     book.set_enabled("boris", False)
-    gc.ts.Ledger(data / "usage.db").record("anna", "opus", {"input_tokens": 1000})
+    opened = _time.time()
+    gc.ts.Ledger(data / "usage.db").record("anna", "opus", {"input_tokens": 1000}, ts_=opened)
     (data / "sandboxes.json").write_text(json.dumps({
         "anna": {"port": 18101, "telegram_id": 111, "created": "2026-10-27 08:54:00"},
         "boris": {"port": 18102, "telegram_id": 222, "created": "2026-10-27 09:00:00"}}))
     states = {"anna": "running", "boris": ""}
     monkeypatch.setattr(gc, "container_state", lambda name: states[name] or "missing")
     monkeypatch.setattr(gc, "web_exists", lambda name: name == "anna")
+    return math.ceil(opened + 5 * 3600)
+
+
+def test_list_json_shape(data, monkeypatch, capsys):
+    """Decision 30.10.2026: a 5-hour and a weekly limit, like the subscription's."""
+    window_end = _two_guests(data, monkeypatch)
     assert gc.main(["list", "--json"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out == {"guests": [
-        {"name": "anna", "telegram_id": 111, "port": 18101, "state": "running",
-         "enabled": True, "spent_today": 1000, "limit": 20_000_000,
+        {"name": "anna", "telegram_id": 111, "port": 18101, "state": "running", "enabled": True,
+         "five_hour": {"used": 1000, "limit": 20_000_000, "resets_at": window_end},
+         "seven_day": {"used": 1000, "limit": 140_000_000, "resets_at": next_monday()},
          "url": "https://sb-anna.example.test", "created": "2026-10-27 08:54:00"},
-        {"name": "boris", "telegram_id": 222, "port": 18102, "state": "missing",
-         "enabled": False, "spent_today": 0, "limit": 5_000, "url": None,
-         "created": "2026-10-27 09:00:00"}]}
+        {"name": "boris", "telegram_id": 222, "port": 18102, "state": "missing", "enabled": False,
+         "five_hour": {"used": 0, "limit": 5_000, "resets_at": 0},
+         "seven_day": {"used": 0, "limit": 35_000, "resets_at": next_monday()},
+         "url": None, "created": "2026-10-27 09:00:00"}]}
+
+
+def test_list_line_shows_the_five_hours_and_the_week(data, monkeypatch, capsys):
+    _two_guests(data, monkeypatch)
+    assert gc.main(["list"]) == 0
+    anna = [x for x in capsys.readouterr().out.splitlines() if x.startswith("anna")][0]
+    assert "5 ч 1000 из 20000000" in anna and "неделя 1000 из 140000000" in anna, anna
+
+
+def test_a_new_guest_gets_a_week_of_seven_old_days():
+    """The old default was 20M a day: the week is 140M, the 5 hours 20M."""
+    assert gc.DEFAULT_LIMIT == 140_000_000
+    assert gc.ts.five_hour_of(gc.DEFAULT_LIMIT) == 20_000_000
 
 
 def test_list_json_with_no_guests_yet(data, capsys):
@@ -294,12 +326,14 @@ def test_container_state_is_missing_without_a_container(monkeypatch):
     assert gc.container_state("anna") == "exited"
 
 
-def test_limit_changes_the_daily_limit(data, capsys):
+def test_limit_sets_the_week_and_the_five_hours_get_a_seventh(data, capsys):
     book = gc.ts.GuestBook(data / "guests.json")
-    book.add("anna", 20_000_000, 111)
+    book.add("anna", 140_000_000, 111)
     assert gc.main(["limit", "anna", "35000000"]) == 0
-    assert gc.ts.GuestBook(data / "guests.json").get("anna").daily_limit == 35_000_000
-    assert "35000000" in capsys.readouterr().out
+    g = gc.ts.GuestBook(data / "guests.json").get("anna")
+    assert (g.five_hour_limit, g.week_limit) == (5_000_000, 35_000_000)
+    out = capsys.readouterr().out
+    assert "35000000" in out and "5000000" in out and "week" in out
 
 
 def test_limit_of_an_unknown_guest_is_refused(data):

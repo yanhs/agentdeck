@@ -646,8 +646,8 @@ ask_guests() {
   GUESTS=0
   human_here || return 0
   printf '\nWill other people work on this server too? Each would get their own sandbox\n' >&2
-  printf '(an AgentKennel of their own, in Docker) on your Claude subscription, with a daily\n' >&2
-  printf 'limit. You can turn it on any time later in the dashboard. [y/N] ' >&2
+  printf '(an AgentKennel of their own, in Docker) on your Claude subscription, with 5-hour\n' >&2
+  printf 'and weekly limits. You can turn it on any time later in the dashboard. [y/N] ' >&2
   read -r ans <"${AGENTKENNEL_TTY:-${AGENTDECK_TTY:-/dev/tty}}" || ans=""
   case "$ans" in [yY]|[yY][eE][sS]) GUESTS=1 ;; esac
   return 0

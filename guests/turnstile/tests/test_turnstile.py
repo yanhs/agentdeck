@@ -122,7 +122,7 @@ def call(gate, path="/v1/messages?beta=true", body=None, headers=None):
 # --------------------------------------------------------------------------- #
 class TestGuestBook:
     def test_add_returns_a_pass_and_stores_only_its_hash(self, book, tmp_path):
-        p = book.add("maria", daily_limit=1000, telegram_id=42)
+        p = book.add("maria", week_limit=1000, telegram_id=42)
         text = (tmp_path / "guests.json").read_text()
         assert p.startswith("sbx-") and len(p) > 30
         assert p not in text
@@ -130,26 +130,76 @@ class TestGuestBook:
         assert book.lookup(p).telegram_id == 42
 
     def test_unknown_pass_is_none(self, book):
-        book.add("maria", daily_limit=1000)
+        book.add("maria", week_limit=1000)
         assert book.lookup("sbx-nope") is None
         assert book.lookup("") is None
 
     def test_reloads_from_disk(self, book, tmp_path):
-        p = book.add("maria", daily_limit=1000)
+        p = book.add("maria", week_limit=1000)
         again = ts.GuestBook(tmp_path / "guests.json")
         assert again.lookup(p).name == "maria"
 
     def test_disable_and_remove(self, book):
-        p = book.add("maria", daily_limit=1000)
+        p = book.add("maria", week_limit=1000)
         book.set_enabled("maria", False)
         assert book.lookup(p).enabled is False
         book.remove("maria")
         assert book.lookup(p) is None
 
     def test_duplicate_name_rejected(self, book):
-        book.add("maria", daily_limit=1000)
+        book.add("maria", week_limit=1000)
         with pytest.raises(ValueError):
-            book.add("maria", daily_limit=1000)
+            book.add("maria", week_limit=1000)
+
+
+# --------------------------------------------------------------------------- #
+# limits like the subscription's (decision 30.10.2026): a 5-hour one and a weekly one;
+# the owner sets the week, the 5 hours get a seventh of it
+# --------------------------------------------------------------------------- #
+class TestLimits:
+    def test_a_new_guest_gets_the_week_and_a_seventh_for_five_hours(self, book, tmp_path):
+        book.add("maria", week_limit=140_000_000)
+        g = book.get("maria")
+        assert (g.five_hour_limit, g.week_limit) == (20_000_000, 140_000_000)
+        rec = json.loads((tmp_path / "guests.json").read_text())["guests"]["maria"]
+        assert rec["five_hour_limit"] == 20_000_000 and rec["week_limit"] == 140_000_000
+
+    def test_a_turnstile_still_on_the_old_code_reads_a_sane_daily_limit(self, book, tmp_path):
+        """Between a code update and the turnstile's restart the old process reads the
+        same file: it finds daily_limit (= the 5-hour limit), not nothing (= 0 = refused)."""
+        book.add("maria", week_limit=70_000_000)
+        book.set_limit("maria", 140_000_000)
+        rec = json.loads((tmp_path / "guests.json").read_text())["guests"]["maria"]
+        assert rec["daily_limit"] == 20_000_000
+
+    def test_an_old_record_with_only_a_daily_limit(self, tmp_path):
+        (tmp_path / "guests.json").write_text(json.dumps({"guests": {"maria": {
+            "pass_sha256": "x", "daily_limit": 20_000_000, "telegram_id": 1, "enabled": True}}}))
+        g = ts.GuestBook(tmp_path / "guests.json").get("maria")
+        assert (g.five_hour_limit, g.week_limit) == (20_000_000, 140_000_000)
+
+    def test_a_record_with_a_week_but_no_five_hours_gets_a_seventh(self, tmp_path):
+        (tmp_path / "guests.json").write_text(json.dumps({"guests": {"maria": {
+            "pass_sha256": "x", "week_limit": 700, "enabled": True}}}))
+        g = ts.GuestBook(tmp_path / "guests.json").get("maria")
+        assert (g.five_hour_limit, g.week_limit) == (100, 700)
+
+    def test_set_limit_sets_the_week_and_the_five_hours_follow(self, book):
+        book.add("maria", week_limit=140_000_000)
+        book.set_limit("maria", 70_000_000)
+        g = ts.GuestBook(book.path).get("maria")
+        assert (g.five_hour_limit, g.week_limit) == (10_000_000, 70_000_000)
+
+    def test_the_five_hours_may_be_set_apart(self, book):
+        book.add("maria", week_limit=100, five_hour_limit=10**9)
+        assert book.get("maria").five_hour_limit == 10**9
+        book.set_limit("maria", 700, five_hour_limit=5)
+        assert (book.get("maria").five_hour_limit, book.get("maria").week_limit) == (5, 700)
+
+    @pytest.mark.parametrize("week,five", [(140_000_000, 20_000_000), (100, 14), (10, 1),
+                                           (3, 1), (1, 1), (0, 0)])
+    def test_a_seventh_rounded_never_zero_out_of_something(self, week, five):
+        assert ts.five_hour_of(week) == five
 
 
 # --------------------------------------------------------------------------- #
@@ -195,6 +245,93 @@ def test_ledger_sums_today_per_guest(ledger):
 
 
 # --------------------------------------------------------------------------- #
+# the 5-hour window: opens with a request when none is open, lasts 5 h (like Anthropic's);
+# read from the requests themselves, nothing new is stored
+# --------------------------------------------------------------------------- #
+H = 3600.0
+NOW = 1_800_000_000.0           # a fixed moment: these tests don't depend on the clock
+
+
+class TestFiveHourWindow:
+    def test_no_requests_no_window(self, ledger):
+        assert ledger.five_hour_window("maria", NOW) is None
+
+    def test_the_first_request_opens_it_for_five_hours(self, ledger):
+        ledger.record("maria", "m", {"input_tokens": 10}, ts_=NOW - H)
+        assert ledger.five_hour_window("maria", NOW) == (NOW - H, NOW + 4 * H)
+
+    def test_requests_inside_the_window_do_not_move_it(self, ledger):
+        for k in (4.5, 3, 0.1):
+            ledger.record("maria", "m", {"input_tokens": 10}, ts_=NOW - k * H)
+        assert ledger.five_hour_window("maria", NOW) == (NOW - 4.5 * H, NOW + 0.5 * H)
+
+    def test_a_closed_window_is_none(self, ledger):
+        ledger.record("maria", "m", {"input_tokens": 10}, ts_=NOW - 5 * H - 1)
+        assert ledger.five_hour_window("maria", NOW) is None
+
+    def test_a_request_at_the_end_opens_the_next_one(self, ledger):
+        ledger.record("maria", "m", {"input_tokens": 10}, ts_=NOW - 6 * H)
+        ledger.record("maria", "m", {"input_tokens": 10}, ts_=NOW - H)        # = that end
+        assert ledger.five_hour_window("maria", NOW) == (NOW - H, NOW + 4 * H)
+
+    def test_windows_chain_from_where_the_last_one_ended(self, ledger):
+        """09:00 opens 09:00–14:00; 13:54 is inside it; 14:30 opens 14:30–19:30 — not
+        13:54–18:54, which a plain "last 5 hours" would give."""
+        t = NOW - 9 * H
+        for at in (t, t + 4.9 * H, t + 5.5 * H):
+            ledger.record("maria", "m", {"input_tokens": 100}, ts_=at)
+        assert ledger.five_hour_window("maria", t + 9 * H) == (t + 5.5 * H, t + 10.5 * H)
+
+    def test_a_guest_who_never_pauses_still_gets_windows_that_end(self, ledger):
+        """A loop calling Claude every half hour for two weeks: the windows still follow
+        each other, the current one ends within five hours and doesn't slide with the clock
+        (a window counted from "a week ago" would start anew on every request)."""
+        for i in range(2 * 24 * 15):
+            ledger.record("maria", "m", {"input_tokens": 1}, ts_=NOW - 15 * 24 * H + i * 1800)
+        start, end = ledger.five_hour_window("maria", NOW)
+        assert end - start == 5 * H and start <= NOW < end
+        assert ledger.five_hour_window("maria", NOW + 1800) == (start, end)
+
+    def test_guests_are_separate(self, ledger):
+        ledger.record("ivan", "m", {"input_tokens": 10}, ts_=NOW - H)
+        assert ledger.five_hour_window("maria", NOW) is None
+
+
+class TestWeek:
+    def test_a_calendar_week_from_monday_midnight_los_angeles(self):
+        from datetime import datetime
+        friday = datetime(2026, 10, 30, 12, 0, tzinfo=ts.DAY_TZ).timestamp()
+        start, end = ts.week_bounds(friday)
+        assert start == datetime(2026, 10, 26, 0, 0, tzinfo=ts.DAY_TZ).timestamp()
+        assert end == datetime(2026, 11, 2, 0, 0, tzinfo=ts.DAY_TZ).timestamp()
+        assert end - start == 7 * 24 * H + H          # the clocks go back on 1 November
+
+    def test_monday_midnight_starts_the_new_week(self):
+        from datetime import datetime
+        monday = datetime(2026, 11, 2, 0, 0, tzinfo=ts.DAY_TZ).timestamp()
+        assert ts.week_bounds(monday)[0] == monday
+        assert ts.week_bounds(monday - 1)[1] == monday
+
+    def test_the_week_counts_only_this_weeks_requests(self, ledger, book):
+        from datetime import datetime
+        monday = datetime(2026, 11, 2, 0, 0, tzinfo=ts.DAY_TZ).timestamp()
+        book.add("maria", week_limit=1000)
+        ledger.record("maria", "m", {"input_tokens": 7}, ts_=monday - 60)    # last week
+        ledger.record("maria", "m", {"input_tokens": 5}, ts_=monday + 60)
+        w = ts.usage_windows(book.get("maria"), ledger, monday + 2 * H)
+        assert w["seven_day"] == {"used": 5, "limit": 1000,
+                                  "resets_at": int(datetime(2026, 11, 9, 0, 0, tzinfo=ts.DAY_TZ).timestamp())}
+        # the 5-hour window opened on Sunday 23:59 is still open: both requests are in it
+        assert w["five_hour"] == {"used": 12, "limit": 143, "resets_at": int(monday - 60 + 5 * H)}
+
+    def test_no_open_window_reads_zero_and_no_reset(self, ledger, book):
+        book.add("maria", week_limit=7000)
+        ledger.record("maria", "m", {"input_tokens": 9}, ts_=NOW - 6 * H)
+        w = ts.usage_windows(book.get("maria"), ledger, NOW)
+        assert w["five_hour"] == {"used": 0, "limit": 1000, "resets_at": 0}
+
+
+# --------------------------------------------------------------------------- #
 # the gate itself
 # --------------------------------------------------------------------------- #
 class TestGate:
@@ -209,7 +346,7 @@ class TestGate:
         assert upstream.requests == []
 
     def test_guest_pass_is_swapped_for_owner_login(self, gate, upstream, book):
-        p = book.add("maria", daily_limit=10**9)
+        p = book.add("maria", week_limit=10**9)
         status, _, body = call(
             gate,
             headers={
@@ -228,14 +365,14 @@ class TestGate:
         assert p not in json.dumps(sent)
 
     def test_pass_in_x_api_key_also_works(self, gate, upstream, book):
-        p = book.add("maria", daily_limit=10**9)
+        p = book.add("maria", week_limit=10**9)
         status, _, _ = call(gate, headers={"x-api-key": p})
         assert status == 200
         sent = {k.lower(): v for k, v in upstream.requests[0]["headers"].items()}
         assert "x-api-key" not in sent
 
     def test_only_message_endpoints_are_forwarded(self, gate, upstream, book):
-        p = book.add("maria", daily_limit=10**9)
+        p = book.add("maria", week_limit=10**9)
         status, _, _ = call(gate, path="/v1/files", headers={"x-api-key": p})
         assert status == 403
         assert upstream.requests == []
@@ -245,7 +382,7 @@ class TestGate:
         assert status == 200
 
     def test_streamed_usage_is_recorded_for_the_guest(self, gate, book, ledger):
-        p = book.add("maria", daily_limit=10**9)
+        p = book.add("maria", week_limit=10**9)
         status, _, body = call(
             gate,
             body={"model": "m", "stream": True, "messages": []},
@@ -255,39 +392,79 @@ class TestGate:
         assert b"message_stop" in body  # stream passed through intact
         assert ledger.spent_today("maria") == 100 + 50 * 5 + 25 + 100
 
-    def test_guest_over_daily_limit_gets_429_and_upstream_not_called(
+    def test_guest_over_the_five_hour_limit_gets_429_and_upstream_not_called(
         self, gate, upstream, book, ledger
     ):
-        p = book.add("maria", daily_limit=100)
-        ledger.record("maria", "m", {"input_tokens": 100})
+        import time
+        from datetime import datetime
+        p = book.add("maria", week_limit=700)                    # 5 hours: 100
+        opened = time.time() - 600
+        ledger.record("maria", "m", {"input_tokens": 100}, ts_=opened)
         status, _, body = call(gate, headers={"x-api-key": p})
         assert status == 429
         err = json.loads(body)
         assert err["type"] == "error"
         assert err["error"]["type"] == "rate_limit_error"
         assert upstream.requests == []
+        msg = err["error"]["message"]                             # GUESTS_LANG=ru here
+        at = datetime.fromtimestamp(opened + 5 * 3600, ts.DAY_TZ).strftime("%H:%M")
+        assert "5 часов" in msg and "100 из 100" in msg and at in msg, msg
+
+    def test_guest_over_the_weekly_limit_gets_429_saying_monday(self, gate, upstream, book, ledger):
+        p = book.add("maria", week_limit=100, five_hour_limit=10**9)
+        ledger.record("maria", "m", {"input_tokens": 100})
+        status, _, body = call(gate, headers={"x-api-key": p})
+        msg = json.loads(body)["error"]["message"]
+        assert status == 429 and upstream.requests == []
+        assert "Недельный" in msg and "понедельник" in msg and "100 из 100" in msg, msg
+
+    def test_over_both_the_week_is_said_it_comes_back_later(self, gate, book, ledger):
+        p = book.add("maria", week_limit=100, five_hour_limit=50)
+        ledger.record("maria", "m", {"input_tokens": 100})
+        status, _, body = call(gate, headers={"x-api-key": p})
+        assert status == 429 and "Недельный" in json.loads(body)["error"]["message"]
+
+    def test_a_closed_window_lets_the_guest_in_again(self, gate, upstream, book, ledger):
+        import time
+        p = book.add("maria", week_limit=10**9, five_hour_limit=100)
+        ledger.record("maria", "m", {"input_tokens": 1000}, ts_=time.time() - 5 * 3600 - 60)
+        status, _, _ = call(gate, headers={"x-api-key": p})
+        assert status == 200 and len(upstream.requests) == 1
+
+    def test_an_old_record_is_limited_by_its_daily_limit_in_five_hours(
+            self, gate, upstream, book, ledger, tmp_path):
+        p = book.add("maria", week_limit=10**9)
+        data = json.loads((tmp_path / "guests.json").read_text())
+        rec = data["guests"]["maria"]
+        for k in ("five_hour_limit", "week_limit"):
+            rec.pop(k)
+        rec["daily_limit"] = 100
+        (tmp_path / "guests.json").write_text(json.dumps(data))
+        ledger.record("maria", "m", {"input_tokens": 100})
+        status, _, body = call(gate, headers={"x-api-key": p})
+        assert status == 429 and "5 часов" in json.loads(body)["error"]["message"]
 
     def test_disabled_guest_is_refused(self, gate, upstream, book):
-        p = book.add("maria", daily_limit=10**9)
+        p = book.add("maria", week_limit=10**9)
         book.set_enabled("maria", False)
         status, _, _ = call(gate, headers={"x-api-key": p})
         assert status == 403
         assert upstream.requests == []
 
     def test_owner_login_never_reaches_the_guest(self, gate, book):
-        p = book.add("maria", daily_limit=10**9)
+        p = book.add("maria", week_limit=10**9)
         _, headers, body = call(gate, headers={"x-api-key": p})
         assert OWNER not in json.dumps(headers)
         assert OWNER.encode() not in body
 
 
 # --------------------------------------------------------------------------- #
-# "no limit until <time>": lifts the daily limit for a while, ends by itself
+# "no limit until <time>": lifts both limits for a while, ends by itself
 # --------------------------------------------------------------------------- #
 class TestUnlimitedUntil:
     def test_guest_over_the_limit_passes_while_unlimited(self, gate, upstream, book, ledger):
         import time
-        p = book.add("maria", daily_limit=100)
+        p = book.add("maria", week_limit=100)
         ledger.record("maria", "m", {"input_tokens": 10_000})
         book.set_unlimited_until("maria", time.time() + 3600)
         status, _, _ = call(gate, headers={"x-api-key": p})
@@ -295,7 +472,7 @@ class TestUnlimitedUntil:
 
     def test_limit_is_back_by_itself_when_the_time_is_up(self, gate, upstream, book, ledger):
         import time
-        p = book.add("maria", daily_limit=100)
+        p = book.add("maria", week_limit=100)
         ledger.record("maria", "m", {"input_tokens": 10_000})
         book.set_unlimited_until("maria", time.time() - 1)       # already over
         status, _, _ = call(gate, headers={"x-api-key": p})
@@ -303,7 +480,7 @@ class TestUnlimitedUntil:
 
     def test_unlimited_until_survives_a_reload(self, book, tmp_path):
         import time
-        book.add("maria", daily_limit=100)
+        book.add("maria", week_limit=100)
         until = time.time() + 86400
         book.set_unlimited_until("maria", until)
         assert ts.GuestBook(tmp_path / "guests.json").get("maria").unlimited_until == until
@@ -378,7 +555,7 @@ class TestSpendWatch:
                                 upstream=("http", "127.0.0.1", upstream.port), watch=Spy())
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
-            p = book.add("maria", daily_limit=10**9)
+            p = book.add("maria", week_limit=10**9)
             assert call(server, headers={"x-api-key": p})[0] == 200
         finally:
             server.shutdown()
@@ -393,8 +570,9 @@ def test_owner_alerts_go_through_the_configured_channel(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# a guest's own usage: GET /guest/usage (decision 30.10.2026 — the guest's dashboard
-# shows "today X of Y tokens"); answered here, nothing goes to Anthropic
+# a guest's own usage: GET /guest/usage (decisions 30.10.2026 — the guest's dashboard
+# shows its 5-hour and weekly limits, like the subscription's); answered here, nothing
+# goes to Anthropic
 # --------------------------------------------------------------------------- #
 def usage_of(gate, token, method="GET", header="authorization"):
     conn = http.client.HTTPConnection("127.0.0.1", gate.server_address[1], timeout=10)
@@ -405,45 +583,80 @@ def usage_of(gate, token, method="GET", header="authorization"):
     return resp.status, json.loads(raw or b"{}")
 
 
+def next_monday() -> int:
+    """Monday 00:00 (DAY_TZ) after now, worked out here at test time."""
+    from datetime import datetime, time as dtime, timedelta
+    today = datetime.now(ts.DAY_TZ).date()
+    monday = today + timedelta(days=7 - today.weekday())
+    return int(datetime.combine(monday, dtime(0), ts.DAY_TZ).timestamp())
+
+
 class TestGuestUsage:
-    def test_a_guest_sees_its_own_spend_and_limit(self, gate, book, ledger, upstream):
-        from datetime import datetime, time as dtime, timedelta
-        p = book.add("maria", daily_limit=5_000_000)
-        book.add("pavel", daily_limit=9_000_000)
-        ledger.record("maria", "claude-opus-x", {"input_tokens": 1000, "output_tokens": 10})
+    def test_a_guest_sees_its_five_hours_and_its_week(self, gate, book, ledger, upstream):
+        import math
+        import time as _time
+        p = book.add("maria", week_limit=35_000_000)             # 5 hours: 5M
+        book.add("pavel", week_limit=9_000_000)
+        opened = _time.time()
+        w = ledger.record("maria", "claude-opus-x", {"input_tokens": 1000, "output_tokens": 10},
+                          ts_=opened)
         ledger.record("pavel", "claude-opus-x", {"input_tokens": 777})
-        spent = ledger.spent_today("maria")
         code, d = usage_of(gate, p)
         assert code == 200
-        assert d == {"guest": "maria", "spent_today": spent, "limit": 5_000_000,
-                     "enabled": True, "unlimited_until": 0, "resets_at": d["resets_at"]}
-        midnight = datetime.combine((datetime.now(ts.DAY_TZ) + timedelta(days=1)).date(),
-                                    dtime(0), ts.DAY_TZ)
-        assert d["resets_at"] == int(midnight.timestamp())
+        assert d == {"guest": "maria", "enabled": True, "unlimited_until": 0,
+                     "five_hour": {"used": w, "limit": 5_000_000, "utilization": w / 5_000_000,
+                                   "resets_at": math.ceil(opened + 5 * 3600)},
+                     "seven_day": {"used": w, "limit": 35_000_000, "utilization": w / 35_000_000,
+                                   "resets_at": next_monday()}}
         assert upstream.requests == []                  # nothing went to Anthropic
-        assert ledger.spent_today("maria") == spent     # and nothing was counted
+        assert ledger.spent_today("maria") == w         # and nothing was counted
+
+    def test_no_open_window_reads_zero_and_no_reset(self, gate, book):
+        p = book.add("maria", week_limit=7000)
+        d = usage_of(gate, p)[1]
+        assert d["five_hour"] == {"used": 0, "limit": 1000, "utilization": 0.0, "resets_at": 0}
+        assert d["seven_day"] == {"used": 0, "limit": 7000, "utilization": 0.0,
+                                  "resets_at": next_monday()}
+
+    def test_a_zero_limit_reads_full(self, gate, book):
+        p = book.add("maria", week_limit=0)
+        d = usage_of(gate, p)[1]
+        assert d["five_hour"]["utilization"] == 1.0 and d["seven_day"]["utilization"] == 1.0
+
+    def test_an_old_record_reads_five_hours_daily_and_a_week_of_seven_days(self, gate, book,
+                                                                             tmp_path):
+        p = book.add("maria", week_limit=1)
+        data = json.loads((tmp_path / "guests.json").read_text())
+        rec = data["guests"]["maria"]
+        for k in ("five_hour_limit", "week_limit"):
+            rec.pop(k)
+        rec["daily_limit"] = 20_000_000
+        (tmp_path / "guests.json").write_text(json.dumps(data))
+        d = usage_of(gate, p)[1]
+        assert (d["five_hour"]["limit"], d["seven_day"]["limit"]) == (20_000_000, 140_000_000)
 
     def test_the_pass_may_come_as_x_api_key(self, gate, book):
-        p = book.add("maria", daily_limit=1000)
+        p = book.add("maria", week_limit=1000)
         assert usage_of(gate, p, header="x-api-key")[1]["guest"] == "maria"
 
     def test_an_unknown_pass_learns_nothing(self, gate, book):
-        book.add("maria", daily_limit=1000)
+        book.add("maria", week_limit=1000)
         code, d = usage_of(gate, "sbx-not-a-pass")
         assert code == 401 and "maria" not in json.dumps(d) and "limit" not in d
 
     def test_answers_when_the_limit_is_reached_or_the_guest_is_off(self, gate, book, ledger):
-        p = book.add("maria", daily_limit=10)
+        p = book.add("maria", week_limit=10)
         ledger.record("maria", "claude-opus-x", {"input_tokens": 1000})
         code, d = usage_of(gate, p)
-        assert code == 200 and d["spent_today"] >= d["limit"]
+        assert code == 200 and d["five_hour"]["used"] >= d["five_hour"]["limit"]
+        assert d["seven_day"]["utilization"] >= 1
         book.set_enabled("maria", False)
         code, d = usage_of(gate, p)
         assert code == 200 and d["enabled"] is False
 
     def test_a_lifted_limit_says_until_when(self, gate, book):
         import time as _time
-        p = book.add("maria", daily_limit=1000)
+        p = book.add("maria", week_limit=1000)
         until = int(_time.time()) + 3600
         book.set_unlimited_until("maria", until)
         assert usage_of(gate, p)[1]["unlimited_until"] == until
@@ -451,6 +664,29 @@ class TestGuestUsage:
         assert usage_of(gate, p)[1]["unlimited_until"] == 0
 
     def test_only_get_reads_it_and_nothing_goes_upstream(self, gate, book, upstream):
-        p = book.add("maria", daily_limit=1000)
+        p = book.add("maria", week_limit=1000)
         code, _ = usage_of(gate, p, method="POST")
         assert code == 403 and upstream.requests == []
+
+
+# --------------------------------------------------------------------------- #
+# the command line: `add --limit` and `limit` take the week; `list` shows both windows
+# --------------------------------------------------------------------------- #
+class TestCommandLine:
+    def test_add_and_limit_take_the_week(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("TURNSTILE_DATA", str(tmp_path))
+        assert ts.main(["add", "maria", "--limit", "140000000"]) == 0
+        g = ts.GuestBook(tmp_path / "guests.json").get("maria")
+        assert (g.five_hour_limit, g.week_limit) == (20_000_000, 140_000_000)
+        assert ts.main(["limit", "maria", "70000000"]) == 0
+        g = ts.GuestBook(tmp_path / "guests.json").get("maria")
+        assert (g.five_hour_limit, g.week_limit) == (10_000_000, 70_000_000)
+
+    def test_list_shows_the_five_hours_and_the_week(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("TURNSTILE_DATA", str(tmp_path))
+        ts.main(["add", "maria", "--limit", "140000000"])
+        ts.Ledger(tmp_path / "usage.db").record("maria", "m", {"input_tokens": 1000})
+        capsys.readouterr()
+        assert ts.main(["list"]) == 0
+        line = capsys.readouterr().out                            # GUESTS_LANG=ru here
+        assert "5 ч 1000 из 20000000" in line and "неделя 1000 из 140000000" in line, line
