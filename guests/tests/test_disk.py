@@ -254,3 +254,19 @@ def test_a_failed_disk_rolls_the_new_guest_back(monkeypatch, tmp_path):
     assert gc.ts.GuestBook(tmp_path / "guests.json").get("anna") is None
     assert not (tmp_path / "sandboxes.json").exists() or "anna" not in json.loads(
         (tmp_path / "sandboxes.json").read_text())
+
+
+def test_move_can_take_the_new_image_in_the_same_recreate(monkeypatch, tmp_path):
+    """One stop for the guest: onto its disk AND onto the new image at once."""
+    reg = {"anna": {"port": 18101, "telegram_id": 2, "public_key": "anna-k3y", "image": "old:1"}}
+    monkeypatch.setattr(gc, "_registry", lambda: reg)
+    monkeypatch.setattr(gc, "_save_registry", lambda r: None)
+    monkeypatch.setattr(gc, "live_terminals", lambda name: [])
+    monkeypatch.setattr(disk, "RealOps", lambda: FakeOps())
+    monkeypatch.setattr(disk, "copy_tree", lambda src, dst: None)
+    monkeypatch.setattr(gc, "_docker", lambda *a, **k: None)
+    monkeypatch.setattr(gc, "_volume_dir", lambda vol: Path("/v") / vol)
+    images = []
+    monkeypatch.setattr(gc, "cmd_recreate", lambda a: images.append(a.image) or 0)
+    assert gc.main(["disk-move", "anna", "--image", "agentkennel-guest:new"]) == 0
+    assert images == ["agentkennel-guest:new"]

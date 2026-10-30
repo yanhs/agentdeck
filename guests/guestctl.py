@@ -4,7 +4,7 @@
     guestctl.py add <name> --tg <telegram id> [--limit N]   create + start, prints access (N: per week)
     guestctl.py web <name>                                   https://sb-<name>.<domain>
     guestctl.py session <name>                               the owner's login to it (JSON)
-    guestctl.py disk-move <name> [--gb 20]                   an existing guest onto its own disk
+    guestctl.py disk-move <name> [--gb 20] [--image I]       an existing guest onto its own disk
     guestctl.py disk-watch                                   warn about full disks (a timer runs it)
     guestctl.py list [--json]                                who, port, state, 5-hour + weekly use
     guestctl.py limit <name> <tokens per week>               change the weekly limit (5 h: a seventh)
@@ -901,6 +901,7 @@ def main(argv=None) -> int:
     mv = sub.add_parser("disk-move")
     mv.add_argument("name")
     mv.add_argument("--gb", type=int, default=guest_disk.DEFAULT_GB)
+    mv.add_argument("--image", help="recreate on this image too (one stop for the guest)")
     sub.add_parser("disk-watch")
     a = ap.parse_args(argv)
     return {"add": cmd_add, "list": cmd_list, "check": cmd_check, "limit": cmd_limit,
