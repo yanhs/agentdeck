@@ -449,6 +449,28 @@ def W(i=0, cw=0, cr=0, out=0):
     return round(i + 1.25 * cw + 0.1 * cr + 5 * out)
 
 
+def test_conversations_that_are_not_terminals_count_as_other(q, tmp_path):
+    """The owner's own heavy work often runs outside the terminals — a Telegram bot,
+    headless helpers (30.10.2026: the list was empty while the bot spent the most). They
+    are one row, "Other conversations"; a trashed terminal is still not counted."""
+    tr = Tree(q.mod, tmp_path)
+    now = local_ts(2026, 10, 30, 15)
+    today = local_ts(2026, 10, 30, 9)
+    a = tr.terminal("Appeals")
+    tr.write(a, [assistant("msg_a1", today, out=100)])
+    gone = tr.terminal("Thrown away", trashed=True)
+    tr.write(gone, [assistant("msg_g1", today, out=10_000_000)])
+    bot = tmp_path / "projects" / "-home-u-pr" / "b0b0b0b0-0000-4000-8000-000000000000.jsonl"
+    bot.parent.mkdir(parents=True, exist_ok=True)
+    bot.write_text(json.dumps(assistant("msg_bot1", today, out=4000)) + "\n")
+    helper = bot.parent / "b0b0b0b0-0000-4000-8000-000000000000" / "subagents" / "agent-1.jsonl"
+    helper.parent.mkdir(parents=True)
+    helper.write_text(json.dumps(assistant("msg_h1", today, out=1000)) + "\n")
+    got = q.mod.quota_terminal_tokens(str(tr.libfile), str(tr.root), now)
+    assert got == [{"id": "other", "name": "Other conversations", "tokens_today": W(out=5000)},
+                   {"id": a["id"], "name": "Appeals", "tokens_today": W(out=100)}]
+
+
 def test_today_by_terminal_counts_weighted_tokens(q, tmp_path):
     tr = Tree(q.mod, tmp_path)
     now = local_ts(2026, 10, 30, 15)

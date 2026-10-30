@@ -1826,19 +1826,31 @@ class QuotaTerminals:
             lib = library.load(lib_file)
         except Exception:
             return []
-        rows, live = [], set()
+        rows, live, known = [], set(), set()
         for e in lib.get("sessions") or []:
             u = e.get("uuid")
-            if not isinstance(u, str) or library.is_trashed(e) or not e.get("cwd"):
+            if not isinstance(u, str) or not e.get("cwd"):
                 continue
             main = library.transcript_file(projects_root, e["cwd"], u)
             paths = [main] + sorted(glob.glob(os.path.join(
                 glob.escape(os.path.join(os.path.dirname(main), u)), "subagents", "*.jsonl")))
+            known.update(paths)
+            if library.is_trashed(e):
+                continue
             live.update(paths)
             n = round(sum(self._file(p, day) for p in paths))
             if n > 0:
                 rows.append({"id": e.get("id"), "name": e.get("name") or e.get("id"),
                              "tokens_today": n})
+        # everything else under the projects folder — a Telegram bot, headless helpers, other
+        # tools — as one row (30.10.2026: the list was empty while the bot spent the most)
+        root = glob.escape(str(projects_root))
+        others = [p for p in glob.glob(os.path.join(root, "*", "*.jsonl"))
+                  + glob.glob(os.path.join(root, "*", "*", "subagents", "*.jsonl")) if p not in known]
+        live.update(others)
+        n = round(sum(self._file(p, day) for p in others))
+        if n > 0:
+            rows.append({"id": "other", "name": "Other conversations", "tokens_today": n})
         for p in set(self.files) - live:             # gone or trashed: forget
             del self.files[p]
         rows.sort(key=lambda r: -r["tokens_today"])
