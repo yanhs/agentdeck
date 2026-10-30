@@ -170,6 +170,11 @@ docker compose up -d
 docker compose logs agentkennel | grep setup   # → /login?setup=<token>
 ```
 
+`docker compose up -d` downloads the ready image of the latest release,
+`ghcr.io/yanhs/agentkennel` (amd64 and arm64), so nothing is built on your machine.
+`AGENTKENNEL_VERSION=2.2.0 docker compose up -d` pins a version;
+`docker compose up -d --build` builds your checkout instead.
+
 1. Open `http://<your-vps-ip>:8765/login?setup=<token>` and set the password.
 2. **＋ New**, then sign in to Claude once: it asks for a colour theme, then how to
    log in (subscription or API key). The login is kept in a volume.

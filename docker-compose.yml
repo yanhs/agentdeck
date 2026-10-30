@@ -3,6 +3,9 @@ name: agentkennel
 
 services:
   agentkennel:
+    # the image of the release (ghcr.io, amd64 + arm64): `up -d` downloads it; `up -d --build`
+    # builds this checkout instead. AGENTKENNEL_VERSION=2.2.0 pins a version.
+    image: ghcr.io/yanhs/agentkennel:${AGENTKENNEL_VERSION:-latest}
     build: .
     ports:
       # http://<your-vps-ip>:8765 — set AGENTKENNEL_PORT to pick any free host port
