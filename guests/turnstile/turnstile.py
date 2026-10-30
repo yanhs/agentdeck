@@ -5,10 +5,11 @@ A guest sandbox only knows ``ANTHROPIC_BASE_URL=http://<turnstile>`` and
 ``ANTHROPIC_AUTH_TOKEN=<pass>``. The turnstile checks the pass, swaps it for the owner's
 OAuth login (read from ``~/.claude/oauth.env``, never copied, never sent back), forwards
 only ``/v1/messages*`` to api.anthropic.com, records each guest's usage and refuses a
-guest who has used up the daily limit. Only hashes of passes are stored.
+guest who has used up the 5-hour or the weekly limit (like the subscription's; decision
+30.10.2026). Only hashes of passes are stored.
 
     turnstile.py serve                       run the gate (env: TURNSTILE_BIND/PORT, ...)
-    turnstile.py add <name> --limit N [--tg ID]   new guest, prints the pass ONCE
+    turnstile.py add <name> --limit N [--tg ID]   new guest (N: per week), prints the pass ONCE
     turnstile.py list | enable <n> | disable <n> | remove <n> | limit <n> <N>
 """
 
@@ -19,6 +20,7 @@ import hashlib
 import hmac
 import http.client
 import json
+import math
 import os
 import re
 import secrets
@@ -42,6 +44,7 @@ from texts import t as _t  # noqa: E402
 OAUTH_BETA = "oauth-2025-04-20"
 DAY_TZ = ZoneInfo(os.environ.get("TURNSTILE_DAY_TZ", "America/Los_Angeles"))
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,30}$")
+FIVE_HOURS = 5 * 3600.0
 # Request headers that must not reach upstream (the guest's pass, hop-by-hop, length).
 _DROP_REQUEST = {
     "host",
@@ -65,13 +68,21 @@ def _hash(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
 
 
+def five_hour_of(week_limit: int) -> int:
+    """The 5-hour limit that goes with a weekly one: a seventh, rounded, never 0 out of
+    something (a week of 3 tokens still lets one request in)."""
+    week_limit = int(week_limit)
+    return max(1, round(week_limit / 7)) if week_limit > 0 else 0
+
+
 @dataclass
 class Guest:
     name: str
-    daily_limit: int
+    five_hour_limit: int
+    week_limit: int
     telegram_id: Optional[int]
     enabled: bool
-    unlimited_until: float = 0.0   # unix time; until then the daily limit is lifted
+    unlimited_until: float = 0.0   # unix time; until then both limits are lifted
 
     def limit_lifted(self, now: Optional[float] = None) -> bool:
         return self.unlimited_until > (time.time() if now is None else now)
@@ -83,17 +94,23 @@ class GuestBook:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
         self._lock = threading.Lock()
-        self._mtime = -1.0
+        self._seen: Optional[Tuple[int, int, int]] = None   # the file's stat when read
         self._data: Dict = {"guests": {}}
         self._load()
 
+    @staticmethod
+    def _stat(path: Path) -> Tuple[int, int, int]:
+        # mtime alone misses a rewrite within the same clock tick
+        st = path.stat()
+        return st.st_mtime_ns, st.st_size, st.st_ino
+
     def _load(self) -> None:
         if self.path.exists():
-            mtime = self.path.stat().st_mtime
-            if mtime != self._mtime:
+            seen = self._stat(self.path)
+            if seen != self._seen:
                 self._data = json.loads(self.path.read_text(encoding="utf-8"))
                 self._data.setdefault("guests", {})
-                self._mtime = mtime
+                self._seen = seen
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -101,9 +118,18 @@ class GuestBook:
         tmp.write_text(json.dumps(self._data, indent=2, ensure_ascii=False), "utf-8")
         os.chmod(tmp, 0o600)
         tmp.replace(self.path)
-        self._mtime = self.path.stat().st_mtime
+        self._seen = self._stat(self.path)
 
-    def add(self, name: str, daily_limit: int, telegram_id: Optional[int] = None) -> str:
+    @staticmethod
+    def _limits(week_limit: int, five_hour_limit: Optional[int] = None) -> Dict:
+        """The record's limit fields. daily_limit (= the 5 hours) is for a turnstile still
+        running the code before 30.10.2026: it reads that and nothing else."""
+        week = int(week_limit)
+        five = five_hour_of(week) if five_hour_limit is None else int(five_hour_limit)
+        return {"five_hour_limit": five, "week_limit": week, "daily_limit": five}
+
+    def add(self, name: str, week_limit: int, telegram_id: Optional[int] = None,
+            five_hour_limit: Optional[int] = None) -> str:
         if not NAME_RE.match(name):
             raise ValueError(f"bad guest name {name!r}: a-z, 0-9, '-', 2-31 chars")
         with self._lock:
@@ -113,7 +139,7 @@ class GuestBook:
             secret = "sbx-" + secrets.token_urlsafe(32)
             self._data["guests"][name] = {
                 "pass_sha256": _hash(secret),
-                "daily_limit": int(daily_limit),
+                **self._limits(week_limit, five_hour_limit),
                 "telegram_id": telegram_id,
                 "enabled": True,
                 "created": datetime.now(DAY_TZ).isoformat(timespec="seconds"),
@@ -122,9 +148,16 @@ class GuestBook:
             return secret
 
     def _guest(self, name: str, rec: Dict) -> Guest:
+        if "week_limit" in rec:
+            week = int(rec.get("week_limit") or 0)
+            five = int(rec.get("five_hour_limit", five_hour_of(week)) or 0)
+        else:                       # a record from before 30.10.2026: only a daily limit
+            five = int(rec.get("daily_limit") or 0)
+            week = 7 * five
         return Guest(
             name=name,
-            daily_limit=int(rec.get("daily_limit", 0)),
+            five_hour_limit=five,
+            week_limit=week,
             telegram_id=rec.get("telegram_id"),
             enabled=bool(rec.get("enabled", True)),
             unlimited_until=float(rec.get("unlimited_until") or 0),
@@ -163,11 +196,12 @@ class GuestBook:
     def set_enabled(self, name: str, enabled: bool) -> None:
         self._update(name, enabled=bool(enabled))
 
-    def set_limit(self, name: str, daily_limit: int) -> None:
-        self._update(name, daily_limit=int(daily_limit))
+    def set_limit(self, name: str, week_limit: int, five_hour_limit: Optional[int] = None) -> None:
+        """Set the weekly limit; the 5 hours get a seventh of it unless given apart."""
+        self._update(name, **self._limits(week_limit, five_hour_limit))
 
     def set_unlimited_until(self, name: str, until: float) -> None:
-        """Lift the daily limit until `until` (unix time); it comes back by itself."""
+        """Lift both limits until `until` (unix time); they come back by themselves."""
         self._update(name, unlimited_until=float(until))
 
     def remove(self, name: str) -> None:
@@ -317,6 +351,38 @@ class Ledger:
             ).fetchone()
         return int(row[0])
 
+    def spent_between(self, guest: str, start: float, end: float) -> int:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COALESCE(SUM(weighted),0) FROM usage WHERE guest=? AND ts>=? AND ts<?",
+                (guest, start, end),
+            ).fetchone()
+        return int(row[0])
+
+    def five_hour_window(self, guest: str, now: Optional[float] = None
+                         ) -> Optional[Tuple[float, float]]:
+        """(start, end) of the guest's open 5-hour window, None when none is open.
+
+        A window opens with a request when none is open and lasts 5 hours, like
+        Anthropic's. Worked out from the requests alone: the chain of windows starts at the
+        first request since the start of LAST week (a fixed point — counting from "5 hours
+        ago" would let a guest who never pauses slide the window forever), each next one
+        at the first request at or after the end of the one before."""
+        now = time.time() if now is None else now
+        t = week_bounds(week_bounds(now)[0] - 1)[0]
+        with self._lock:
+            while True:
+                row = self._db.execute(
+                    "SELECT MIN(ts) FROM usage WHERE guest=? AND ts>=? AND ts<=?",
+                    (guest, t, now),
+                ).fetchone()
+                if row[0] is None:
+                    return None
+                start = float(row[0])
+                if now < start + FIVE_HOURS:
+                    return start, start + FIVE_HOURS
+                t = start + FIVE_HOURS
+
 
 class SpendWatch:
     """Tells the owner when a guest spends more than ``threshold`` (1% of the week) within
@@ -388,20 +454,66 @@ def rewrite_headers(headers, owner: str) -> Dict[str, str]:
 USAGE_PATH = "/guest/usage"
 
 
+def week_bounds(now: float) -> Tuple[float, float]:
+    """The calendar week around `now`: Monday 00:00 to the next Monday 00:00, DAY_TZ."""
+    day = datetime.fromtimestamp(now, DAY_TZ).date()
+    monday = day - timedelta(days=day.weekday())
+    start = datetime.combine(monday, dtime(0), DAY_TZ)
+    end = datetime.combine(monday + timedelta(days=7), dtime(0), DAY_TZ)
+    return start.timestamp(), end.timestamp()
+
+
+def usage_windows(guest, ledger, now: Optional[float] = None) -> Dict:
+    """{"five_hour"|"seven_day": {"used", "limit", "resets_at"}} — weighted tokens in the
+    open 5-hour window (none open: 0 and resets_at 0) and in this calendar week."""
+    now = time.time() if now is None else now
+    window = ledger.five_hour_window(guest.name, now)
+    if window:
+        five_used, five_reset = ledger.spent_between(guest.name, *window), math.ceil(window[1])
+    else:
+        five_used, five_reset = 0, 0
+    week_start, week_end = week_bounds(now)
+    return {
+        "five_hour": {"used": int(five_used), "limit": int(guest.five_hour_limit),
+                      "resets_at": int(five_reset)},
+        "seven_day": {"used": int(ledger.spent_between(guest.name, week_start, week_end)),
+                      "limit": int(guest.week_limit), "resets_at": math.ceil(week_end)},
+    }
+
+
+def _utilization(w: Dict) -> float:
+    return w["used"] / w["limit"] if w["limit"] > 0 else 1.0
+
+
 def guest_usage(guest, ledger, now: Optional[float] = None) -> Dict:
     """A guest's own numbers for its dashboard (GET /guest/usage, decision 30.10.2026):
-    today's weighted spend, the daily limit, and when the day turns over (DAY_TZ)."""
+    its 5-hour and weekly windows, like the subscription's."""
     now = time.time() if now is None else now
-    tomorrow = datetime.fromtimestamp(now, DAY_TZ).date() + timedelta(days=1)
-    midnight = datetime.combine(tomorrow, dtime(0), DAY_TZ)
-    return {
+    out = {
         "guest": guest.name,
-        "spent_today": int(ledger.spent_today(guest.name)),
-        "limit": int(guest.daily_limit),
         "enabled": bool(guest.enabled),
         "unlimited_until": int(guest.unlimited_until) if guest.limit_lifted(now) else 0,
-        "resets_at": int(midnight.timestamp()),
     }
+    for key, w in usage_windows(guest, ledger, now).items():
+        out[key] = dict(w, utilization=_utilization(w))
+    return out
+
+
+def over_limit(guest, ledger, now: Optional[float] = None) -> Optional[str]:
+    """The refusal text when the guest has used up a limit, None to let it through.
+    Over both: the week is said — it comes back later."""
+    now = time.time() if now is None else now
+    if guest.limit_lifted(now):
+        return None
+    w = usage_windows(guest, ledger, now)
+    week, five = w["seven_day"], w["five_hour"]
+    if week["used"] >= week["limit"]:
+        return _t("gate_limit_week", spent=week["used"], limit=week["limit"])
+    if five["used"] >= five["limit"]:
+        at = five["resets_at"] or now + FIVE_HOURS
+        return _t("gate_limit_5h", spent=five["used"], limit=five["limit"],
+                  at=datetime.fromtimestamp(at, DAY_TZ).strftime("%H:%M"))
+    return None
 
 
 def _allowed_path(path: str) -> bool:
@@ -456,14 +568,10 @@ def make_server(
             if not _allowed_path(self.path):
                 log(f"DENY path guest={guest.name} {self.command} {self.path}")
                 return self._reply(403, _error("permission_error", _t("gate_path")))
-            spent = ledger.spent_today(guest.name)
-            if spent >= guest.daily_limit and not guest.limit_lifted():
-                log(f"LIMIT guest={guest.name} spent={spent} limit={guest.daily_limit}")
-                return self._reply(
-                    429,
-                    _error("rate_limit_error",
-                           _t("gate_limit", spent=spent, limit=guest.daily_limit)),
-                )
+            refusal = over_limit(guest, ledger)
+            if refusal:
+                log(f"LIMIT guest={guest.name} {refusal}")
+                return self._reply(429, _error("rate_limit_error", refusal))
 
             length = int(self.headers.get("content-length") or 0)
             body = self.rfile.read(length) if length else None
@@ -577,12 +685,15 @@ def main(argv=None) -> int:
         for name in book.names():
             g = book.get(name)
             state = _t("ts_on") if g.enabled else _t("ts_off")
-            spent = ledger.spent_today(name)
+            w = usage_windows(g, ledger)
+            five, week = w["five_hour"], w["seven_day"]
             until = datetime.fromtimestamp(g.unlimited_until, DAY_TZ).strftime('%d.%m %H:%M')
             lifted = _t("ts_unlimited_until", until=until) if g.limit_lifted() else ""
-            print(_t("ts_list_line", name=name, state=state, spent=spent, limit=g.daily_limit,
-                     spent_pct=spent / WEEK_PERCENT, limit_pct=g.daily_limit / WEEK_PERCENT,
-                     lifted=lifted, tg=g.telegram_id or "-"))
+            print(_t("ts_list_line", name=name, state=state,
+                     five_used=five["used"], five_limit=five["limit"],
+                     week_used=week["used"], week_limit=week["limit"],
+                     week_pct=week["used"] / WEEK_PERCENT, lifted=lifted,
+                     tg=g.telegram_id or "-"))
     elif args.cmd in ("enable", "disable"):
         book.set_enabled(args.name, args.cmd == "enable")
     elif args.cmd == "remove":

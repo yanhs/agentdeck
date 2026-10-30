@@ -36,7 +36,7 @@ class FakeTelegram:
 @pytest.fixture
 def book(tmp_path):
     b = ts.GuestBook(tmp_path / "guests.json")
-    b.add("anna", daily_limit=10, telegram_id=ANNA)
+    b.add("anna", week_limit=10, telegram_id=ANNA)
     return b
 
 

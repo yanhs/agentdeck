@@ -398,13 +398,19 @@ SERVICE_LOG = [
 def guests_payload(configured=True, checks=None) -> dict:
     guests = [
         {"name": "maria", "telegram_id": 5512, "port": 18101, "state": "running", "enabled": True,
-         "spent_today": 6_400_000, "limit": 20_000_000, "url": "https://sb-maria.example.com",
+         "five_hour": {"used": 6_400_000, "limit": 20_000_000, "resets_at": 1793430000},
+         "seven_day": {"used": 31_000_000, "limit": 140_000_000, "resets_at": 1793689200},
+         "url": "https://sb-maria.example.com",
          "created": "2026-10-20 10:00:00"},
         {"name": "alex", "telegram_id": 7731, "port": 18102, "state": "running", "enabled": True,
-         "spent_today": 17_200_000, "limit": 20_000_000, "url": "https://sb-alex.example.com",
+         "five_hour": {"used": 17_200_000, "limit": 20_000_000, "resets_at": 1793430000},
+         "seven_day": {"used": 88_000_000, "limit": 140_000_000, "resets_at": 1793689200},
+         "url": "https://sb-alex.example.com",
          "created": "2026-10-22 16:30:00"},
         {"name": "sam", "telegram_id": 9044, "port": 18103, "state": "exited", "enabled": False,
-         "spent_today": 0, "limit": 10_000_000, "url": "https://sb-sam.example.com",
+         "five_hour": {"used": 0, "limit": 10_000_000, "resets_at": 0},
+         "seven_day": {"used": 12_000_000, "limit": 70_000_000, "resets_at": 1793689200},
+         "url": "https://sb-sam.example.com",
          "created": "2026-10-24 08:10:00"},
     ]
     return {"installed": True, "configured": configured, "dir": "/home/deck/agentkennel/guests",

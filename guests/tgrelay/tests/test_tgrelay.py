@@ -50,8 +50,8 @@ def book(tmp_path):
 @pytest.fixture
 def passes(book):
     return {
-        "anna": book.add("anna", daily_limit=10, telegram_id=ANNA),
-        "boris": book.add("boris", daily_limit=10, telegram_id=BORIS),
+        "anna": book.add("anna", week_limit=10, telegram_id=ANNA),
+        "boris": book.add("boris", week_limit=10, telegram_id=BORIS),
     }
 
 
