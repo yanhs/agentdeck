@@ -236,3 +236,21 @@ def test_move_copies_every_volume_and_keeps_the_old_ones(monkeypatch, tmp_path):
     assert ("stop", "sbx-anna") in docker_calls
     assert not any(a[:2] == ("volume", "rm") for a in docker_calls)      # old volumes stay
     assert recreated == ["anna"] and reg["anna"]["disk_gb"] == 20
+
+
+def test_a_failed_disk_rolls_the_new_guest_back(monkeypatch, tmp_path):
+    """add: if the disk can't be made (sudo refused, no space), nothing of the guest stays."""
+    monkeypatch.setattr(gc, "DATA", tmp_path)
+    monkeypatch.setattr(gc, "REGISTRY", tmp_path / "sandboxes.json")
+    monkeypatch.setattr(gc, "PUBLIC_ROOT", str(tmp_path / "public"))
+    monkeypatch.setattr(gc, "_docker", lambda *a, **k: None)
+
+    def broken(*a, **k):
+        raise RuntimeError("sudo: a password is required")
+    monkeypatch.setattr(disk, "create", broken)
+    with pytest.raises(SystemExit) as e:
+        gc.main(["add", "anna", "--tg", "111", "--image", "img"])
+    assert "sudo" in str(e.value)
+    assert gc.ts.GuestBook(tmp_path / "guests.json").get("anna") is None
+    assert not (tmp_path / "sandboxes.json").exists() or "anna" not in json.loads(
+        (tmp_path / "sandboxes.json").read_text())

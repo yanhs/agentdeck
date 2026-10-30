@@ -481,7 +481,7 @@ def cmd_add(a) -> int:
                        text=True)
         _docker("restart", f"sbx-{a.name}")  # status_server starts the bridge on boot
         _wait_running(a.name)
-    except (subprocess.CalledProcessError, SystemExit) as exc:
+    except (subprocess.CalledProcessError, SystemExit, RuntimeError, OSError) as exc:  # the disk too
         book.remove(a.name)
         _docker("rm", "-f", f"sbx-{a.name}", check=False)
         err = getattr(exc, "stderr", "") or str(exc)
