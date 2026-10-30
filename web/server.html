@@ -248,9 +248,12 @@
     #gOff { color: var(--faint); font-size: 12px; line-height: 1.55; padding: 2px 2px 4px; max-width: 760px; }
     .guest + .guest { border-top: 1px solid var(--row-line); }
     .guest-main {
-      display: grid; grid-template-columns: 10px minmax(0, 1fr) 190px auto; align-items: center;
+      /* the buttons' column fits the longest set (Open Limit Stop Remove), so the spend
+         column lines up on every row whatever buttons a guest has */
+      display: grid; grid-template-columns: 10px minmax(0, 1fr) 190px minmax(236px, auto); align-items: center;
       gap: 12px; padding: 6px 2px;
     }
+    .guest-main .svc-btns { justify-content: flex-end; }
     .guest-id { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
     .guest-name { font-family: var(--mono); font-size: 12px; font-weight: 500; white-space: nowrap; }
     .guest-id a, .guest-id .gnote { font-size: 11.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -342,7 +345,7 @@
       .guest-main .dot { grid-area: dot; }
       .guest-id { grid-area: id; flex-direction: column; gap: 1px; }
       .gspend { grid-area: spend; }
-      .guest-main .svc-btns { grid-area: btns; }
+      .guest-main .svc-btns { grid-area: btns; justify-content: flex-start; }
       .gjob, .glimit { padding-left: 20px; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -1019,11 +1022,11 @@
     }
   }
 
-  // ── guests (GET /api/guests, POST /api/guests/{check,setup,stop,start,remove,limit}) ──
+  // ── guests (GET /api/guests, POST /api/guests/{check,setup,open,stop,start,remove,limit}) ──
   const G_API = '/api/guests';
   const gRows = new Map();                // name -> row element
   const gLimitOpen = new Set();           // names with the limit editor open
-  let gLast = null, gWizardOpen = false, gChecksAsked = false;
+  let gLast = null, gWizardOpen = false, gChecksAsked = false, gActErr = '';
   const STEP_CHECKS = { docker: ['docker'], bot: ['bot', 'owner'], domain: ['domain'], services: ['services'] };
   function fmtTok(n) {
     if (!isFinite(n) || n <= 0) return '0';
@@ -1040,7 +1043,8 @@
     return d;
   }
   function gButtons(g) {
-    return [['limit', 'Limit'], g.enabled && g.state === 'running' ? ['stop', 'Stop'] : ['start', 'Start'], ['remove', 'Remove']];
+    return [...(g.url && g.state === 'running' ? [['open', 'Open']] : []),
+      ['limit', 'Limit'], g.enabled && g.state === 'running' ? ['stop', 'Stop'] : ['start', 'Start'], ['remove', 'Remove']];
   }
   function gRow(name) {
     let r = gRows.get(name);
@@ -1092,7 +1096,8 @@
         const b = el('button', null, label);
         b.type = 'button';
         b.dataset.act = act;
-        b.title = { limit: `Change ${g.name}'s daily token limit`, stop: `Stop ${g.name}'s sandbox (files stay)`,
+        b.title = { open: `Open ${g.name}'s dashboard signed in as you, the owner — no password needed; theirs stays as it is`,
+                    limit: `Change ${g.name}'s daily token limit`, stop: `Stop ${g.name}'s sandbox (files stay)`,
                     start: `Start ${g.name}'s sandbox`, remove: `Remove ${g.name}'s sandbox (files stay on disk)` }[act];
         return b;
       }));
@@ -1153,7 +1158,7 @@
       ? 'No guests yet. Someone writes /start to the guest bot; you get “Let in?” in Telegram, and their sandbox appears here.' : '';
     empty.hidden = !empty.textContent;
     const err = $('#gErr');
-    err.textContent = d.configured && d.list_error ? `Could not list the guests: ${d.list_error}` : '';
+    err.textContent = gActErr || (d.configured && d.list_error ? `Could not list the guests: ${d.list_error}` : '');
     err.hidden = !err.textContent;
     const list = $('#gList'), seen = new Set();
     guests.forEach((g, i) => {
@@ -1201,15 +1206,34 @@
       if (gLimitOpen.has(name)) gLimitOpen.delete(name); else gLimitOpen.add(name);
       return gRender();
     }
+    if (act === 'open') return gOpen(name);
     if (act === 'remove' && !confirm(`Remove ${name}'s sandbox? Their terminals close and their page goes away; their files stay on this server's disk.`)) return;
     try {
       await gPost(act, { name });
+      gFailed('');
     } catch (e) {
-      $('#gErr').textContent = `Could not ${act} ${name}: ${e.message}`;
-      $('#gErr').hidden = false;
-      return;
+      return gFailed(`Could not ${act} ${name}: ${e.message}`);
     }
     await pollGuests();
+  }
+  // An action's error stays until the next action works (the poll would wipe it at once).
+  function gFailed(msg) {
+    gActErr = msg;
+    if (gLast) gRender();
+  }
+  // Open: a one-time link signs you in to the guest's dashboard. The tab is opened right on
+  // the click (a tab opened after an await is a blocked pop-up) and cut off from this page.
+  async function gOpen(name) {
+    const tab = window.open('', '_blank');
+    if (tab) tab.opener = null;
+    try {
+      const d = await gPost('open', { name });
+      gFailed('');
+      if (tab) tab.location.replace(d.url); else location.assign(d.url);
+    } catch (e) {
+      if (tab) tab.close();
+      gFailed(`Could not open ${name}'s dashboard: ${e.message}`);
+    }
   }
   async function gSaveLimit(name) {
     const inp = gRows.get(name) && gRows.get(name).querySelector('input.glimit-in');
@@ -1218,9 +1242,9 @@
     gLimitOpen.delete(name);
     try {
       await gPost('limit', { name, limit: Math.round(m * 1e6) });
+      gFailed('');
     } catch (e) {
-      $('#gErr').textContent = `Could not change ${name}'s limit: ${e.message}`;
-      $('#gErr').hidden = false;
+      gFailed(`Could not change ${name}'s limit: ${e.message}`);
     }
     await pollGuests();
   }

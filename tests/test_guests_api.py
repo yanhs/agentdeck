@@ -9,6 +9,10 @@ its command, guests/guestctl.py:
     POST /api/guests/check      -> run `guestctl.py doctor --json` (in the background)
     POST /api/guests/setup      {bot_token?, owner_id?, domain?} -> guests/.env, then a check
     POST /api/guests/stop|start|remove {name}, /limit {name, limit} -> `guestctl.py <action>`
+    POST /api/guests/open {name} -> {url}: a one-time link that opens the guest's dashboard
+                                    signed in as the owner (`guestctl.py session <name>`)
+    GET  /api/guests/enter?t=   -> reached only through the guest's nginx (/_owner-entry):
+                                    spends the link, sets the dashboard cookie, 302 to /
 
 Every guestctl call runs in a background thread: the status server answers one request at
 a time, and `remove` alone can take 90 s. Here guestctl.py is a fake script in a temp
@@ -52,6 +56,10 @@ elif cmd == "doctor":
 elif cmd in behave.get("fail", []):
     print("docker: no such container", file=sys.stderr)
     sys.exit(1)
+elif cmd == "session":
+    print(json.dumps(behave.get("session", {"host": "sb-%s.example.com" % sys.argv[2],
+                                            "cookie": "agents_session=owner.1900000000." + "ab" * 32,
+                                            "max_age": 43200})))
 else:
     print(cmd + " done")
 '''
@@ -301,3 +309,136 @@ def test_the_proxies_route_guests_to_the_status_server():
     for f in ("Caddyfile", "docker/Caddyfile"):
         assert "handle /api/guests*" in (TERMINAL_DIR / f).read_text(), f
     assert "location /api/guests" in (TERMINAL_DIR / "nginx/agents-subdomain.conf").read_text()
+
+
+# ── Open: the owner signs in to a guest's dashboard (decision 29.10.2026) ─────
+COOKIE = "agents_session=owner.1900000000." + "ab" * 32
+
+
+def listed(g):
+    configure(g)
+    assert until(lambda: get(g.base)[1]["guests"])
+
+
+def enter(base, ticket, host="sb-masha.example.com"):
+    """GET /api/guests/enter as the guest's nginx passes it (Host = the guest's address)."""
+    import http.client
+    c = http.client.HTTPConnection(base.split("//")[1], timeout=5)
+    c.request("GET", f"/api/guests/enter?t={ticket}", headers={"Host": host})
+    r = c.getresponse()
+    out = (r.status, {k.lower(): v for k, v in r.getheaders()}, r.read().decode())
+    c.close()
+    return out
+
+
+def ticket_of(url):
+    from urllib.parse import parse_qs, urlparse
+    u = urlparse(url)
+    assert (u.scheme, u.netloc, u.path) == ("https", "sb-masha.example.com", "/_owner-entry")
+    return parse_qs(u.query)["t"][0]
+
+
+def test_open_gives_a_one_time_link(g):
+    listed(g)
+    code, d = post(g.base, "/api/guests/open", {"name": "masha"})
+    assert code == 200 and set(d) == {"url"}
+    t = ticket_of(d["url"])
+    assert len(t) >= 40
+    assert ["session", "masha"] in g.calls()
+    assert "ab" * 32 not in json.dumps(d)            # the cookie itself never goes to the page
+    assert ticket_of(post(g.base, "/api/guests/open", {"name": "masha"})[1]["url"]) != t
+
+
+def test_the_link_signs_in_once(g):
+    listed(g)
+    t = ticket_of(post(g.base, "/api/guests/open", {"name": "masha"})[1]["url"])
+    code, h, _ = enter(g.base, t)
+    assert code == 302 and h["location"] == "/"
+    cookie = h["set-cookie"]
+    assert cookie.startswith(COOKIE + ";")
+    for flag in ("Path=/", "Max-Age=43200", "HttpOnly", "SameSite=Lax", "Secure"):
+        assert flag in cookie
+    assert h["cache-control"] == "no-store" and h["referrer-policy"] == "no-referrer"
+    code, h, body = enter(g.base, t)                 # spent
+    assert code == 403 and "set-cookie" not in h
+    assert "panel" in body.lower()
+
+
+def test_the_link_works_only_on_that_guests_address(g):
+    listed(g)
+    t = ticket_of(post(g.base, "/api/guests/open", {"name": "masha"})[1]["url"])
+    code, h, _ = enter(g.base, t, host="sb-petya.example.com")
+    assert code == 403 and "set-cookie" not in h
+    assert enter(g.base, t)[0] == 403                # a wrong try spends it too
+
+
+def test_the_link_expires(g, monkeypatch):
+    listed(g)
+    t = ticket_of(post(g.base, "/api/guests/open", {"name": "masha"})[1]["url"])
+    real = time.time
+    monkeypatch.setattr(g.mod.time, "time", lambda: real() + g.mod.GUEST_ENTRY_TTL + 1)
+    assert enter(g.base, t)[0] == 403
+
+
+@pytest.mark.parametrize("t", ["", "nope", "x" * 300], ids=["empty", "unknown", "long"])
+def test_no_link_no_cookie(g, t):
+    listed(g)
+    code, h, _ = enter(g.base, t)
+    assert code == 403 and "set-cookie" not in h
+
+
+def test_the_host_may_carry_a_port(g):
+    listed(g)
+    t = ticket_of(post(g.base, "/api/guests/open", {"name": "masha"})[1]["url"])
+    assert enter(g.base, t, host="SB-Masha.example.com:443")[0] == 302
+
+
+@pytest.mark.parametrize("change,code", [
+    ({"url": None}, 409),                            # no address of their own yet
+    ({"state": "exited"}, 409),                      # the sandbox is not running
+])
+def test_open_needs_a_running_guest_with_an_address(g, change, code):
+    configure(g)
+    g.behave(guests=[dict(GUESTS[0], **change)])
+    assert until(lambda: get(g.base)[1]["guests"])
+    c, d = post(g.base, "/api/guests/open", {"name": "masha"})
+    assert c == code and d["error"]
+    assert ["session", "masha"] not in g.calls()
+
+
+def test_open_an_unknown_guest(g):
+    listed(g)
+    assert post(g.base, "/api/guests/open", {"name": "boris"})[0] == 404
+
+
+def test_open_checks_the_name_and_the_module(g):
+    assert post(g.base, "/api/guests/open", {"name": "masha"})[0] == 409    # not set up
+    configure(g)
+    assert post(g.base, "/api/guests/open", {"name": "../x"})[0] == 400
+
+
+def test_open_reports_why_it_failed(g):
+    listed(g)
+    g.behave(fail=["session"])
+    code, d = post(g.base, "/api/guests/open", {"name": "masha"})
+    assert code == 502 and "no such container" in d["error"]
+
+
+@pytest.mark.parametrize("session", [
+    {"host": "sb-masha.example.com", "cookie": COOKIE + "\r\nSet-Cookie: evil=1", "max_age": 43200},
+    {"host": "sb-masha.example.com", "cookie": "other=1", "max_age": 43200},
+    {"host": "sb-evil.example.com", "cookie": COOKIE, "max_age": 43200},
+    {"host": "sb-masha.example.com", "cookie": COOKIE, "max_age": "forever"},
+    {"nothing": True},
+])
+def test_open_refuses_a_session_that_does_not_look_right(g, session):
+    listed(g)
+    g.behave(session=session)
+    code, d = post(g.base, "/api/guests/open", {"name": "masha"})
+    assert code == 502 and "url" not in d
+
+
+def test_open_needs_json_and_same_origin(g):
+    listed(g)
+    assert post(g.base, "/api/guests/open", {"name": "masha"}, origin="https://evil.example")[0] == 403
+    assert post(g.base, "/api/guests/open", {"name": "masha"}, ctype="text/plain")[0] == 415

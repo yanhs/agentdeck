@@ -42,6 +42,7 @@ class FakeGuests:
         self.checks = None
         self.jobs = {}
         self.posts = []
+        self.open_error = None
         self.env = ({"bot_token_set": True, "owner_id": "42", "domain": "example.com"}
                     if configured else {"bot_token_set": False, "owner_id": "", "domain": ""})
 
@@ -62,6 +63,12 @@ class FakeGuests:
                                for c in CHECKS_BAD]
                 self.env = {"bot_token_set": True, "owner_id": body.get("owner_id", ""),
                             "domain": body.get("domain", "")}
+            elif what == "open":
+                if self.open_error:
+                    return route.fulfill(status=409, content_type="application/json",
+                                         body=json.dumps({"error": self.open_error}))
+                return route.fulfill(status=200, content_type="application/json", body=json.dumps(
+                    {"url": f"https://sb-{body['name']}.example.com/_owner-entry?t=T0KEN"}))
             else:
                 g = next(x for x in self.guests if x["name"] == body["name"])
                 if what == "stop":
@@ -140,8 +147,51 @@ def test_lists_guests_with_todays_spend(page):
 
 def test_buttons_match_the_state(page):
     guest_rows(page)
-    assert acts(page, "masha") == ["limit", "stop", "remove"]
+    # Open only where there is a running dashboard with an address of its own
+    assert acts(page, "masha") == ["open", "limit", "stop", "remove"]
     assert acts(page, "petya") == ["limit", "start", "remove"]
+
+
+def test_spend_column_lines_up(page):
+    """Rows have different buttons (Open only on a running guest with an address): the
+    spend column still starts at one x on every row."""
+    guest_rows(page)
+    xs = page.eval_on_selector_all("#guests .guest .gspend",
+                                   "els => els.map(e => Math.round(e.getBoundingClientRect().left))")
+    assert len(xs) == 2 and len(set(xs)) == 1, xs
+
+
+def guest_page(route):
+    route.fulfill(status=200, content_type="text/html", body="<title>masha</title><p>guest dashboard</p>")
+
+
+def test_open_signs_in_to_the_guest_dashboard(page, fake):
+    """Decision 29.10.2026: the owner opens a guest's dashboard without their password."""
+    guest_rows(page)
+    page.context.route(re.compile(r"^https://sb-masha\.example\.com/"), guest_page)
+    with page.expect_popup() as pop:
+        page.click('#guests .guest[data-name="masha"] button[data-act="open"]')
+    tab = pop.value
+    tab.wait_for_url("https://sb-masha.example.com/_owner-entry?t=T0KEN")
+    assert fake.posts[-1][:2] == ("/api/guests/open", {"name": "masha"})
+    assert tab.evaluate("window.opener") is None       # the guest's page can't reach back
+    title = page.get_attribute('#guests .guest[data-name="masha"] button[data-act="open"]', "title")
+    assert "password" in title.lower() and "masha" in title
+    tab.close()
+
+
+def test_open_failure_says_why_and_closes_the_empty_tab(page, fake):
+    guest_rows(page)
+    fake.open_error = "masha's sandbox is not running"
+    with page.expect_popup() as pop:
+        page.click('#guests .guest[data-name="masha"] button[data-act="open"]')
+    page.wait_for_selector("#gErr:not([hidden])")
+    assert "masha's sandbox is not running" in page.inner_text("#gErr")
+    page.wait_for_timeout(1000)                         # a few polls later: still there
+    assert "masha's sandbox is not running" in page.inner_text("#gErr")
+    tab = pop.value
+    tab.wait_for_event("close", timeout=3000) if not tab.is_closed() else None
+    assert tab.is_closed()
 
 
 def test_stop_and_start(page, fake):

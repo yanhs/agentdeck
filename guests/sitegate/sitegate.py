@@ -120,8 +120,10 @@ def host_for(site: str, guest: str) -> str:
     return host
 
 
-def render_vhost(host: str, ip: str, port: int, tls: bool) -> str:
-    """nginx config for one guest site. tls=False: only what the first certificate needs."""
+def render_vhost(host: str, ip: str, port: int, tls: bool, extra: str = "") -> str:
+    """nginx config for one guest site. tls=False: only what the first certificate needs.
+    `extra`: locations put before the catch-all of the https block (a guest's dashboard
+    has one: the owner's way in, see guestctl.owner_entry_location)."""
     http = (
         "server {\n"
         "    listen 80;\n    listen [::]:80;\n"
@@ -142,7 +144,8 @@ def render_vhost(host: str, ip: str, port: int, tls: bool) -> str:
         "    include /etc/letsencrypt/options-ssl-nginx.conf;\n"
         "    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;\n"
         "    client_max_body_size 50m;\n"
-        "    location / {\n"
+        + extra
+        + "    location / {\n"
         f"        proxy_pass http://{ip}:{port};\n"
         "        proxy_http_version 1.1;\n"
         "        proxy_set_header Upgrade $http_upgrade;\n"

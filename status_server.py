@@ -1268,6 +1268,21 @@ GUESTS_ROUTE = "/api/guests"
 GUESTS_LIST_TTL = 10
 GUEST_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
 GUESTS_ACTIONS = ("stop", "start", "remove", "limit")
+# Open (decision 29.10.2026): the owner signs in to a guest's dashboard without the guest's
+# password. POST /api/guests/open gets a login signed by `guestctl.py session` and returns a
+# one-time link to https://sb-<name>.<domain>/_owner-entry; the guest's nginx sends that one
+# path here (GET /api/guests/enter), and the link is spent for the cookie on that address.
+GUEST_ENTRY_PATH = "/_owner-entry"          # guestctl.OWNER_ENTRY
+GUEST_ENTRY_ROUTE = "/api/guests/enter"     # guestctl.OWNER_PANEL_ENTRY
+GUEST_ENTRY_TTL = 60                        # seconds an Open link stays good
+GUEST_ENTRY_COOKIE_RE = re.compile(r"agents_session=[A-Za-z0-9_-]{1,64}\.[0-9]{1,12}\.[0-9a-f]{64}")
+GUEST_ENTRY_SPENT = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentKennel</title>
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#0d1117;color:#e6edf3;font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif}
+p{max-width:30em;padding:0 24px;text-align:center}</style></head><body>
+<p>This sign-in link has already been used or has expired. Press <b>Open</b> next to the
+guest on your AgentKennel panel to get a new one.</p></body></html>"""
 # what the wizard sets; OWNER_TG_ID is not asked: the guests' admin is the owner of
 # "Your bot" (the dashboard's Telegram page) — "Let in?" goes there (decision 27.10.2026)
 _GUESTS_ENV_KEYS = {"bot_token": "GUEST_BOT_TOKEN", "domain": "GUESTS_DOMAIN"}
@@ -1347,6 +1362,7 @@ class GuestsPanel:
         self.checks = None            # last `doctor --json` result
         self.checking = False
         self.jobs = {}                # name -> {action, started, done, ok, output}
+        self.entries = {}             # Open links: ticket -> {host, cookie, max_age, until}
 
     @staticmethod
     def run(*args, timeout=180):
@@ -1466,6 +1482,57 @@ class GuestsPanel:
         self._spawn(work)
         return {"ok": True}
 
+    def open(self, body):
+        """A one-time link that opens the guest's dashboard signed in as the owner."""
+        name = body.get("name")
+        if not isinstance(name, str) or not GUEST_NAME_RE.match(name):
+            raise LibError(400, "bad guest name")
+        if not self.state()["configured"]:
+            raise LibError(409, "the guests module is not set up")
+        if self.guests is None:
+            self._list()
+        with self.lock:
+            g = next((x for x in self.guests or [] if isinstance(x, dict) and x.get("name") == name), None)
+        if g is None:
+            raise LibError(404, f"no guest {name}")
+        url = g.get("url") if isinstance(g.get("url"), str) else ""
+        host = (urlparse(url).hostname or "").lower() if url.startswith("https://") else ""
+        if not host:
+            raise LibError(409, f"{name} has no web address yet")
+        if g.get("state") != "running":
+            raise LibError(409, f"{name}'s sandbox is not running")
+        try:
+            code, out, err = self.run("session", name, timeout=30)
+        except Exception as e:
+            raise LibError(502, f"guestctl session: {str(e)[:200]}")
+        if code != 0:
+            raise LibError(502, (err or out).strip()[-300:] or f"guestctl session: exit {code}")
+        try:
+            s = json.loads(out)
+            cookie, max_age = s["cookie"], s["max_age"]
+            ok = (isinstance(cookie, str) and GUEST_ENTRY_COOKIE_RE.fullmatch(cookie) is not None
+                  and s.get("host") == host and type(max_age) is int and 0 < max_age <= 31 * 86400)
+        except (ValueError, KeyError, TypeError):
+            ok = False
+        if not ok:      # it goes into a header on the guest's address: exactly a login or nothing
+            raise LibError(502, "guestctl session: the answer doesn't look like a login")
+        ticket, now = secrets.token_urlsafe(32), time.time()
+        with self.lock:
+            self.entries = {t: e for t, e in self.entries.items() if e["until"] > now}
+            self.entries[ticket] = {"host": host, "cookie": cookie, "max_age": max_age,
+                                    "until": now + GUEST_ENTRY_TTL}
+        return {"url": f"{url.rstrip('/')}{GUEST_ENTRY_PATH}?t={ticket}"}
+
+    def enter(self, ticket, host):
+        """Spend an Open link: its entry, or None — unknown, spent, expired, or asked for on
+        another address (a wrong try spends it too)."""
+        with self.lock:
+            e = self.entries.pop(ticket, None) if ticket else None
+        if not e or e["until"] < time.time():
+            return None
+        host = (host or "").split(":", 1)[0].strip().lower()
+        return e if hmac.compare_digest(host.encode(), e["host"].encode()) else None
+
 
 GUESTS = GuestsPanel()
 
@@ -1550,6 +1617,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _guests(self, method):
         route = self._route()
+        if method == "GET" and route == GUEST_ENTRY_ROUTE:
+            return self._guest_enter()
         try:
             if method == "GET" and route == GUESTS_ROUTE:
                 data = GUESTS.state()
@@ -1561,6 +1630,8 @@ class Handler(BaseHTTPRequestHandler):
                     data = {"ok": True}
                 elif what == "setup":
                     data = GUESTS.setup(body)
+                elif what == "open":
+                    data = GUESTS.open(body)
                 else:
                     data = GUESTS.act(what, body)
             else:
@@ -1570,6 +1641,28 @@ class Handler(BaseHTTPRequestHandler):
             self._lib_json(e.code, {"error": str(e)})
         except Exception as e:
             self._lib_json(500, {"error": str(e)[:200]})
+
+    def _guest_enter(self):
+        """GET /api/guests/enter?t= — comes only through a guest's nginx (/_owner-entry), so
+        the cookie lands on the guest's address. Nothing else of the panel is reachable there."""
+        ticket = parse_qs(urlparse(getattr(self, "path", "/")).query).get("t", [""])[0]
+        e = GUESTS.enter(ticket, self.headers.get("Host", ""))
+        if not e:
+            body = GUEST_ENTRY_SPENT.encode("utf-8")
+            self.send_response(403)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+        else:
+            body = b""
+            self.send_response(302)
+            self.send_header("Set-Cookie", f"{e['cookie']}; Path=/; Max-Age={e['max_age']}; "
+                                           "HttpOnly; SameSite=Lax; Secure")
+            self.send_header("Location", "/")
+            self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _library_post(self):
         route = self._route()

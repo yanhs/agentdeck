@@ -24,6 +24,13 @@ you set it up.
   and can publish a site from the sandbox as `https://<site>-<guest>.<domain>` (at most 3;
   you are told about each).
 
+- **You can look in.** **Open** next to a guest on the dashboard's Server page opens their
+  dashboard signed in as you, without their password, which stays as it is. The panel
+  signs a login with the sandbox's own key and hands it over through a one-time link
+  (one minute, one use, only on that guest's address): the guest's nginx sends the one
+  path `/_owner-entry` to your panel, everything else goes to the sandbox. Pages made
+  before this get that path the first time you press Open.
+
 ## Set up
 
 You need AgentKennel installed from a checkout (this folder lives inside it), Docker that
@@ -55,6 +62,7 @@ your user may use, systemd, and — for web addresses — nginx and certbot.
 ```
 python3 guests/guestctl.py add <name> --tg <telegram id> [--limit N]   new sandbox
 python3 guests/guestctl.py web <name>              https://sb-<name>.<domain> (DNS, certificate)
+python3 guests/guestctl.py session <name>          your login to their dashboard (the panel's Open)
 python3 guests/guestctl.py list [--json]           guests, state, today's usage and limit
 python3 guests/guestctl.py limit <name> <tokens>   change the daily limit
 python3 guests/guestctl.py stop|start <name>       pause / resume (the pass stops working too)

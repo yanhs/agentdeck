@@ -3,6 +3,7 @@
 
     guestctl.py add <name> --tg <telegram id> [--limit N]   create + start, prints access
     guestctl.py web <name>                                   https://sb-<name>.<domain>
+    guestctl.py session <name>                               the owner's login to it (JSON)
     guestctl.py list [--json]                                who, port, state, today's spend
     guestctl.py limit <name> <tokens per day>                change the daily limit
     guestctl.py check <name>                                 network walls from inside
@@ -22,6 +23,8 @@ the guest's public-files folder. Settings: guests/.env (see guestenv.py, .env.ex
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import re
 import secrets
@@ -88,12 +91,96 @@ def dashboard_host(name: str) -> str:
     return f"sb-{name}.{domain()}"
 
 
+# The owner opens a guest's dashboard without the guest's password (decision 29.10.2026).
+# `session` signs a dashboard login with the sandbox's own cookie key; the owner's panel
+# hands it over on the guest's address at OWNER_ENTRY, the one path of that address that
+# goes to the panel (127.0.0.1:3011, status_server.py) instead of the sandbox.
+OWNER_ENTRY = "/_owner-entry"
+OWNER_PANEL_ENTRY = "http://127.0.0.1:3011/api/guests/enter"
+OWNER_USER = "owner"
+OWNER_TTL = 12 * 3600  # first expiry; the dashboard then renews it like its own logins
+SANDBOX_AUTH_SECRET = "/app/.sessions/.agents_auth_secret"  # docker/entrypoint.sh's default
+SESSION_COOKIE = "agents_session"
+
+
+def owner_entry_location() -> str:
+    return (
+        f"    location = {OWNER_ENTRY} {{\n"
+        f"        proxy_pass {OWNER_PANEL_ENTRY};\n"
+        "        proxy_set_header Host $host;\n"
+        "        proxy_set_header X-Forwarded-Proto https;\n"
+        "    }\n"
+    )
+
+
 def dashboard_vhost(name: str, port: int) -> str:
     """nginx for the guest's own AgentKennel dashboard (its password is AgentKennel's)."""
     sys.path.insert(0, str(HERE / "sitegate"))
     import sitegate  # noqa: E402
 
-    return sitegate.render_vhost(dashboard_host(name), "127.0.0.1", port, tls=True)
+    return sitegate.render_vhost(dashboard_host(name), "127.0.0.1", port, tls=True,
+                                 extra=owner_entry_location())
+
+
+def sandbox_auth_secret(name: str) -> bytes:
+    """The key the guest's dashboard signs its logins with, read inside the sandbox."""
+    # the sandbox's own setting: AGENTKENNEL_* from 2.1, AGENTDECK_* before; else the default
+    r = subprocess.run(["docker", "exec", f"sbx-{name}", "sh", "-c",
+                        'cat "${AGENTKENNEL_AUTH_SECRET:-${AGENTDECK_AUTH_SECRET:-'
+                        + SANDBOX_AUTH_SECRET + '}}"'],
+                       capture_output=True, timeout=20)
+    key = (r.stdout or b"").strip()
+    if r.returncode != 0 or not key or len(key) > 1024:
+        why = (r.stderr or b"").decode(errors="replace").strip()[-200:] or "no key"
+        raise SystemExit(f"{name}: the dashboard's login key can't be read ({why}); "
+                         "is the sandbox running?")
+    return key
+
+
+def owner_session(name: str, now: float | None = None, ttl: int = OWNER_TTL,
+                  secret: bytes | None = None) -> dict:
+    """A login to sb-<name>.<domain> for the owner, as the dashboard itself signs one
+    (status_server._sign_token): <user>.<expiry>.<hmac-sha256>."""
+    key = sandbox_auth_secret(name) if secret is None else secret
+    exp = int(time.time() if now is None else now) + ttl
+    sig = hmac.new(key, f"{OWNER_USER}.{exp}".encode(), hashlib.sha256).hexdigest()
+    return {"host": dashboard_host(name), "cookie": f"{SESSION_COOKIE}={OWNER_USER}.{exp}.{sig}",
+            "max_age": ttl}
+
+
+def _site_ops():
+    sys.path.insert(0, str(HERE / "sitegate"))
+    import sitegate  # noqa: E402
+
+    return sitegate.RealOps()
+
+
+def ensure_owner_entry(name: str, port: int) -> None:
+    """Dashboards opened before the Open button get OWNER_ENTRY once. Only a served
+    dashboard (https to its sandbox port): a page still waiting for its certificate is
+    left to `web`, and the 404 stub of a guest being removed is never brought back."""
+    if not guestenv.domain() or not port:
+        return
+    ops = _site_ops()
+    conf = ops.VHOSTS / f"{dashboard_host(name)}.conf"
+    try:
+        text = conf.read_text()
+    except OSError:
+        return
+    served = "listen 443" in text and f"proxy_pass http://127.0.0.1:{port};" in text
+    if not served or f"location = {OWNER_ENTRY} " in text:
+        return
+    ops.write_vhost(dashboard_host(name), dashboard_vhost(name, port))
+    ops.reload()
+
+
+def cmd_session(a) -> int:
+    info = _registry().get(a.name)
+    if not info:
+        raise SystemExit(f"no guest {a.name}")
+    ensure_owner_entry(a.name, int(info.get("port") or 0))
+    print(json.dumps(owner_session(a.name)))
+    return 0
 
 
 def cmd_web(a) -> int:
@@ -718,13 +805,14 @@ def main(argv=None) -> int:
     for c in ("check", "stop", "start", "remove"):
         sub.add_parser(c).add_argument("name")
     sub.add_parser("web").add_argument("name")
+    sub.add_parser("session").add_argument("name")
     rec = sub.add_parser("recreate")
     rec.add_argument("name")
     rec.add_argument("--image")
     rec.add_argument("--force", action="store_true")
     a = ap.parse_args(argv)
     return {"add": cmd_add, "list": cmd_list, "check": cmd_check, "limit": cmd_limit,
-            "recreate": cmd_recreate, "web": cmd_web, "doctor": cmd_doctor,
+            "recreate": cmd_recreate, "web": cmd_web, "session": cmd_session, "doctor": cmd_doctor,
             "files-web": cmd_files_web, "image-tag": cmd_image_tag}.get(a.cmd, cmd_simple)(a)
 
 
