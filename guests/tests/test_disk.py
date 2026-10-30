@@ -32,6 +32,8 @@ def test_fstab_mounts_the_image_and_the_shared_folder_before_docker():
     img, pub = lines
     assert img.split()[:3] == [str(disk.image("anna")), str(disk.mount_point("anna")), "ext4"]
     assert "loop" in img and "nofail" in img and "x-systemd.before=docker.service" in img
+    # owner, 30.10.2026: a deleted file gives its space back to the server at once
+    assert "discard" in img.split()[3].split(",")
     assert pub.split()[:3] == [f"{disk.mount_point('anna')}/public", "/srv/g/public/anna-k3y", "none"]
     assert "bind" in pub and f"x-systemd.requires-mounts-for={disk.mount_point('anna')}" in pub
     assert "x-systemd.before=docker.service" in pub

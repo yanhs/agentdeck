@@ -52,7 +52,8 @@ def fstab_lines(name: str, public_dir: Path) -> List[str]:
         if re.search(r"\s", str(p)):
             raise ValueError(f"a path with whitespace can't go into /etc/fstab: {p!r}")
     return [
-        f"{img} {mnt} ext4 loop,nofail,x-systemd.before=docker.service 0 0",
+        # discard: a file deleted in the sandbox gives its space back to the server at once
+        f"{img} {mnt} ext4 loop,discard,nofail,x-systemd.before=docker.service 0 0",
         f"{mnt}/public {public_dir} none bind,nofail,x-systemd.requires-mounts-for={mnt},"
         "x-systemd.before=docker.service 0 0",
     ]
