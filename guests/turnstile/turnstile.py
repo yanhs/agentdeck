@@ -28,7 +28,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time as dtime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
@@ -385,6 +385,25 @@ def rewrite_headers(headers, owner: str) -> Dict[str, str]:
     return out
 
 
+USAGE_PATH = "/guest/usage"
+
+
+def guest_usage(guest, ledger, now: Optional[float] = None) -> Dict:
+    """A guest's own numbers for its dashboard (GET /guest/usage, decision 30.10.2026):
+    today's weighted spend, the daily limit, and when the day turns over (DAY_TZ)."""
+    now = time.time() if now is None else now
+    tomorrow = datetime.fromtimestamp(now, DAY_TZ).date() + timedelta(days=1)
+    midnight = datetime.combine(tomorrow, dtime(0), DAY_TZ)
+    return {
+        "guest": guest.name,
+        "spent_today": int(ledger.spent_today(guest.name)),
+        "limit": int(guest.daily_limit),
+        "enabled": bool(guest.enabled),
+        "unlimited_until": int(guest.unlimited_until) if guest.limit_lifted(now) else 0,
+        "resets_at": int(midnight.timestamp()),
+    }
+
+
 def _allowed_path(path: str) -> bool:
     bare = path.split("?", 1)[0]
     return bare == "/v1/messages" or bare.startswith("/v1/messages/")
@@ -427,6 +446,10 @@ def make_server(
             if guest is None:
                 log(f"DENY unknown-pass {self.command} {self.path}")
                 return self._reply(401, _error("authentication_error", _t("gate_bad_pass")))
+            if self.path.split("?", 1)[0] == USAGE_PATH:   # the guest's own numbers, from here
+                if self.command != "GET":
+                    return self._reply(403, _error("permission_error", _t("gate_path")))
+                return self._reply(200, json.dumps(guest_usage(guest, ledger)).encode())
             if not guest.enabled:
                 log(f"DENY disabled guest={guest.name}")
                 return self._reply(403, _error("permission_error", _t("gate_disabled")))

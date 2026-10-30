@@ -17,6 +17,8 @@ import hmac
 import hashlib
 import secrets
 import unicodedata
+import urllib.error
+import urllib.request
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
@@ -1537,6 +1539,66 @@ class GuestsPanel:
 GUESTS = GuestsPanel()
 
 
+# ── A guest's sandbox: today's Claude spend (GET /api/quota, decision 30.10.2026) ────
+# Claude goes through the host's turnstile here (ANTHROPIC_BASE_URL) with the guest's own
+# pass (ANTHROPIC_AUTH_TOKEN). The dashboard asks the turnstile for that pass's numbers and
+# shows "today X of Y tokens". On any other install there is no turnstile: nothing to show.
+# The pass never goes to the page.
+QUOTA_ROUTE = "/api/quota"
+QUOTA_TTL = 20                  # seconds an answer is reused (the page asks once a minute)
+_QUOTA_INTS = ("spent_today", "limit", "unlimited_until", "resets_at")
+
+
+class Quota:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.clear()
+
+    def clear(self):
+        with self.lock:
+            self.at, self.data = 0.0, None
+
+    @staticmethod
+    def source():
+        base = (os.environ.get("ANTHROPIC_BASE_URL") or "").strip().rstrip("/")
+        token = (os.environ.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+        host = (urlparse(base).hostname or "").lower()
+        if not base or not token or host == "anthropic.com" or host.endswith(".anthropic.com"):
+            return None
+        return base, token
+
+    @staticmethod
+    def fetch(base, token):
+        req = urllib.request.Request(base + "/guest/usage",
+                                     headers={"Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=4) as r:
+                d = json.loads(r.read(65536))
+        except urllib.error.HTTPError as e:
+            return {"available": False, "error": f"the turnstile answered HTTP {e.code}"}
+        except (OSError, ValueError) as e:
+            return {"available": False, "error": f"the turnstile did not answer ({type(e).__name__})"}
+        if not isinstance(d, dict) or any(type(d.get(k)) is not int for k in _QUOTA_INTS):
+            return {"available": False, "error": "the turnstile's answer has no numbers"}
+        return {"available": True, **{k: d[k] for k in _QUOTA_INTS},
+                "enabled": d.get("enabled") is not False}
+
+    def get(self):
+        src = self.source()
+        if src is None:
+            return {"available": False}
+        with self.lock:
+            if self.data is not None and time.time() - self.at < QUOTA_TTL:
+                return dict(self.data)
+        data = self.fetch(*src)
+        with self.lock:
+            self.at, self.data = time.time(), data
+        return dict(data)
+
+
+QUOTA = Quota()
+
+
 class Handler(BaseHTTPRequestHandler):
     def _server_get(self):
         try:
@@ -1685,6 +1747,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._library_get()
         if self._route() == SERVER_ROUTE:
             return self._server_get()
+        if self._route() == QUOTA_ROUTE:
+            return self._lib_json(200, QUOTA.get())
         if self._is_services():
             return self._services("GET")
         if self._is_guests():

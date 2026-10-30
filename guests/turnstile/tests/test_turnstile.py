@@ -390,3 +390,67 @@ def test_owner_alerts_go_through_the_configured_channel(monkeypatch):
     monkeypatch.setattr(ts.guestenv, "notify_owner", lambda text: told.append(text))
     ts.tg_notify("⚠️ x")
     assert told == ["⚠️ x"]
+
+
+# --------------------------------------------------------------------------- #
+# a guest's own usage: GET /guest/usage (decision 30.10.2026 — the guest's dashboard
+# shows "today X of Y tokens"); answered here, nothing goes to Anthropic
+# --------------------------------------------------------------------------- #
+def usage_of(gate, token, method="GET", header="authorization"):
+    conn = http.client.HTTPConnection("127.0.0.1", gate.server_address[1], timeout=10)
+    h = {"authorization": f"Bearer {token}"} if header == "authorization" else {"x-api-key": token}
+    conn.request(method, "/guest/usage", headers=h)
+    resp = conn.getresponse()
+    raw = resp.read()
+    return resp.status, json.loads(raw or b"{}")
+
+
+class TestGuestUsage:
+    def test_a_guest_sees_its_own_spend_and_limit(self, gate, book, ledger, upstream):
+        from datetime import datetime, time as dtime, timedelta
+        p = book.add("maria", daily_limit=5_000_000)
+        book.add("pavel", daily_limit=9_000_000)
+        ledger.record("maria", "claude-opus-x", {"input_tokens": 1000, "output_tokens": 10})
+        ledger.record("pavel", "claude-opus-x", {"input_tokens": 777})
+        spent = ledger.spent_today("maria")
+        code, d = usage_of(gate, p)
+        assert code == 200
+        assert d == {"guest": "maria", "spent_today": spent, "limit": 5_000_000,
+                     "enabled": True, "unlimited_until": 0, "resets_at": d["resets_at"]}
+        midnight = datetime.combine((datetime.now(ts.DAY_TZ) + timedelta(days=1)).date(),
+                                    dtime(0), ts.DAY_TZ)
+        assert d["resets_at"] == int(midnight.timestamp())
+        assert upstream.requests == []                  # nothing went to Anthropic
+        assert ledger.spent_today("maria") == spent     # and nothing was counted
+
+    def test_the_pass_may_come_as_x_api_key(self, gate, book):
+        p = book.add("maria", daily_limit=1000)
+        assert usage_of(gate, p, header="x-api-key")[1]["guest"] == "maria"
+
+    def test_an_unknown_pass_learns_nothing(self, gate, book):
+        book.add("maria", daily_limit=1000)
+        code, d = usage_of(gate, "sbx-not-a-pass")
+        assert code == 401 and "maria" not in json.dumps(d) and "limit" not in d
+
+    def test_answers_when_the_limit_is_reached_or_the_guest_is_off(self, gate, book, ledger):
+        p = book.add("maria", daily_limit=10)
+        ledger.record("maria", "claude-opus-x", {"input_tokens": 1000})
+        code, d = usage_of(gate, p)
+        assert code == 200 and d["spent_today"] >= d["limit"]
+        book.set_enabled("maria", False)
+        code, d = usage_of(gate, p)
+        assert code == 200 and d["enabled"] is False
+
+    def test_a_lifted_limit_says_until_when(self, gate, book):
+        import time as _time
+        p = book.add("maria", daily_limit=1000)
+        until = int(_time.time()) + 3600
+        book.set_unlimited_until("maria", until)
+        assert usage_of(gate, p)[1]["unlimited_until"] == until
+        book.set_unlimited_until("maria", _time.time() - 10)        # over: shown as 0
+        assert usage_of(gate, p)[1]["unlimited_until"] == 0
+
+    def test_only_get_reads_it_and_nothing_goes_upstream(self, gate, book, upstream):
+        p = book.add("maria", daily_limit=1000)
+        code, _ = usage_of(gate, p, method="POST")
+        assert code == 403 and upstream.requests == []
