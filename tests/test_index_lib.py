@@ -479,7 +479,8 @@ def test_poll_does_not_move_a_freshly_loaded_session(page, api):
 
 # ── new theme ───────────────────────────────────────────────────────────────
 def test_new_theme_posts_then_opens_it(page, api):
-    assert page.inner_text("#newBtn").strip() == "＋ New terminal"
+    # "＋ New" since 30.10.2026 (owner): room for the Claude allowance chip after cmd
+    assert page.inner_text("#newBtn").strip() == "＋ New"
     page.click("#newBtn")
     page.wait_for_selector("#newName:visible")
     page.fill("#newName", "Log review")
@@ -986,7 +987,8 @@ def test_ui_says_terminal_not_topic_desktop(browser, site):
         seen += pg.evaluate(SCAN_JS)
         bad = [t for t in seen if TOPIC.search(t)]
         assert not bad, f"'topic' in UI text: {sorted(set(bad))}"
-        assert pg.inner_text("#newBtn").strip() == "＋ New terminal"
+        assert pg.inner_text("#newBtn").strip() == "＋ New"
+        assert pg.get_attribute("#newBtn", "title") == "New terminal"
     finally:
         ctx.close()
 

@@ -100,7 +100,7 @@ web runs in Anthropic's cloud.)
 
 - **Named terminals.** Each terminal is one Claude conversation, with one code everywhere:
   the dashboard, tmux (`cs-<code>`), logs, the task board, Telegram and the transcript.
-- **New, rename, reorder, search.** **＋ New terminal**, ✎ to rename, drag to reorder;
+- **New, rename, reorder, search.** **＋ New**, ✎ to rename, drag to reorder;
   search finds terminals by name or code, archived ones too.
 - **Archive — keep it, unload it now.** Click an archived terminal to restore and open it.
   **Move to Trash** for ones you don't need; nothing is erased until you empty the trash.
@@ -111,6 +111,10 @@ web runs in Anthropic's cloud.)
   100 MB each to a private folder on the server and types the path into the terminal.
 - **Browser terminals, no SSH.** Select with the mouse to copy, Ctrl+Shift+V or ⌘V to paste;
   long scrollback. A `cmd` line gives you a plain `bash` shell next to the agents.
+- **Claude usage at a glance.** Next to `cmd`, `5h 7%` / `wk 9%`: the 5-hour and weekly
+  windows of your Claude subscription, as in `/usage` (amber from 70 %, red from 90 %); hover
+  for reset times and today's busiest terminals. Read from `CLAUDE_CODE_OAUTH_TOKEN` in
+  `~/.claude/oauth.env` with one tiny request at most every 10 minutes.
 - **One login for everything.** A cookie-session login protects the dashboard, the
   terminals and every API; change the password with **⋯ → Password**.
 - **HTTPS with no domain.** A Let's Encrypt certificate for `<your-ip>.sslip.io`, or your own
@@ -140,7 +144,7 @@ curl -fsSL https://raw.githubusercontent.com/yanhs/agentkennel/master/install.sh
    `https://<host>/login?setup=<token>`. Only that link can set the password, so a stranger
    who finds the fresh server first can't. Lost it? Run the install command again.
 2. Open it and set your password.
-3. **＋ New terminal** (it opens in `~/projects`), sign in to Claude once, give the agent a task.
+3. **＋ New** (it opens in `~/projects`), sign in to Claude once, give the agent a task.
 
 - **HTTPS by default, no domain needed.** Ports 80 and 443 free → a trusted certificate for
   `https://<your-ip-with-dashes>.sslip.io`. Only 443 taken → the same on `:8443`. Otherwise a
@@ -167,7 +171,7 @@ docker compose logs agentkennel | grep setup   # → /login?setup=<token>
 ```
 
 1. Open `http://<your-vps-ip>:8765/login?setup=<token>` and set the password.
-2. **＋ New terminal**, then sign in to Claude once: it asks for a colour theme, then how to
+2. **＋ New**, then sign in to Claude once: it asks for a colour theme, then how to
    log in (subscription or API key). The login is kept in a volume.
 3. Want HTTPS? `./https.sh` (a free `<ip>.sslip.io` name, needs ports 80 and 443) or
    `./https.sh your-domain.com`; `./https.sh --off` goes back.

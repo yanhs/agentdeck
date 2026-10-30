@@ -17,9 +17,11 @@ import hmac
 import hashlib
 import secrets
 import unicodedata
+import glob
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse, parse_qs
+from datetime import datetime
 from pathlib import Path
 
 import library   # session registry (library.py next to this file)
@@ -1540,36 +1542,137 @@ class GuestsPanel:
 GUESTS = GuestsPanel()
 
 
-# ── A guest's sandbox: today's Claude spend (GET /api/quota, decision 30.10.2026) ────
-# Claude goes through the host's turnstile here (ANTHROPIC_BASE_URL) with the guest's own
-# pass (ANTHROPIC_AUTH_TOKEN). The dashboard asks the turnstile for that pass's numbers and
-# shows "today X of Y tokens". On any other install there is no turnstile: nothing to show.
-# The pass never goes to the page.
+# ── The Claude allowance: the 5-hour window and the week (GET /api/quota, 30.10.2026) ──
+# Like Claude's /usage, for whoever runs this dashboard:
+# - a guest's sandbox: Claude goes through the host's turnstile (ANTHROPIC_BASE_URL) with
+#   the guest's pass (ANTHROPIC_AUTH_TOKEN); the turnstile's GET /guest/usage has the
+#   guest's own numbers. The pass never goes to the page.
+# - the owner's install: one tiny request to Anthropic with the subscription's OAuth token
+#   (~/.claude/oauth.env) answers with anthropic-ratelimit-unified-* headers — the same
+#   numbers /usage shows. At most once per QUOTA_PROBE_TTL, in a background thread: this
+#   server answers one request at a time and the page must never wait for Anthropic.
+# Anywhere else: {"available": false}. The shared contract (turnstile, dashboard, page):
+# pr/terminal-dev/.progress-usage-limits-disk.md.
 QUOTA_ROUTE = "/api/quota"
-QUOTA_TTL = 20                  # seconds an answer is reused (the page asks once a minute)
-_QUOTA_INTS = ("spent_today", "limit", "unlimited_until", "resets_at")
+QUOTA_TERMS_ROUTE = "/api/quota/terminals"
+QUOTA_TTL = 20                  # seconds a guest's answer is reused (the page asks once a minute)
+QUOTA_PROBE_TTL = 600           # the owner's probe: at most once per 10 minutes
+QUOTA_RETRY = 120               # after a failed fetch, try again this soon
+QUOTA_PROBE_URL = "https://api.anthropic.com/v1/messages"
+QUOTA_PROBE_MODEL = "claude-haiku-4-5"
+QUOTA_OAUTH_ENV = os.path.join("~", ".claude", "oauth.env")
+_QUOTA_WINDOWS = (("five_hour", "5h"), ("seven_day", "7d"))
+_OAUTH_LINE = re.compile(r"^\s*(?:export\s+)?CLAUDE_CODE_OAUTH_TOKEN\s*=\s*(.*?)\s*$")
+
+
+def quota_oauth_token():
+    """The subscription's token: CLAUDE_CODE_OAUTH_TOKEN in ~/.claude/oauth.env (a shell
+    file, lines may start with `export `), else the environment's. None when neither."""
+    try:
+        with open(os.path.expanduser(QUOTA_OAUTH_ENV), encoding="utf-8") as f:
+            for line in f:
+                m = _OAUTH_LINE.match(line)
+                if m:
+                    v = m.group(1)
+                    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+                        v = v[1:-1]
+                    if v.strip():
+                        return v.strip()
+    except (OSError, UnicodeDecodeError):
+        pass
+    return (os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or "").strip() or None
+
+
+def quota_probe(token, url=None):
+    """One token of Haiku with the subscription's token -> (HTTP status, headers). The
+    headers carry the subscription's usage even on a 429 (at the limit). OSError when
+    Anthropic cannot be reached."""
+    body = json.dumps({"model": QUOTA_PROBE_MODEL, "max_tokens": 1,
+                       "messages": [{"role": "user", "content": "."}]}).encode()
+    req = urllib.request.Request(url or QUOTA_PROBE_URL, data=body, method="POST", headers={
+        "Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
+        "anthropic-version": "2023-06-01", "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status, dict(r.headers.items())
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers.items()) if e.headers else {}
+
+
+def _quota_number(v, kind):
+    if isinstance(v, str):
+        try:
+            v = float(v)
+        except ValueError:
+            return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not (0 <= v < 1e12):
+        return None
+    return float(v) if kind is float else int(v)
+
+
+def _quota_window(utilization, resets_at):
+    u, r = _quota_number(utilization, float), _quota_number(resets_at, int)
+    return None if u is None or r is None else {"utilization": u, "resets_at": r}
+
+
+def quota_from_headers(headers):
+    """The anthropic-ratelimit-unified-{5h,7d}-{utilization,reset} headers ->
+    {"five_hour": {...}, "seven_day": {...}}, or None when any is missing or garbage."""
+    h = {str(k).lower(): v for k, v in (headers or {}).items()}
+    out = {}
+    for key, tag in _QUOTA_WINDOWS:
+        w = _quota_window(h.get(f"anthropic-ratelimit-unified-{tag}-utilization"),
+                          h.get(f"anthropic-ratelimit-unified-{tag}-reset"))
+        if w is None:
+            return None
+        out[key] = w
+    return out
+
+
+def quota_from_turnstile(d):
+    """GET /guest/usage's body -> {"five_hour": {...}, "seven_day": {...}}, or None."""
+    if not isinstance(d, dict):
+        return None
+    out = {}
+    for key, _tag in _QUOTA_WINDOWS:
+        w = d.get(key)
+        if not isinstance(w, dict) or isinstance(w.get("utilization"), str) \
+                or isinstance(w.get("resets_at"), str):
+            return None
+        w = _quota_window(w.get("utilization"), w.get("resets_at"))
+        if w is None:
+            return None
+        out[key] = w
+    return out
 
 
 class Quota:
+    """GET /api/quota. get() never waits for the network: it answers what is known and,
+    when that is stale, starts one background fetch (never two at once)."""
+
     def __init__(self):
         self.lock = threading.Lock()
+        self.probe = quota_probe          # tests put a fake here
+        self.clock = time.monotonic       # … and a fake clock here
         self.clear()
 
     def clear(self):
         with self.lock:
-            self.at, self.data = 0.0, None
+            self.key, self.at, self.data, self.busy = None, 0.0, None, False
 
     @staticmethod
     def source():
+        """("guest", base, pass) behind a turnstile; ("proxy",) for a proxy without a
+        pass; None when Claude talks to Anthropic itself (the owner's subscription)."""
         base = (os.environ.get("ANTHROPIC_BASE_URL") or "").strip().rstrip("/")
         token = (os.environ.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
         host = (urlparse(base).hostname or "").lower()
-        if not base or not token or host == "anthropic.com" or host.endswith(".anthropic.com"):
+        if not base or host == "anthropic.com" or host.endswith(".anthropic.com"):
             return None
-        return base, token
+        return ("guest", base, token) if token else ("proxy",)
 
     @staticmethod
-    def fetch(base, token):
+    def fetch_guest(base, token):
         req = urllib.request.Request(base + "/guest/usage",
                                      headers={"Authorization": f"Bearer {token}"})
         try:
@@ -1579,25 +1682,198 @@ class Quota:
             return {"available": False, "error": f"the turnstile answered HTTP {e.code}"}
         except (OSError, ValueError) as e:
             return {"available": False, "error": f"the turnstile did not answer ({type(e).__name__})"}
-        if not isinstance(d, dict) or any(type(d.get(k)) is not int for k in _QUOTA_INTS):
-            return {"available": False, "error": "the turnstile's answer has no numbers"}
-        return {"available": True, **{k: d[k] for k in _QUOTA_INTS},
-                "enabled": d.get("enabled") is not False}
+        w = quota_from_turnstile(d)
+        if w is None:
+            return {"available": False, "error": "the turnstile's answer has no usage numbers"}
+        return {"available": True, "source": "guest", **w}
+
+    def fetch_subscription(self, token):
+        try:
+            status, headers = self.probe(token)
+        except Exception as e:
+            return {"available": False, "error": f"Anthropic did not answer ({type(e).__name__})"}
+        w = quota_from_headers(headers)
+        if w is None:
+            if status not in (200, 429):
+                return {"available": False, "error": f"Anthropic answered HTTP {status}"}
+            return {"available": False, "error": f"Anthropic's answer ({status}) has no usage numbers"}
+        return {"available": True, "source": "subscription", **w}
+
+    def _run(self, key, fn):
+        try:
+            data = fn()
+        except Exception as e:                       # never leave busy set
+            data = {"available": False, "error": f"quota failed ({type(e).__name__})"}
+        with self.lock:
+            if self.key == key:
+                self.data = data
+            self.busy = False
 
     def get(self):
         src = self.source()
-        if src is None:
+        if src is not None and src[0] == "proxy":
             return {"available": False}
+        if src is None:
+            token = quota_oauth_token()
+            if not token:
+                return {"available": False}
+            key, ttl, fn = ("subscription",), QUOTA_PROBE_TTL, lambda: self.fetch_subscription(token)
+        else:
+            key, ttl, fn = src[:2], QUOTA_TTL, lambda: self.fetch_guest(src[1], src[2])
         with self.lock:
-            if self.data is not None and time.time() - self.at < QUOTA_TTL:
-                return dict(self.data)
-        data = self.fetch(*src)
-        with self.lock:
-            self.at, self.data = time.time(), data
-        return dict(data)
+            if self.key != key:                      # another source: forget the old numbers
+                self.key, self.at, self.data = key, 0.0, None
+            data, now = self.data, self.clock()
+            if data is not None and not data.get("available"):
+                ttl = min(ttl, QUOTA_RETRY)
+            if not self.busy and (data is None or now - self.at >= ttl):
+                self.busy, self.at = True, now
+                threading.Thread(target=self._run, args=(key, fn), daemon=True,
+                                 name="quota-fetch").start()
+        return dict(data) if data is not None else {"available": False}
 
 
 QUOTA = Quota()
+
+
+# ── Today by terminal (GET /api/quota/terminals, the owner's only) ──────────────────────
+# Which terminals spent the most of the subscription today: weighted tokens of each
+# terminal's conversation (and its subagents) since local midnight, each assistant
+# message once (Claude Code writes one line per content block, all with the usage).
+# Weights: roughly what each kind of token costs against the allowance.
+QUOTA_TERMS_TTL = 300
+QUOTA_TERMS_TOP = 8
+QUOTA_WEIGHTS = (("input_tokens", 1.0), ("cache_creation_input_tokens", 1.25),
+                 ("cache_read_input_tokens", 0.1), ("output_tokens", 5.0))
+
+
+def _local_midnight(now):
+    t = time.localtime(now)
+    return time.mktime((t.tm_year, t.tm_mon, t.tm_mday, 0, 0, 0, 0, 0, -1))
+
+
+def _record_time(s):
+    if not isinstance(s, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.timestamp() if dt.tzinfo else None
+
+
+def _weighted(usage):
+    n = 0.0
+    for k, w in QUOTA_WEIGHTS:
+        v = usage.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+            n += w * v
+    return n
+
+
+class QuotaTerminals:
+    """Counts today's weighted tokens per terminal. Remembers how far each conversation
+    file was read, so the next count reads only what was appended since."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.files = {}                   # path -> per-file state, for one day
+        self.clock = time.monotonic       # tests put a fake clock here
+        self.at, self.data, self.busy = 0.0, None, False
+
+    def _file(self, path, day):
+        try:
+            st = os.stat(path)
+        except OSError:
+            self.files.pop(path, None)
+            return 0.0
+        if st.st_mtime < day:                        # untouched since midnight
+            self.files.pop(path, None)
+            return 0.0
+        f = self.files.get(path)
+        if f is None or f["day"] != day or f["ino"] != st.st_ino or st.st_size < f["pos"]:
+            f = self.files[path] = {"day": day, "ino": st.st_ino, "pos": 0,
+                                    "seen": set(), "total": 0.0}
+        if st.st_size > f["pos"]:
+            with open(path, "rb") as fh:
+                fh.seek(f["pos"])
+                chunk = fh.read(st.st_size - f["pos"])
+            end = chunk.rfind(b"\n") + 1             # a half-written last line waits
+            f["pos"] += end
+            for line in chunk[:end].splitlines():
+                if b'"assistant"' not in line or b'"usage"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except (ValueError, RecursionError):
+                    continue
+                msg = d.get("message") if isinstance(d, dict) else None
+                if d.get("type") != "assistant" or not isinstance(msg, dict):
+                    continue
+                mid, usage = msg.get("id"), msg.get("usage")
+                if not isinstance(mid, str) or not isinstance(usage, dict) or mid in f["seen"]:
+                    continue
+                t = _record_time(d.get("timestamp"))
+                if t is None or t < day:
+                    continue
+                f["seen"].add(mid)
+                f["total"] += _weighted(usage)
+        return f["total"]
+
+    def compute(self, lib_file, projects_root, now):
+        day = _local_midnight(now)
+        try:
+            lib = library.load(lib_file)
+        except Exception:
+            return []
+        rows, live = [], set()
+        for e in lib.get("sessions") or []:
+            u = e.get("uuid")
+            if not isinstance(u, str) or library.is_trashed(e) or not e.get("cwd"):
+                continue
+            main = library.transcript_file(projects_root, e["cwd"], u)
+            paths = [main] + sorted(glob.glob(os.path.join(
+                glob.escape(os.path.join(os.path.dirname(main), u)), "subagents", "*.jsonl")))
+            live.update(paths)
+            n = round(sum(self._file(p, day) for p in paths))
+            if n > 0:
+                rows.append({"id": e.get("id"), "name": e.get("name") or e.get("id"),
+                             "tokens_today": n})
+        for p in set(self.files) - live:             # gone or trashed: forget
+            del self.files[p]
+        rows.sort(key=lambda r: -r["tokens_today"])
+        return rows[:QUOTA_TERMS_TOP]
+
+    def _run(self):
+        try:
+            data = self.compute(lib_path(), library.claude_projects_root(), time.time())
+        except Exception:
+            data = []
+        with self.lock:
+            self.data, self.busy = data, False
+
+    def get(self):
+        with self.lock:
+            now = self.clock()
+            if not self.busy and (self.data is None or now - self.at >= QUOTA_TERMS_TTL):
+                self.busy, self.at = True, now
+                threading.Thread(target=self._run, daemon=True, name="quota-terminals").start()
+            return {"terminals": list(self.data or [])}
+
+
+QUOTA_TERMS = QuotaTerminals()
+
+
+def quota_terminal_tokens(lib_file, projects_root, now):
+    """One count from scratch: [{"id", "name", "tokens_today"}], the largest first."""
+    return QuotaTerminals().compute(lib_file, projects_root, now)
+
+
+def quota_terminals():
+    """The owner's only: a guest's sandbox (or any proxy) gets an empty list."""
+    if Quota.source() is not None:
+        return {"terminals": []}
+    return QUOTA_TERMS.get()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1750,6 +2026,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._server_get()
         if self._route() == QUOTA_ROUTE:
             return self._lib_json(200, QUOTA.get())
+        if self._route() == QUOTA_TERMS_ROUTE:
+            return self._lib_json(200, quota_terminals())
         if self._is_services():
             return self._services("GET")
         if self._is_guests():

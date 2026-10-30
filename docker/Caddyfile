@@ -55,8 +55,8 @@
 			reverse_proxy 127.0.0.1:3011
 		}
 
-		# a guest's sandbox: today's Claude spend against the daily limit — status_server
-		handle /api/quota {
+		# the Claude allowance (5 hours / week) and today by terminal — status_server
+		handle /api/quota* {
 			reverse_proxy 127.0.0.1:3011
 		}
 

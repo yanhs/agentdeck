@@ -1920,7 +1920,7 @@ async def cmd_archive(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """/new <name> — create a topic (name optional: a dated default), select it
-    and load it. It starts where the dashboard's "＋ New terminal" starts one."""
+    and load it. It starts where the dashboard's "＋ New" starts one."""
     name = _CTRL_NL.sub("", " ".join(ctx.args or [])).replace("\n", " ").strip()[:TOPIC_NAME_MAX]
     cwd = envcompat.get("WORKDIR") or os.path.dirname(GATE_DIR)
     try:

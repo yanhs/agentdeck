@@ -1132,7 +1132,7 @@ finish() {
   else
     say "  1. Open it and sign in with your password."
   fi
-  say "  2. Then + New terminal, and sign in to Claude once (every terminal reuses the login)."
+  say "  2. Then + New, and sign in to Claude once (every terminal reuses the login)."
   [ -n "$WORKDIR" ] || resolve_workdir
   say "  New terminals open in ${WORKDIR/#$HOME/\~} (set AGENTKENNEL_WORKDIR to change)"
   case "$SITE" in
