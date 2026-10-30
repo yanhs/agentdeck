@@ -50,6 +50,10 @@ SESSIONS = [
 AGENTS_FILE = os.path.join(os.path.dirname(__file__), "agents.json")
 SAMPLE_INTERVAL = 0.15
 _prev_cpu = None
+# a guest's sandbox: the CPU/RAM line reads its cgroup limits (server_status.read_cgroup)
+CGROUP_ROOT = "/sys/fs/cgroup"
+_prev_cg = None
+_stats_clock = time.monotonic
 CPU_TICK_THRESHOLD = 2
 
 # Optional: pretty display names for auto-detected project folders. Any folder
@@ -101,6 +105,20 @@ def get_system_stats():
         ram_pct = round(used_mb / total_mb * 100) if total_mb else 0
     except Exception:
         total_mb = used_mb = ram_pct = 0
+    # a guest's sandbox: its own memory and CPU quota, like the Server page (30.10.2026)
+    global _prev_cg
+    cg = server_status.read_cgroup(CGROUP_ROOT)
+    if "mem_max" in cg and total_mb and cg["mem_max"] / 1048576 < total_mb:
+        total_mb = cg["mem_max"] // 1048576
+        used_mb = min(total_mb, max(0, cg["mem_current"] - cg["mem_inactive"]) // 1048576)
+        ram_pct = round(used_mb / total_mb * 100) if total_mb else 0
+    if "cpu_quota" in cg and cg["cpu_quota"] < (os.cpu_count() or 1) and "cpu_usage_usec" in cg:
+        now, prev = _stats_clock(), _prev_cg
+        _prev_cg = (now, cg["cpu_usage_usec"])
+        cpu_pct = 0
+        if prev and now > prev[0]:
+            used = (cg["cpu_usage_usec"] - prev[1]) / 1e6 / (now - prev[0])
+            cpu_pct = round(max(0.0, min(100.0, used / cg["cpu_quota"] * 100)))
     return {"cpu_pct": cpu_pct, "ram_used_mb": used_mb, "ram_total_mb": total_mb, "ram_pct": ram_pct}
 
 

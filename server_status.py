@@ -355,6 +355,38 @@ _NOT_JOBS = {"tmux", "tmux:", "bash", "sh", "zsh", "dash", "sshd", "systemd", "i
              "login", "PM2", "sudo", "su", "cron", "agetty"}
 
 
+def read_cgroup(root="/sys/fs/cgroup"):
+    """This process's cgroup (v2) limits: {mem_max, mem_current, mem_inactive} when
+    memory is capped, {cpu_quota (cores), cpu_usage_usec} when CPU is; {} on a host."""
+    def read(name):
+        try:
+            with open(os.path.join(root, name)) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    def stat(name, key):
+        for line in read(name).splitlines():
+            k, _, v = line.partition(" ")
+            if k == key and v.strip().isdigit():
+                return int(v)
+        return None
+    out = {}
+    mm = read("memory.max")
+    if mm.isdigit():
+        cur = read("memory.current")
+        out.update(mem_max=int(mm), mem_current=int(cur) if cur.isdigit() else 0,
+                   mem_inactive=stat("memory.stat", "inactive_file") or 0)
+    cm = read("cpu.max").split()
+    if len(cm) == 2 and cm[0].isdigit() and cm[1].isdigit() and int(cm[1]) > 0:
+        out["cpu_quota"] = int(cm[0]) / int(cm[1])
+        usage = stat("cpu.stat", "usage_usec")
+        if usage is not None:
+            out["cpu_usage_usec"] = usage
+    return out
+
+
+
 class Collector:
     def __init__(self, proc_root="/proc", interval=INTERVAL, history_len=HISTORY_LEN,
                  tmux_panes=None, docker_ps=None, units=None, pm2_names=None,
@@ -484,34 +516,7 @@ class Collector:
         return cpus, mem, load, uptime
 
     def _read_cgroup(self):
-        """This process's cgroup (v2) limits: {mem_max, mem_current, mem_inactive} when
-        memory is capped, {cpu_quota (cores), cpu_usage_usec} when CPU is; {} on a host."""
-        def read(name):
-            try:
-                with open(os.path.join(self.cgroup_root, name)) as f:
-                    return f.read().strip()
-            except OSError:
-                return ""
-
-        def stat(name, key):
-            for line in read(name).splitlines():
-                k, _, v = line.partition(" ")
-                if k == key and v.strip().isdigit():
-                    return int(v)
-            return None
-        out = {}
-        mm = read("memory.max")
-        if mm.isdigit():
-            cur = read("memory.current")
-            out.update(mem_max=int(mm), mem_current=int(cur) if cur.isdigit() else 0,
-                       mem_inactive=stat("memory.stat", "inactive_file") or 0)
-        cm = read("cpu.max").split()
-        if len(cm) == 2 and cm[0].isdigit() and cm[1].isdigit() and int(cm[1]) > 0:
-            out["cpu_quota"] = int(cm[0]) / int(cm[1])
-            usage = stat("cpu.stat", "usage_usec")
-            if usage is not None:
-                out["cpu_usage_usec"] = usage
-        return out
+        return read_cgroup(self.cgroup_root)
 
     # -- sampling ---------------------------------------------------------
     def sample(self):
