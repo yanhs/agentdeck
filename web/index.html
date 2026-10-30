@@ -111,19 +111,6 @@
 
     .sys-stats.hidden .val { display: none; }
 
-    /* a guest's sandbox: today's Claude spend against the daily limit (GET /api/quota) */
-    .quota {
-      display: flex; flex-direction: column; gap: 3px; padding: 5px 2px 1px;
-      font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; line-height: 1.35;
-      color: var(--dim); cursor: default;
-    }
-    .quota[hidden] { display: none; }
-    .quota .bar { height: 3px; border-radius: 2px; background: var(--ghost-2); overflow: hidden; }
-    .quota .bar i { display: block; height: 100%; width: 0; background: var(--green); transition: width .6s ease; }
-    .quota.warn .bar i { background: var(--amber); }
-    .quota.crit .bar i { background: var(--red); }
-    .quota.crit .qv { color: var(--red); }
-
     .stat { color: var(--ghost); }
     .stat .val { color: var(--dim); }
     .stat.warn .val { color: var(--amber); }
@@ -142,9 +129,20 @@
       gap: 4px;
     }
     .lib-tools.creating .new-row, .lib-tools.creating #search { display: none; }
-    /* [＋ New terminal][cmd] — cmd opens the one plain command line */
+    /* [＋ New][cmd]   5h 7% / wk 9% — cmd opens the one plain command line; the chip is
+       the Claude allowance like Claude's /usage (GET /api/quota) */
     .new-row { display: flex; gap: 3px; min-width: 0; }
     .new-row .new-btn { flex: 1 1 0; min-width: 0; }
+    .new-row #newBtn { flex: none; width: auto; padding: 0 12px; }
+    .quota-chip {
+      display: flex; flex-direction: column; justify-content: center; align-self: center;
+      margin-left: auto; padding-left: 4px; min-width: 0; text-align: right;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.56rem; line-height: 1.15;
+      color: var(--ghost); white-space: nowrap; cursor: default;
+    }
+    .quota-chip b { font-weight: 400; color: var(--dim); }
+    .quota-chip .warn b { color: var(--amber); }
+    .quota-chip .crit b { color: var(--red); }
     .new-row .cmd-btn {
       flex: none;
       width: auto;
@@ -714,6 +712,8 @@
       .new-row { flex: none; }
       .new-row .new-btn { flex: none; }
       .new-row .cmd-btn { padding: 0 6px; }
+      .new-row #newBtn { padding: 0 8px; }
+      .quota-chip { display: none !important; }
       /* 16px: iOS zooms the page into any input with a smaller font. */
       .lib-input { flex: 1 1 0; height: 26px; font-size: 16px; }
       .new-form { flex: 1; min-width: 0; }
@@ -816,11 +816,11 @@
           <span class="stat" id="ramStat">RAM <span class="val" id="ramVal">—</span></span>
         </div>
       </div>
-      <div class="quota" id="quota" hidden><span class="qv"></span><span class="bar"><i></i></span></div>
       <div class="lib-tools" id="libTools">
         <div class="new-row" id="newRow">
-          <button type="button" class="new-btn" id="newBtn" title="Start a new terminal (a new Claude conversation)">＋ New terminal</button>
+          <button type="button" class="new-btn" id="newBtn" title="New terminal">＋ New</button>
           <button type="button" class="new-btn cmd-btn" id="cmdBtn" title="Command line: one plain bash shell (pressing it again reopens the same one)">cmd</button>
+          <span class="quota-chip" id="quotaChip" hidden><span>5h <b></b></span><span>wk <b></b></span></span>
         </div>
         <form class="new-form" id="newForm" hidden autocomplete="off">
           <input class="lib-input" id="newName" type="text" maxlength="200" placeholder="New terminal name" autocomplete="off" autocorrect="off" spellcheck="false">
@@ -2753,39 +2753,63 @@
       document.getElementById('ramStat').className = 'stat' + (s.ram_pct > 90 ? ' crit' : s.ram_pct > 70 ? ' warn' : '');
     }
 
-    // A guest's sandbox: today's Claude tokens against the daily limit, the numbers the
-    // owner sees in Guests (GET /api/quota, decision 30.10.2026). Anywhere else the
-    // server says {available: false} and the line stays hidden.
+    // The Claude allowance like Claude's /usage: "5h 7%" / "wk 9%" next to cmd (GET
+    // /api/quota, 30.10.2026) — a guest's own limits in a sandbox, the subscription on the
+    // owner's install, where the title also names today's busiest terminals. The server
+    // says {available: false} anywhere else (and before its first fetch): no chip.
     function fmtTok(n) {
       if (!isFinite(n) || n <= 0) return '0';
       if (n >= 1e6) { const m = n / 1e6; return (m >= 10 || Number.isInteger(m) ? Math.round(m) : m.toFixed(1)) + 'M'; }
       if (n >= 1e3) return Math.round(n / 1e3) + 'K';
       return String(Math.round(n));
     }
-    function inTime(t) {
-      const s = Math.max(0, t - Date.now() / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
-      return h ? h + ' h' + (m && h < 10 ? ' ' + m + ' min' : '') : Math.max(1, m) + ' min';
+    const QUOTA_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    function quotaReset(t, withDay) {          // 21:30, or Sun 10:00 when not today
+      const d = new Date(t * 1000), p = n => String(n).padStart(2, '0');
+      const day = withDay || d.toDateString() !== new Date().toDateString();
+      return (day ? QUOTA_DAYS[d.getDay()] + ' ' : '') + p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+    let _quotaTerms = [], _quotaTermsAt = 0, _quotaPolls = 0;
+    async function quotaJSON(url) {
+      try {
+        const r = await fetch(url, {cache: 'no-store', credentials: 'same-origin'});
+        if (r.ok && (r.headers.get('content-type') || '').includes('json')) return await r.json();
+      } catch {}
+      return null;
     }
     async function pollQuota() {
-      const box = document.getElementById('quota');
-      let d = null;
-      try {
-        const r = await fetch('/api/quota', {cache: 'no-store', credentials: 'same-origin'});
-        if (r.ok && (r.headers.get('content-type') || '').includes('json')) d = await r.json();
-      } catch {}
-      if (!d || d.available !== true || !(d.limit >= 0)) { box.hidden = true; return; }
-      const lifted = d.unlimited_until > Date.now() / 1000;
-      const pct = lifted || !(d.limit > 0) ? 0 : Math.min(100, d.spent_today / d.limit * 100);
-      const over = !lifted && d.spent_today >= d.limit;
-      box.querySelector('.qv').textContent = lifted ? `Today ${fmtTok(d.spent_today)} tokens · no limit for now`
-        : over ? `Daily limit reached · resets in ${inTime(d.resets_at)}`
-        : `Today ${fmtTok(d.spent_today)} of ${fmtTok(d.limit)} tokens`;
-      box.querySelector('.bar i').style.width = pct.toFixed(1) + '%';
-      box.className = 'quota' + (pct >= 90 ? ' crit' : pct >= 70 ? ' warn' : '');
-      box.title = `Your Claude tokens today on this server: ${d.spent_today.toLocaleString('en-US')}`
-        + (lifted ? ' (the daily limit is lifted for now)' : ` of ${d.limit.toLocaleString('en-US')}`)
-        + `. The count resets in ${inTime(d.resets_at)}.`;
-      box.hidden = false;
+      const chip = document.getElementById('quotaChip');
+      const d = await quotaJSON('/api/quota');
+      const ok = w => w && isFinite(w.utilization) && isFinite(w.resets_at);
+      if (!d || d.available !== true || !ok(d.five_hour) || !ok(d.seven_day)) {
+        chip.hidden = true;
+        if (++_quotaPolls === 1) setTimeout(pollQuota, 5000);   // the server's first fetch runs now
+        return;
+      }
+      _quotaPolls++;
+      // the owner: which terminals spent the most today (counted at most every 5 minutes)
+      if (d.source === 'subscription' && !_isMobile
+          && (!_quotaTermsAt || Date.now() - _quotaTermsAt >= 300000)) {
+        const t = await quotaJSON('/api/quota/terminals');
+        if (t && Array.isArray(t.terminals)) {
+          _quotaTerms = t.terminals;
+          if (_quotaTerms.length) _quotaTermsAt = Date.now();   // empty: still counting, ask again
+        }
+      }
+      if (d.source !== 'subscription') _quotaTerms = [];
+      const parts = [['5 hours', d.five_hour, false], ['week', d.seven_day, true]].map(([name, w, withDay], i) => {
+        const pct = Math.round(w.utilization * 100);
+        const line = chip.children[i];
+        line.className = pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : '';
+        line.querySelector('b').textContent = pct + '%';
+        return `${name}: ${pct}%` + (w.resets_at > 0 ? ` · resets ${quotaReset(w.resets_at, withDay)}` : '');
+      });
+      const terms = _quotaTerms.filter(t => t && t.tokens_today > 0)
+        .map(t => `${t.name} ${fmtTok(t.tokens_today)}`).join(', ');
+      chip.title = parts.join('; ')
+        + (d.source === 'guest' ? '\nYour Claude limits on this server' : '\nClaude subscription, as in /usage')
+        + (terms ? `\nToday by terminal: ${terms}` : '');
+      chip.hidden = false;
     }
     pollQuota();
     setInterval(pollQuota, 60000);

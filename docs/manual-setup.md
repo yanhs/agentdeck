@@ -33,7 +33,7 @@ own `~/.claude/settings.json` unless you ask: `AGENTKENNEL_GUARDS=1 ./start.sh`.
 > `claude` is found on your `PATH`, agents start in `$AGENTKENNEL_WORKDIR` (default: the
 > directory above the repo), and every terminal's conversation is kept under `.sessions/`.
 > There is no agent list to edit by hand: terminals are created, renamed, archived and
-> trashed in the dashboard (**＋ New terminal**), which writes `.sessions/library.json`.
+> trashed in the dashboard (**＋ New**), which writes `.sessions/library.json`.
 
 ```bash
 git clone https://github.com/yanhs/agentkennel.git && cd agentkennel
