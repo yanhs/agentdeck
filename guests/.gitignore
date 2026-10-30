@@ -5,3 +5,5 @@ public/
 nginx/sites/
 build/
 *.log
+# guests' own disks (guests/disk.py): images and mount points
+disks/

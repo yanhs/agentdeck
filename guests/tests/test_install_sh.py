@@ -23,6 +23,8 @@ BASH = shutil.which("bash")
 UNITS = ("agentkennel-guest-turnstile.service", "agentkennel-guest-tgrelay.service",
          "agentkennel-guest-sitegate.service")
 NET_UNITS = ("sbx-firewall.service", "sbx-firewall.timer")
+# the disk watchman (guests/disk.py, 30.10.2026): a oneshot run by a timer
+WATCH_UNITS = ("agentkennel-guest-diskwatch.service", "agentkennel-guest-diskwatch.timer")
 
 HARMLESS = ("cat", "grep", "sed", "awk", "tr", "cut", "head", "tail", "sort", "wc",
             "dirname", "basename", "mktemp", "readlink", "true", "false", "cmp", "printf")
@@ -182,6 +184,16 @@ def test_service_units_run_this_checkout_as_this_user(box, unit):
     assert "WantedBy=multi-user.target" in text
 
 
+def test_the_disk_watchman_runs_every_few_minutes_as_this_user(box):
+    r = box.lib("GUESTS_USER=tester GUESTS_HOME=/home/tester render_unit "
+                "agentkennel-guest-diskwatch.service; render_unit agentkennel-guest-diskwatch.timer")
+    assert r.returncode == 0, r.stderr
+    assert f'ExecStart=/usr/bin/python3 -I "{box.guests}/guestctl.py" disk-watch' in r.stdout
+    assert "Type=oneshot" in r.stdout and "User=tester\n" in r.stdout
+    assert "OnUnitActiveSec=5min" in r.stdout and "WantedBy=timers.target" in r.stdout
+    assert "@" not in r.stdout
+
+
 def test_firewall_unit_runs_the_checkouts_script(box):
     r = box.lib("render_unit sbx-firewall.service; render_unit sbx-firewall.timer")
     assert r.returncode == 0, r.stderr
@@ -269,7 +281,8 @@ def test_full_install(box):
     assert r.returncode == 0, r.stdout + r.stderr
     calls = box.calls()
     written = sorted(p.name for p in box.systemd.iterdir())
-    assert written == sorted(UNITS + NET_UNITS)
+    assert written == sorted(UNITS + NET_UNITS + WATCH_UNITS)
+    assert "systemctl enable -q --now agentkennel-guest-diskwatch.timer" in calls
     text = (box.systemd / "agentkennel-guest-tgrelay.service").read_text()
     assert f'"{box.guests}/tgrelay/tgrelay.py"' in text and "User=tester" in text
     # network + firewall before the services that bind to its gateway

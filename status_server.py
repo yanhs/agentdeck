@@ -1218,7 +1218,8 @@ def lib_empty_trash(ids):
 # The collector samples /proc every 5 s in a daemon thread (started in __main__);
 # a request only reads the latest snapshot. Same-origin only, never cached.
 SERVER_ROUTE = "/api/server"
-SERVER_COLLECTOR = server_status.Collector()
+# a guest's sandbox has a disk of its own (AGENTKENNEL_DISK_PATH=/work, guests/disk.py)
+SERVER_COLLECTOR = server_status.Collector(disk_path=envcompat.get("DISK_PATH") or "/")
 
 
 # ── Server page, Services block: /api/services (2.0) ────────────────────────

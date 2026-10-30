@@ -17,6 +17,7 @@
 #        agentkennel-guest-tgrelay     Telegram turnstile (172.31.250.1:8792)
 #        agentkennel-guest-sitegate    site gate          (172.31.250.1:8794)
 #      started once guests/.env names the domain and the bot; until then only written.
+#      plus agentkennel-guest-diskwatch.timer: every 5 minutes, warns about full guest disks;
 #      The same units under their names before v2.1.0 (agentdeck-guest-*) are stopped,
 #      disabled and removed first; the guests' containers are Docker's and keep running.
 #
@@ -30,6 +31,8 @@ SERVICE_UNITS="agentkennel-guest-turnstile.service agentkennel-guest-tgrelay.ser
 # compat: the same services under their names before v2.1.0 (moved by setup_services)
 OLD_SERVICE_UNITS="${SERVICE_UNITS//agentkennel-guest-/agentdeck-guest-}"
 NET_UNITS="sbx-firewall.service sbx-firewall.timer"
+# the disk watchman (guests/disk.py): a oneshot service run by its timer
+WATCH_UNITS="agentkennel-guest-diskwatch.service agentkennel-guest-diskwatch.timer"
 YES=0
 CHECK=0
 CHANGED_UNITS=()
@@ -81,7 +84,7 @@ sd_esc() { local v="${1//%/%%}"; printf '%s' "$v"; }   # systemd: % -> %%
 unit_template() {
   case "$1" in
     sbx-firewall.service|sbx-firewall.timer) printf '%s\n' "$TEMPLATES/net/$1" ;;
-    agentkennel-guest-*.service) printf '%s\n' "$TEMPLATES/systemd/$1" ;;
+    agentkennel-guest-*.service|agentkennel-guest-*.timer) printf '%s\n' "$TEMPLATES/systemd/$1" ;;
     *) return 1 ;;
   esac
 }
@@ -237,7 +240,7 @@ setup_services() {
   GUESTS_USER="$(id -un)"
   GUESTS_HOME="$(getent passwd "$GUESTS_USER" | cut -d: -f6)"
   GUESTS_HOME="${GUESTS_HOME:-$HOME}"
-  for u in $SERVICE_UNITS; do write_unit "$u"; done
+  for u in $SERVICE_UNITS $WATCH_UNITS; do write_unit "$u"; done
   if [ "${#CHANGED_UNITS[@]}" -gt 0 ]; then
     say "unit files written: ${CHANGED_UNITS[*]}"
   else
@@ -257,6 +260,8 @@ setup_services() {
   # shellcheck disable=SC2086
   $SUDO systemctl restart $SERVICE_UNITS
   say "services running: ${SERVICE_UNITS//.service/}"
+  $SUDO systemctl enable -q --now agentkennel-guest-diskwatch.timer
+  say "disk watchman: every 5 minutes (warns about full guest disks, never stops anything)"
 }
 
 finish() {

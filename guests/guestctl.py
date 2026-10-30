@@ -4,6 +4,8 @@
     guestctl.py add <name> --tg <telegram id> [--limit N]   create + start, prints access
     guestctl.py web <name>                                   https://sb-<name>.<domain>
     guestctl.py session <name>                               the owner's login to it (JSON)
+    guestctl.py disk-move <name> [--gb 20]                   an existing guest onto its own disk
+    guestctl.py disk-watch                                   warn about full disks (a timer runs it)
     guestctl.py list [--json]                                who, port, state, today's spend
     guestctl.py limit <name> <tokens per day>                change the daily limit
     guestctl.py check <name>                                 network walls from inside
@@ -40,6 +42,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / "turnstile"))
 import guestenv  # noqa: E402
+import disk as guest_disk  # noqa: E402  (a guest's own fixed-size disk)
 import envcompat  # noqa: E402  (on the path via guestenv: AGENTKENNEL_*, then AGENTDECK_*)
 from texts import t as _t  # noqa: E402
 import turnstile as ts  # noqa: E402
@@ -260,7 +263,7 @@ def host_public_ips() -> str:
 
 def container_args(name: str, port: int, secret: str, password: str, image: str,
                    public_key: str, memory: str = "4g", cpus: str = "2",
-                   pids: int = 4096, ip: str = "", public_ips=None) -> list:
+                   pids: int = 4096, ip: str = "", public_ips=None, disk: bool = False) -> list:
     if not ts.NAME_RE.match(name):
         raise ValueError(f"bad guest name {name!r}")
     argv = [
@@ -294,16 +297,90 @@ def container_args(name: str, port: int, secret: str, password: str, image: str,
     public_ips = host_public_ips() if public_ips is None else public_ips
     if public_ips:  # a commit with the server's IP is blocked in the sandbox too
         env.update(envcompat.both("PUBLIC_IPS", public_ips))
+    if disk:   # its Server page shows the sandbox's own disk (guests/disk.py)
+        env["AGENTKENNEL_DISK_PATH"] = "/work"
     for key, value in env.items():
         argv += ["-e", f"{key}={value}"]
-    for volume, target in (("claude", "/root/.claude"), ("sessions", "/app/.sessions"),
-                           ("data", "/data"), ("work", "/work")):
-        argv += ["-v", f"sbx-{name}-{volume}:{target}"]
-    # the only host folder: files the guest hands out by link (served by nginx
-    # on sbx.<domain> with symlinks and scripts disabled)
-    argv += ["-v", f"{PUBLIC_ROOT}/{public_key}:/work/public"]
+    if disk:
+        # the guest's folders on its own fixed-size disk (owner's decision 30.10.2026);
+        # the shared-files folder is on it too, bound back to where nginx serves it
+        argv += guest_disk.binds(name)
+    else:
+        for volume, target in (("claude", "/root/.claude"), ("sessions", "/app/.sessions"),
+                               ("data", "/data"), ("work", "/work")):
+            argv += ["-v", f"sbx-{name}-{volume}:{target}"]
+        # the only host folder: files the guest hands out by link (served by nginx
+        # on sbx.<domain> with symlinks and scripts disabled)
+        argv += ["-v", f"{PUBLIC_ROOT}/{public_key}:/work/public"]
     argv.append(image)
     return argv
+
+
+def disk_ready(name: str, info: dict) -> bool:
+    """The guest has its own disk: True when it is mounted; a registered disk that isn't
+    mounted is an error — the sandbox would start on empty volumes instead of its files."""
+    if not info.get("disk_gb"):
+        return False
+    if not guest_disk.RealOps().is_mounted(guest_disk.mount_point(name)):
+        raise SystemExit(f"{name}: its disk {guest_disk.image(name)} is not mounted at "
+                         f"{guest_disk.mount_point(name)} (sudo mount {guest_disk.mount_point(name)})")
+    return True
+
+
+def _volume_dir(volume: str) -> Path:
+    return Path(_docker("volume", "inspect", "-f", "{{.Mountpoint}}", volume).stdout.strip())
+
+
+def cmd_disk_move(a) -> int:
+    """An existing guest onto a disk of its own: needs no open terminals (the sandbox is
+    stopped while its files are copied); the old Docker volumes stay as a backup."""
+    reg = _registry()
+    info = reg.get(a.name)
+    if not info:
+        raise SystemExit(f"no guest {a.name}")
+    if info.get("disk_gb"):
+        raise SystemExit(f"{a.name} already has its own disk ({info['disk_gb']} GB)")
+    open_now = live_terminals(a.name)
+    if open_now:
+        raise SystemExit(_t("ctl_recreate_busy", name=a.name, n=len(open_now)))
+    public_key = info.get("public_key") or new_public_key(a.name)
+    public_dir = Path(PUBLIC_ROOT) / public_key
+    ops = guest_disk.RealOps()
+    mnt = guest_disk.create(a.name, public_dir, gb=a.gb, ops=ops, bind_public=False)
+    _docker("stop", f"sbx-{a.name}")
+    for folder in ("claude", "sessions", "data", "work"):
+        guest_disk.copy_tree(_volume_dir(f"sbx-{a.name}-{folder}"), mnt / folder)
+    guest_disk.copy_tree(public_dir, mnt / "public")
+    guest_disk.create(a.name, public_dir, gb=a.gb, ops=ops)       # now bind it back
+    info.update(disk_gb=int(a.gb), public_key=public_key)
+    _save_registry(reg)
+    rc = cmd_recreate(argparse.Namespace(name=a.name, image=getattr(a, "image", None), force=False))
+    print(f"{a.name}: moved onto its own {a.gb} GB disk {guest_disk.image(a.name)}; "
+          f"the old volumes sbx-{a.name}-* are kept")
+    return rc
+
+
+def cmd_disk_watch(a) -> int:
+    """The watchman (a timer runs it): warnings at 80 % / full and for big programs."""
+    import invites  # noqa: E402  (the guest bot's sender)
+    token = guestenv.get("GUEST_BOT_TOKEN") or ""
+    send = invites.guest_bot_sender(token) if token else (lambda tid, text: None)
+
+    def tell_guest(tid, text):
+        try:
+            send(tid, text)
+        except Exception as e:  # noqa: BLE001 — the owner still hears about it
+            print(f"guest {tid}: not told ({e})", file=sys.stderr)
+    reg = _registry()
+    ops = guest_disk.RealOps()
+    guests = {n: v for n, v in reg.items() if container_state(n) == "running"}
+    sent = guest_disk.check(guests, DATA / "disk-alerts.json", ops,
+                            tell_owner=guestenv.notify_owner, tell_guest=tell_guest,
+                            mounted=lambda n: bool(reg.get(n, {}).get("disk_gb"))
+                            and ops.is_mounted(guest_disk.mount_point(n)))
+    for line in sent:
+        print(line)
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -389,9 +466,12 @@ def cmd_add(a) -> int:
     public_key = new_public_key(a.name)
     _public_folder(public_key)
     ip = next_ip({v.get("ip") for v in reg.values()})
+    disk_gb = int(getattr(a, "disk_gb", 0) or 0)
     try:
+        if disk_gb:   # a disk of its own (30.10.2026): the folders can't outgrow it
+            guest_disk.create(a.name, Path(PUBLIC_ROOT) / public_key, gb=disk_gb)
         _docker(*container_args(a.name, port, secret, password, a.image, public_key,
-                                ip=ip)[1:])
+                                ip=ip, disk=bool(disk_gb))[1:])
         _wait_running(a.name)
         # entrypoint symlinks /root/.claude.json into the volume; give it a moment
         time.sleep(3)
@@ -407,6 +487,8 @@ def cmd_add(a) -> int:
     reg[a.name] = {"port": port, "telegram_id": a.tg, "image": a.image,
                    "public_key": public_key, "ip": ip,
                    "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+    if disk_gb:
+        reg[a.name]["disk_gb"] = disk_gb
     _save_registry(reg)
     pw_file = DATA / f"{a.name}.dashboard-password"
     pw_file.write_text(password + "\n")
@@ -455,9 +537,10 @@ def cmd_recreate(a) -> int:
     _public_folder(public_key)
     image = a.image or info.get("image") or default_image()
     ip = info.get("ip") or next_ip({v.get("ip") for n, v in reg.items() if n != a.name})
+    use_disk = disk_ready(a.name, info)          # before anything is removed
     _docker("rm", "-f", f"sbx-{a.name}")
     _docker(*container_args(a.name, info["port"], secret, password, image, public_key,
-                            ip=ip)[1:])
+                            ip=ip, disk=use_disk)[1:])
     _wait_running(a.name)
     time.sleep(3)
     subprocess.run(seed_argv(a.name, secret, info["telegram_id"], public_key), check=True,
@@ -795,6 +878,8 @@ def main(argv=None) -> int:
     add.add_argument("--tg", type=int, required=True)
     add.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     add.add_argument("--image", default=None)
+    add.add_argument("--disk-gb", type=int, default=guest_disk.DEFAULT_GB,
+                     help="the guest's own disk in GB (0: Docker volumes, no cap)")
     sub.add_parser("list").add_argument("--json", action="store_true")
     lim = sub.add_parser("limit")
     lim.add_argument("name")
@@ -810,10 +895,15 @@ def main(argv=None) -> int:
     rec.add_argument("name")
     rec.add_argument("--image")
     rec.add_argument("--force", action="store_true")
+    mv = sub.add_parser("disk-move")
+    mv.add_argument("name")
+    mv.add_argument("--gb", type=int, default=guest_disk.DEFAULT_GB)
+    sub.add_parser("disk-watch")
     a = ap.parse_args(argv)
     return {"add": cmd_add, "list": cmd_list, "check": cmd_check, "limit": cmd_limit,
             "recreate": cmd_recreate, "web": cmd_web, "session": cmd_session, "doctor": cmd_doctor,
-            "files-web": cmd_files_web, "image-tag": cmd_image_tag}.get(a.cmd, cmd_simple)(a)
+            "files-web": cmd_files_web, "image-tag": cmd_image_tag, "disk-move": cmd_disk_move,
+            "disk-watch": cmd_disk_watch}.get(a.cmd, cmd_simple)(a)
 
 
 if __name__ == "__main__":

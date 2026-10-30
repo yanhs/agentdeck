@@ -150,6 +150,21 @@ EN = {
     "ctl_wall_ssh": "server's ssh",
     "ctl_wall_nginx": "server's nginx",
     "ctl_wall_internet": "internet (example.com:443)",
+    # -- the sandbox's own disk (guests/disk.py, the watchman) ------------------------- #
+    "disk_warn_guest": "⚠️ Your sandbox's disk is {pct}% full: {used} of {total} GB. When it is "
+                       "full, saving files will fail. Delete what you no longer need, or ask "
+                       "the agent: \"what takes the most space in my sandbox?\"",
+    "disk_full_guest": "🛑 Your sandbox's disk is full: {used} of {total} GB. New files can't be "
+                       "saved and programs may fail. Delete what you no longer need (ask the "
+                       "agent what takes the most space); the sandbox keeps running.",
+    "disk_programs_guest": "⚠️ The programs installed into your sandbox take {size} GB (the "
+                           "suggested maximum is {high} GB). Remove the ones you don't use.",
+    "disk_warn_owner": "⚠️ {name}: the sandbox's disk is {pct}% full ({used} of {total} GB). "
+                       "The guest was told.",
+    "disk_full_owner": "🛑 {name}: the sandbox's disk is full ({used} of {total} GB). Writes "
+                       "fail; the sandbox keeps running. The guest was told.",
+    "disk_programs_owner": "⚠️ {name}: programs installed into the sandbox take {size} GB "
+                           "(warning from {warn} GB, a lot from {high} GB). The guest was told.",
 }
 
 RU = {
@@ -278,6 +293,21 @@ RU = {
     "ctl_wall_ssh": "ssh сервера",
     "ctl_wall_nginx": "nginx сервера",
     "ctl_wall_internet": "интернет (example.com:443)",
+    # -- свой диск песочницы (guests/disk.py, сторож) ---------------------------------- #
+    "disk_warn_guest": "⚠️ Диск вашей песочницы заполнен на {pct}%: {used} из {total} ГБ. Когда "
+                       "он заполнится, файлы перестанут сохраняться. Удалите ненужное или "
+                       "спросите агента: «что занимает больше всего места в песочнице?»",
+    "disk_full_guest": "🛑 Диск вашей песочницы заполнен: {used} из {total} ГБ. Новые файлы не "
+                       "сохраняются, программы могут сбоить. Удалите ненужное (агент подскажет, "
+                       "что занимает больше всего); песочница продолжает работать.",
+    "disk_programs_guest": "⚠️ Программы, установленные в вашу песочницу, занимают {size} ГБ "
+                           "(рекомендуем не больше {high} ГБ). Удалите те, что не нужны.",
+    "disk_warn_owner": "⚠️ {name}: диск песочницы заполнен на {pct}% ({used} из {total} ГБ). "
+                       "Гостю сказано.",
+    "disk_full_owner": "🛑 {name}: диск песочницы заполнен ({used} из {total} ГБ). Запись не "
+                       "проходит, песочница работает. Гостю сказано.",
+    "disk_programs_owner": "⚠️ {name}: программы в песочнице занимают {size} ГБ (предупреждаем "
+                           "с {warn} ГБ, много — с {high} ГБ). Гостю сказано.",
 }
 
 TEXTS = {"en": EN, "ru": RU}

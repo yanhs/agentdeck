@@ -1,0 +1,13 @@
+# Template: guests/install.sh fills in @USER@ / @HOME@ / @GUESTS_DIR@ and writes it to
+# /etc/systemd/system. The disk watchman (guests/disk.py): tells a guest and the owner when
+# the guest's own disk is 80 % full or full, or the programs installed into the sandbox
+# grow large. It never stops or deletes anything. Run by agentkennel-guest-diskwatch.timer.
+[Unit]
+Description=AgentKennel guests: disk watchman (warns, never stops anything)
+After=docker.service
+
+[Service]
+Type=oneshot
+User=@USER@
+Environment=HOME=@HOME@
+ExecStart=/usr/bin/python3 -I "@GUESTS_DIR@/guestctl.py" disk-watch
