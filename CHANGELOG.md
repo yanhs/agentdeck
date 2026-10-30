@@ -2,6 +2,18 @@
 
 All notable changes to AgentKennel (formerly AgentDeck). Newest first.
 
+## v2.2.0 — Claude's usage next to the terminals
+
+### Dashboard
+- **How much of your Claude allowance is used, at a glance.** To the right of the cmd button, two small lines: `5h 7%` and `wk 9%` — the share of the 5-hour window and of the week already used, the same numbers Claude Code's `/usage` shows. Amber from 70 %, red from 90 %. Hover for when each one resets and which terminals spent the most today ("Today by terminal: …"; work outside the terminals — a Telegram bot, headless runs — counts as one row, "Other conversations"). The numbers come from the rate-limit headers of a one-token request to Anthropic, made at most once every 10 minutes with your `CLAUDE_CODE_OAUTH_TOKEN` (`~/.claude/oauth.env`); without a token the chip stays hidden. Not shown on phones.
+- **＋ New** instead of "＋ New terminal" (the title still says what it does); on a phone the search field gets the room.
+
+### A container with limits shows itself
+- When the cgroup caps memory or CPU below the host's (`docker run --memory 4g --cpus 2`), the Server page and the CPU/RAM line above the terminals show the container: its own memory, cores and CPU use, "· sandbox" after the name, and no host load averages or uptime. `AGENTKENNEL_DISK_PATH` names the disk the Server page shows. Without limits nothing changes.
+
+### Upgrading
+- Your own nginx in front (not Caddy): add `location /api/quota` from `nginx/agents-subdomain.conf` — a prefix, it also serves `/api/quota/terminals`. Docker and `install.sh` (Caddy) need nothing.
+
 ## v2.1.1 — your own names on the Server page
 
 ### Changed
