@@ -127,6 +127,7 @@ def make_collector(fp, clock, **kw):
     names.write_text(json.dumps(NAMES_FILE))
     args = dict(
         names_path=str(names), proc_root=str(fp.root), clock=clock, hz=HZ, page_kb=PAGE_KB, disk_path="/",
+        cgroup_root=str(fp.root.parent / "no-cgroup"),      # the test machine's own cgroup stays out
         tmux_panes=lambda: [("cs-b36f2fd1", 500), ("claude-terminal-3", 600),
                             ("cmd-shell", 700)],
         docker_ps=lambda: {DOCKER_ID: {"name": "acme-dev", "state": "running",

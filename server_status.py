@@ -359,8 +359,10 @@ class Collector:
     def __init__(self, proc_root="/proc", interval=INTERVAL, history_len=HISTORY_LEN,
                  tmux_panes=None, docker_ps=None, units=None, pm2_names=None,
                  library_names=None, disk_path="/", clock=time.time, hz=None, page_kb=None,
-                 names_path=None):
+                 names_path=None, cgroup_root="/sys/fs/cgroup"):
         self.root = proc_root
+        self.cgroup_root = cgroup_root     # a sandbox's own limits (cgroup v2), if it has any
+        self._prev_cg_usage = None
         self.interval = interval
         self.clock = clock
         self.hz = hz or os.sysconf("SC_CLK_TCK")
@@ -481,6 +483,36 @@ class Collector:
         uptime = float(self._read(f"{self.root}/uptime").split()[0])
         return cpus, mem, load, uptime
 
+    def _read_cgroup(self):
+        """This process's cgroup (v2) limits: {mem_max, mem_current, mem_inactive} when
+        memory is capped, {cpu_quota (cores), cpu_usage_usec} when CPU is; {} on a host."""
+        def read(name):
+            try:
+                with open(os.path.join(self.cgroup_root, name)) as f:
+                    return f.read().strip()
+            except OSError:
+                return ""
+
+        def stat(name, key):
+            for line in read(name).splitlines():
+                k, _, v = line.partition(" ")
+                if k == key and v.strip().isdigit():
+                    return int(v)
+            return None
+        out = {}
+        mm = read("memory.max")
+        if mm.isdigit():
+            cur = read("memory.current")
+            out.update(mem_max=int(mm), mem_current=int(cur) if cur.isdigit() else 0,
+                       mem_inactive=stat("memory.stat", "inactive_file") or 0)
+        cm = read("cpu.max").split()
+        if len(cm) == 2 and cm[0].isdigit() and cm[1].isdigit() and int(cm[1]) > 0:
+            out["cpu_quota"] = int(cm[0]) / int(cm[1])
+            usage = stat("cpu.stat", "usage_usec")
+            if usage is not None:
+                out["cpu_usage_usec"] = usage
+        return out
+
     # -- sampling ---------------------------------------------------------
     def sample(self):
         c0, w0 = time.thread_time(), time.perf_counter()
@@ -555,14 +587,35 @@ class Collector:
             dtot = dfree = dused = 0.0
         ncores = len(cores) or os.cpu_count() or 1
         cpu = pct("cpu")
+        per_core = [pct(c) for c in cores]
+        # A sandbox (a guest's container) is a smaller machine than /proc shows: when its
+        # cgroup limits memory or CPU below the host's, those are the numbers (30.10.2026).
+        cg = self._read_cgroup()
+        prev_usage, self._prev_cg_usage = self._prev_cg_usage, cg.get("cpu_usage_usec")
+        mem_limited = "mem_max" in cg and total_mb > 0 and cg["mem_max"] / 1048576 < total_mb
+        cpu_limited = "cpu_quota" in cg and cg["cpu_quota"] < ncores
+        if mem_limited:
+            total_mb = cg["mem_max"] / 1048576
+            used_mb = min(total_mb, max(0, cg["mem_current"] - cg["mem_inactive"]) / 1048576)
+            avail_mb = total_mb - used_mb
+        if cpu_limited:
+            q = cg["cpu_quota"]
+            ncores = int(q) if q == int(q) else round(q, 2)
+            in_use = 0.0
+            if prev_usage is not None and "cpu_usage_usec" in cg and dt > 0:
+                in_use = max(0.0, (cg["cpu_usage_usec"] - prev_usage) / 1e6 / dt)
+            cpu = round(min(100.0, in_use / q * 100), 1)
+            load = [round(in_use, 2)] * 3          # cores busy now: the host's load isn't its own
+            per_core = []
         avail_pct = avail_mb / total_mb * 100 if total_mb else 100.0
         verdict, why = pressure(cpu, load[0], ncores, avail_pct)
         return {
             "hostname": redact(socket.gethostname(), 60),
+            "scope": "sandbox" if mem_limited or cpu_limited else "server",
             "cores": ncores,
             "load": load,
             "cpu_pct": cpu,
-            "cpu_per_core": [pct(c) for c in cores],
+            "cpu_per_core": per_core,
             "ram_total_mb": round(total_mb),
             "ram_used_mb": round(used_mb),
             "ram_available_mb": round(avail_mb),

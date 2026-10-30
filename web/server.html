@@ -537,14 +537,17 @@
     gs.replaceChildren(...parts.map(([t, b]) => b ? el('b', null, t) : document.createTextNode(t)));
   }
   function renderHost(h) {
-    $('#host').textContent = h.hostname || '';
+    // a guest's sandbox (its cgroup limits it): its own cores and RAM, said so (30.10.2026)
+    const sandbox = h.scope === 'sandbox';
+    $('#host').textContent = (h.hostname || '') + (sandbox ? ' · sandbox' : '');
+    $('#host').title = sandbox ? 'Your sandbox: a smaller machine inside this server — its own cores and memory' : '';
     const p = $('#pressure');
     p.className = 'pill ' + (h.pressure || '');
     const word = { ok: 'Healthy', busy: 'Busy', overloaded: 'Overloaded' }[h.pressure] || h.pressure;
     p.querySelector('.pt').replaceChildren(el('b', null, word),
       document.createTextNode(h.pressure === 'ok' ? '' : ' · ' + (h.pressure_reason || '')));
     p.title = h.pressure_reason || '';
-    $('#uptime').textContent = '· up ' + fmtUptime(h.uptime_s || 0);
+    $('#uptime').textContent = sandbox ? '' : '· up ' + fmtUptime(h.uptime_s || 0);   // the host's, not its own
 
     document.querySelector('#g-cpu .gv').textContent = fmtPct(h.cpu_pct);
     ring('g-cpu', h.cpu_pct);
@@ -572,7 +575,8 @@
     const lp = load[0] / (h.cores || 1) * 100;
     document.querySelector('#g-load .gv').textContent = load[0].toFixed(1);
     ring('g-load', Math.min(100, lp), lp > 150 ? 'var(--red)' : lp > 100 ? 'var(--amber)' : 'var(--green)');
-    setGs('g-load', [['of ' + h.cores + ' cores', true], [` · 5m ${load[1].toFixed(1)} · 15m ${load[2].toFixed(1)}`]]);
+    setGs('g-load', sandbox ? [['of ' + h.cores + ' cores', true], [' in use now']]     // no averages of its own
+      : [['of ' + h.cores + ' cores', true], [` · 5m ${load[1].toFixed(1)} · 15m ${load[2].toFixed(1)}`]]);
   }
 
   // ── 15-minute chart ──
