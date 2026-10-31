@@ -527,8 +527,11 @@ def cmd_add(a) -> int:
 def _public_folder(public_key: str) -> Path:
     folder = Path(PUBLIC_ROOT) / public_key
     folder.mkdir(parents=True, exist_ok=True)
-    folder.chmod(0o755)
-    Path(PUBLIC_ROOT).chmod(0o711)  # nginx may enter, nobody may list the keys
+    # a guest with its own disk has this folder as a mount, owned by root: chmod only
+    # what isn't right yet
+    for path, mode in ((folder, 0o755), (Path(PUBLIC_ROOT), 0o711)):  # nginx may enter,
+        if path.stat().st_mode & 0o7777 != mode:                       # nobody may list keys
+            path.chmod(mode)
     return folder
 
 

@@ -83,3 +83,28 @@ def test_a_dry_run_says_what_it_would_do_and_changes_nothing():
     w = World()
     assert run(w, dry=True) == 0
     assert w.moved == [] and w.told == []
+
+
+def test_the_login_check_passes_cloudflare(monkeypatch):
+    """Cloudflare answers 403 to Python-urllib's own User-Agent (31.10.2026: a moved guest
+    was reported broken while its page opened fine for people)."""
+    seen = {}
+
+    class Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout=None):
+        seen["ua"] = req.get_header("User-agent")
+        seen["url"] = req.full_url
+        return Resp()
+    monkeypatch.setattr(m.urllib.request, "urlopen", urlopen)
+    w = m.RealWorld()
+    assert w.login_status("anna") == 200
+    assert seen["url"] == "https://sb-anna.example.test/login"
+    assert seen["ua"] == w.env.USER_AGENT

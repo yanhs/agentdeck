@@ -603,3 +603,18 @@ def test_services_check_accepts_the_old_unit_names():
     assert up["ok"], up
     down = gc.check_services(lambda unit: "tgrelay" not in unit)
     assert not down["ok"] and "agentkennel-guest-tgrelay" in down["detail"]
+
+
+def test_public_folder_made_by_root_with_the_right_modes_is_left_alone(tmp_path, monkeypatch):
+    """A guest's public folder is a mount of its own disk, owned by root: a recreate must
+    not fail on chmod when the modes are already right."""
+    root = tmp_path / "public"
+    (root / "anna-key").mkdir(parents=True)
+    (root / "anna-key").chmod(0o755)
+    root.chmod(0o711)
+    monkeypatch.setattr(gc, "PUBLIC_ROOT", str(root))
+
+    def refuse(self, mode, **kw):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(gc.Path, "chmod", refuse)
+    assert gc._public_folder("anna-key") == root / "anna-key"

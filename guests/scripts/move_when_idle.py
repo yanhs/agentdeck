@@ -54,18 +54,23 @@ class RealWorld:
             return r.stdout.strip() if r.returncode == 0 else ""
         sys.path.insert(0, str(GUESTS))
         import disk
-        url = f"https://{self.gc.dashboard_host(name)}/login"
-        try:
-            with urllib.request.urlopen(url, timeout=15) as resp:
-                login = resp.status
-        except urllib.error.HTTPError as e:
-            login = e.code
-        except OSError:
-            login = 0
         return {"running": docker("{{.State.Running}}") == "true",
                 "image": docker("{{.Config.Image}}"),
                 "disk": disk.RealOps().is_mounted(disk.mount_point(name)),
-                "login": login}
+                "login": self.login_status(name)}
+
+    def login_status(self, name):
+        """The dashboard's login page as a visitor gets it (Cloudflare answers 403 to
+        Python-urllib's own User-Agent)."""
+        req = urllib.request.Request(f"https://{self.gc.dashboard_host(name)}/login",
+                                     headers={"User-Agent": self.env.USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except OSError:
+            return 0
 
     def tell(self, text):
         self.env.notify_owner(text)
