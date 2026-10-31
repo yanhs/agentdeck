@@ -110,11 +110,11 @@ def cloudflare_api(method: str, path: str, data: Optional[Dict] = None,
     return json.loads(r.stdout or "{}")
 
 
-def host_for(site: str, guest: str) -> str:
+def host_for(site: str, guest: str, registry: Optional[Dict] = None) -> str:
     domain = guestenv.domain()
     if not domain:
         raise GateError(_t("site_no_domain"))
-    host = f"{site}-{guest}.{domain}"
+    host = f"{site}-{guestenv.address_of(guest, registry or {})}.{domain}"
     if len(host.split(".")[0]) > 63:
         raise ValueError(_t("site_too_long"))
     return host
@@ -207,7 +207,9 @@ def render_moved(host: str, to: str) -> str:
 
 class Gate:
     def __init__(self, book: "ts.GuestBook", ops, registry: Path,
-                 ip_of: Callable[[str], Optional[str]], cleanup_delay: float = 90) -> None:
+                 ip_of: Callable[[str], Optional[str]], cleanup_delay: float = 90,
+                 sandboxes: Callable[[], Dict] = dict) -> None:
+        self.sandboxes = sandboxes   # guestctl's registry: each guest's own address name
         self.book = book
         self.ops = ops
         self.path = Path(registry)
@@ -235,7 +237,7 @@ class Gate:
         ip = self.ip_of(guest)
         if not ip:
             raise GateError(_t("site_no_ip"))
-        host = host_for(site, guest)
+        host = host_for(site, guest, self.sandboxes())
         with self._lock:
             reg = self._load()
             if host in reg:
@@ -271,7 +273,7 @@ class Gate:
 
     def unpublish(self, guest: str, site) -> Dict:
         site = validate_site(site)
-        host = host_for(site, guest)
+        host = host_for(site, guest, self.sandboxes())
         with self._lock:
             reg = self._load()
             if host not in reg or reg[host]["guest"] != guest:
@@ -456,11 +458,13 @@ def main(argv=None) -> int:
     book = ts.GuestBook(data / "guests.json")
     sandboxes = data / "sandboxes.json"
 
-    def ip_of(name: str) -> Optional[str]:
-        reg = json.loads(sandboxes.read_text()) if sandboxes.exists() else {}
-        return (reg.get(name) or {}).get("ip")
+    def registry() -> Dict:
+        return json.loads(sandboxes.read_text()) if sandboxes.exists() else {}
 
-    gate = Gate(book, RealOps(), data / "sites.json", ip_of)
+    def ip_of(name: str) -> Optional[str]:
+        return (registry().get(name) or {}).get("ip")
+
+    gate = Gate(book, RealOps(), data / "sites.json", ip_of, sandboxes=registry)
     args = list(sys.argv[1:] if argv is None else argv)
     if args[:1] == ["remove"] and len(args) == 2:  # owner: take any site down
         host = args[1]

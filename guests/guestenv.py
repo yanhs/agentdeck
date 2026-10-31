@@ -79,6 +79,16 @@ def get(key: str, default: Optional[str] = None) -> Optional[str]:
     return value if value else default
 
 
+def address_of(name: str, registry: Mapping) -> str:
+    """The guest's own address name (registry "address", set by `guestctl address`),
+    else its name: what people see in sb-<address>.<domain> and <site>-<address>.<domain>."""
+    return (registry.get(name) or {}).get("address") or name
+
+
+def dashboard_host(name: str, registry: Mapping) -> str:
+    return f"sb-{address_of(name, registry)}.{domain()}"
+
+
 def domain(settings: Optional[Mapping[str, str]] = None) -> str:
     """GUESTS_DOMAIN, lower-case, without a scheme, slashes or outer dots ("" if unset)."""
     raw = (settings if settings is not None else load()).get("GUESTS_DOMAIN") or ""

@@ -93,7 +93,60 @@ def public_base_url() -> str:
 
 
 def dashboard_host(name: str) -> str:
-    return f"sb-{name}.{domain()}"
+    domain()  # a clear error without one
+    return guestenv.dashboard_host(name, _registry())
+
+
+ADDRESS_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
+
+
+def check_address(name: str, address: str, reg: dict) -> str:
+    """A guest's own address name: DNS-safe and nobody else's name or address."""
+    if not ADDRESS_RE.match(address or ""):
+        raise SystemExit(f"address {address!r}: latin letters, digits and '-', up to 40")
+    for other, info in reg.items():
+        if other != name and address in (other, (info or {}).get("address")):
+            raise SystemExit(f"address {address!r} is {other}'s")
+    return address
+
+
+def set_address(name: str, address: str, ops) -> None:
+    """sb-<address>.<domain> for the guest; the old address sends everyone there (only
+    once the new one works). The sandbox keeps running."""
+    import copy
+    sys.path.insert(0, str(HERE / "sitegate"))
+    import sitegate  # noqa: E402
+
+    reg = _registry()
+    if name not in reg:
+        raise SystemExit(f"no guest {name}")
+    check_address(name, address, reg)
+    before = copy.deepcopy(reg)
+    old = dashboard_host(name)
+    if address == name:
+        reg[name].pop("address", None)
+    else:
+        reg[name]["address"] = address
+    _save_registry(reg)
+    new = dashboard_host(name)
+    if new == old or not ops.vhost_exists(old):
+        return
+    try:
+        _serve_new(ops, new, dashboard_vhost(name, reg[name]["port"]))
+    except Exception:
+        _save_registry(before)
+        raise
+    ops.write_vhost(old, sitegate.render_moved(old, new))
+    ops.reload()
+    print(f"https://{old} -> https://{new}")
+
+
+def cmd_address(a) -> int:
+    sys.path.insert(0, str(HERE / "sitegate"))
+    import sitegate  # noqa: E402
+
+    set_address(a.name, a.address, sitegate.RealOps())
+    return 0
 
 
 # The owner opens a guest's dashboard without the guest's password (decision 29.10.2026).
@@ -773,9 +826,10 @@ def move_domain(old: str, ops, guests: dict, fix_rules) -> None:
         _serve_new(ops, files_host(), files_vhost())
         pairs.append((f"sbx.{old}", files_host()))
     for name, info in sorted(guests.items()):
-        if ops.vhost_exists(f"sb-{name}.{old}"):
+        was = f"sb-{guestenv.address_of(name, guests)}.{old}"
+        if ops.vhost_exists(was):
             _serve_new(ops, dashboard_host(name), dashboard_vhost(name, info["port"]))
-            pairs.append((f"sb-{name}.{old}", dashboard_host(name)))
+            pairs.append((was, dashboard_host(name)))
         fix_rules(name, old, new)
     for was, now in pairs:
         ops.write_vhost(was, sitegate.render_moved(was, now))
@@ -1001,13 +1055,17 @@ def main(argv=None) -> int:
     mv.add_argument("--gb", type=int, default=guest_disk.DEFAULT_GB)
     mv.add_argument("--image", help="recreate on this image too (one stop for the guest)")
     sub.add_parser("disk-watch")
+    ad = sub.add_parser("address")
+    ad.add_argument("name")
+    ad.add_argument("address", help="sb-<address>.<domain> instead of sb-<name>")
     sub.add_parser("move-domain").add_argument("--from", dest="old", required=True,
                                                help="the domain the guests were on")
     a = ap.parse_args(argv)
     return {"add": cmd_add, "list": cmd_list, "check": cmd_check, "limit": cmd_limit,
             "recreate": cmd_recreate, "web": cmd_web, "session": cmd_session, "doctor": cmd_doctor,
             "files-web": cmd_files_web, "image-tag": cmd_image_tag, "disk-move": cmd_disk_move,
-            "disk-watch": cmd_disk_watch, "move-domain": cmd_move_domain}.get(a.cmd, cmd_simple)(a)
+            "disk-watch": cmd_disk_watch, "move-domain": cmd_move_domain,
+            "address": cmd_address}.get(a.cmd, cmd_simple)(a)
 
 
 if __name__ == "__main__":
