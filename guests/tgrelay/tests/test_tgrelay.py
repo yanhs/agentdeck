@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import turnstile as ts  # noqa: E402
 
 import tgrelay as tr  # noqa: E402
+import texts  # noqa: E402
 
 REAL = "8893376561:REAL-SECRET"
 ANNA, BORIS = 1001, 2002
@@ -535,3 +536,12 @@ def test_bot_token_comes_from_the_settings(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc:
         tr._bot_token()
     assert "GUEST_BOT_TOKEN" in str(exc.value)
+
+
+def test_menu_items_added_to_the_sandbox_menu_are_in_its_language(svc_relay, tg):
+    """The sandbox's own menu is English; what the relay adds to it is English too, even
+    with GUESTS_LANG=ru (the answers to /web and /services stay in GUESTS_LANG)."""
+    cmds = json.dumps([{"command": "list", "description": "terminals"}])
+    svc_relay.call("anna", "setMyCommands", {"commands": cmds})
+    sent = {c["command"]: c["description"] for c in json.loads(tg.calls[-1][1]["commands"])}
+    assert sent["web"] == texts.EN["cmd_web"] and sent["services"] == texts.EN["cmd_services"]

@@ -87,12 +87,13 @@ def _file_ids(obj) -> set:
     return found
 
 
+# added to the sandbox's own menu, which is English: in its language, not GUESTS_LANG
 def web_command() -> Dict:
-    return {"command": "web", "description": _t("cmd_web")}
+    return {"command": "web", "description": texts.EN["cmd_web"]}
 
 
 def services_command() -> Dict:
-    return {"command": "services", "description": _t("cmd_services")}
+    return {"command": "services", "description": texts.EN["cmd_services"]}
 
 
 SERVICE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")   # the keeper's names

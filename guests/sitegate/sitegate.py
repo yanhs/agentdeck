@@ -30,7 +30,7 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -120,10 +120,13 @@ def host_for(site: str, guest: str) -> str:
     return host
 
 
-def render_vhost(host: str, ip: str, port: int, tls: bool, extra: str = "") -> str:
+def render_vhost(host: str, ip: str, port: int, tls: bool, extra: str = "",
+                 origin: Optional[Tuple[str, str]] = None) -> str:
     """nginx config for one guest site. tls=False: only what the first certificate needs.
     `extra`: locations put before the catch-all of the https block (a guest's dashboard
-    has one: the owner's way in, see guestctl.owner_entry_location)."""
+    has one: the owner's way in, see guestctl.owner_entry_location).
+    `origin` (this address's origin, the one the app knows): the app was made for another
+    address and takes writes only from that Origin — the browser's is swapped for it."""
     http = (
         "server {\n"
         "    listen 80;\n    listen [::]:80;\n"
@@ -154,7 +157,10 @@ def render_vhost(host: str, ip: str, port: int, tls: bool, extra: str = "") -> s
         "        proxy_set_header X-Real-IP $remote_addr;\n"
         "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n"
         "        proxy_set_header X-Forwarded-Proto https;\n"
-        "        proxy_read_timeout 300s;\n"
+        + (("        set $sbx_origin $http_origin;\n"
+            f'        if ($http_origin = "{origin[0]}") {{ set $sbx_origin "{origin[1]}"; }}\n'
+            "        proxy_set_header Origin $sbx_origin;\n") if origin else "")
+        + "        proxy_read_timeout 300s;\n"
         "    }\n"
         "}\n"
     )
@@ -173,6 +179,26 @@ def render_gone(host: str) -> str:
         f"    ssl_certificate_key /etc/letsencrypt/live/{host}/privkey.pem;\n"
         "    include /etc/letsencrypt/options-ssl-nginx.conf;\n"
         "    location / { return 404; }\n}\n"
+    )
+
+
+def render_moved(host: str, to: str) -> str:
+    """An address that moved: everything goes to the same path on `to` (its certificate
+    is kept, and renews over http)."""
+    go = f"    location / {{ return 301 https://{to}$request_uri; }}\n"
+    return (
+        f"# guest site {host} (moved to {to})\n"
+        "server {\n    listen 80;\n    listen [::]:80;\n"
+        f"    server_name {host};\n"
+        "    location ^~ /.well-known/acme-challenge/ { root /var/www/html; }\n"
+        + go + "}\n"
+        "server {\n    listen 443 ssl;\n    listen [::]:443 ssl;\n"
+        f"    server_name {host};\n"
+        f"    ssl_certificate /etc/letsencrypt/live/{host}/fullchain.pem;\n"
+        f"    ssl_certificate_key /etc/letsencrypt/live/{host}/privkey.pem;\n"
+        "    include /etc/letsencrypt/options-ssl-nginx.conf;\n"
+        "    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;\n"
+        + go + "}\n"
     )
 
 
@@ -336,6 +362,9 @@ class RealOps:
         conf = self.VHOSTS / f"{host}.conf"
         conf.write_text(text)
         self._run("sudo", "-n", "ln", "-sfn", str(conf), f"/etc/nginx/sites-enabled/sbx-site-{host}")
+
+    def vhost_exists(self, host: str) -> bool:
+        return (self.VHOSTS / f"{host}.conf").exists()
 
     def remove_vhost(self, host: str) -> None:
         self._run("sudo", "-n", "rm", "-f", f"/etc/nginx/sites-enabled/sbx-site-{host}")
