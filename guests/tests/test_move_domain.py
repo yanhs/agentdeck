@@ -46,6 +46,14 @@ def test_sandbox_made_for_the_old_address_is_handed_the_origin_it_knows():
     assert loc.index("set $sbx_origin $http_origin;") < loc.index("if ($http_origin")
 
 
+def test_terminal_connections_keep_their_own_origin():
+    """The terminal (ttyd, a websocket) checks Origin against Host: it must get the real one."""
+    loc = proxy_location(gc.dashboard_vhost("anna", 18101, container_origin="https://sb-anna.old.test"))
+    swap = loc.index('if ($http_origin = "https://sb-anna.example.test")')
+    keep = loc.index('if ($http_upgrade) { set $sbx_origin $http_origin; }')
+    assert swap < keep < loc.index("proxy_set_header Origin $sbx_origin;")
+
+
 def test_unknown_origin_gets_no_stand_in():
     """No container to ask (or no setting in it): the dashboard judges by the Host."""
     assert "Origin" not in gc.dashboard_vhost("anna", 18101, container_origin="")

@@ -126,7 +126,8 @@ def render_vhost(host: str, ip: str, port: int, tls: bool, extra: str = "",
     `extra`: locations put before the catch-all of the https block (a guest's dashboard
     has one: the owner's way in, see guestctl.owner_entry_location).
     `origin` (this address's origin, the one the app knows): the app was made for another
-    address and takes writes only from that Origin — the browser's is swapped for it."""
+    address and takes writes only from that Origin — the browser's is swapped for it
+    (not on a websocket: the terminal checks Origin against Host)."""
     http = (
         "server {\n"
         "    listen 80;\n    listen [::]:80;\n"
@@ -159,6 +160,8 @@ def render_vhost(host: str, ip: str, port: int, tls: bool, extra: str = "",
         "        proxy_set_header X-Forwarded-Proto https;\n"
         + (("        set $sbx_origin $http_origin;\n"
             f'        if ($http_origin = "{origin[0]}") {{ set $sbx_origin "{origin[1]}"; }}\n'
+            # the terminal (a websocket: ttyd) checks Origin against Host — the real one
+            "        if ($http_upgrade) { set $sbx_origin $http_origin; }\n"
             "        proxy_set_header Origin $sbx_origin;\n") if origin else "")
         + "        proxy_read_timeout 300s;\n"
         "    }\n"
