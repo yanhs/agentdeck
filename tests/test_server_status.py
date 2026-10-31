@@ -709,3 +709,37 @@ def test_names_file_regex_groups_fill_the_description(tmp_path):
     snap = c.sample()
     d = member(snap, "apps", lambda m: m["name"] == "shop-prod-green")
     assert d["what"] == "Shop prod (green slot)"
+
+
+# ── services kept by services_keeper (a site, a bot, a tunnel) ───────────────
+def test_kept_services_are_sites_and_apps_by_their_own_name(tmp_path):
+    """A guest's site runs as a keeper service (.services/<name>.sh): on the Server page it
+    is that service under "Sites & apps", with its whole process tree, not "Other"."""
+    fp = FakeProc(tmp_path / "proc")
+    fp.add(1, "docker-init", 0, cgroup="0::/", argv=["/sbin/docker-init"])
+    fp.add(30, "python3", 1, cgroup="0::/", argv=["python3", "services_keeper.py"])
+    fp.add(595, "bash", 30, cgroup="0::/", argv=["bash", "/work/.services/angels-help.sh"], start=4242)
+    fp.add(596, "next-server (v", 595, cgroup="0::/", argv=["next-server (v15.1.0)"], rss_mb=180)
+    fp.add(700, "python3", 30, cgroup="0::/", argv=["python3", "bot.py"], start=5000)   # pid reused
+    status = {"angels-help": {"state": "running", "pid": 595, "start_ticks": 4242},
+              "old-bot": {"state": "running", "pid": 700, "start_ticks": 1},
+              "tunnel": {"state": "stopped", "pid": None}}
+    c = make_collector(fp, Clock(), kept_services=lambda: status)
+    snap = c.sample()
+    m = member(snap, "apps", lambda m: m["id"] == "svc:angels-help")
+    assert m["name"] == "angels-help" and m["kind"] == "service"
+    assert m["rss_mb"] == pytest.approx(190, abs=1)          # the script and the site
+    # a recorded pid that now names another process is not that service
+    assert not [x for x in group(snap, "apps")["members"] if x["id"] == "svc:old-bot"]
+    stopped = member(snap, "apps", lambda m: m["id"] == "svc:tunnel")
+    assert stopped["status"] == "stopped"
+
+
+def test_kept_services_come_from_the_keepers_status_file(tmp_path, monkeypatch):
+    d = tmp_path / ".services"
+    d.mkdir()
+    (d / "status.json").write_text(json.dumps({"services": {"web": {"state": "running", "pid": 9}}}))
+    monkeypatch.setenv("SERVICES_DIR", str(d))
+    assert ss.default_kept_services() == {"web": {"state": "running", "pid": 9}}
+    (d / "status.json").write_text("{broken")
+    assert ss.default_kept_services() == {}

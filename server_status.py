@@ -317,6 +317,17 @@ def default_pm2_names():
     return res
 
 
+def default_kept_services():
+    """services_keeper's status.json: name -> {"state", "pid", "start_ticks", ...}."""
+    import services_keeper
+    try:
+        with open(services_keeper.default_dir() / "status.json") as f:
+            services = json.load(f).get("services")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return services if isinstance(services, dict) else {}
+
+
 _lib_cache = {"key": None, "val": ({}, {})}
 
 
@@ -391,7 +402,7 @@ class Collector:
     def __init__(self, proc_root="/proc", interval=INTERVAL, history_len=HISTORY_LEN,
                  tmux_panes=None, docker_ps=None, units=None, pm2_names=None,
                  library_names=None, disk_path="/", clock=time.time, hz=None, page_kb=None,
-                 names_path=None, cgroup_root="/sys/fs/cgroup"):
+                 names_path=None, cgroup_root="/sys/fs/cgroup", kept_services=None):
         self.root = proc_root
         self.cgroup_root = cgroup_root     # a sandbox's own limits (cgroup v2), if it has any
         self._prev_cg_usage = None
@@ -405,6 +416,7 @@ class Collector:
         self.src_units = units or default_units
         self.src_pm2 = pm2_names or default_pm2_names
         self.src_lib = library_names or default_library_names
+        self.src_kept = kept_services or default_kept_services
         self.units_names, self.container_names = load_names(names_path)
         self._cache = {}                 # name -> (t, value)
         self._meta = {}                  # (pid, start, comm) -> {"argv", "cgroup"}
@@ -725,7 +737,25 @@ class Collector:
             members[key] = self._agent_member(key, p, procs, pane_of, by_sid, by_uuid,
                                               unit_of(p.pid))
 
-        # 4. systemd units (by cgroup)
+        # 4. services kept by services_keeper (a site, a bot, a tunnel): by their own name;
+        # a recorded pid counts only while it names the process the keeper started
+        for name, st in sorted(self._cached("kept", PM2_TTL, self.src_kept, {}).items()):
+            if not _clean(name):
+                continue
+            key = "svc:" + _clean(name)
+            pid = st.get("pid") if isinstance(st, dict) else None
+            p = procs.get(pid) if isinstance(pid, int) else None
+            live = (p is not None and pid not in owner
+                    and st.get("start_ticks") in (None, p.start))
+            if not live and isinstance(st, dict) and st.get("state") == "running":
+                continue
+            members[key] = {"id": key, "group": "apps", "kind": "service",
+                            "name": redact(_clean(name), 60),
+                            "what": "Service: runs without a terminal", "stopped": not live}
+            if live:
+                claim(pid, key)
+
+        # 5. systemd units (by cgroup)
         for p in procs.values():
             if p.pid in owner:
                 continue
@@ -750,7 +780,7 @@ class Collector:
                 m["stopped"] = True
                 members["unit:" + u] = m
 
-        # 5. PM2 apps: children of the PM2 daemon
+        # 6. PM2 apps: children of the PM2 daemon
         for god in procs.values():
             if not god.comm.startswith("PM2"):
                 continue
@@ -770,7 +800,7 @@ class Collector:
                                              "name": name, "what": f"PM2 app ({lab})"})
                 claim(cpid, key)
 
-        # 6. background jobs among the rest; everything else is "Other"
+        # 7. background jobs among the rest; everything else is "Other"
         def candidate(p):
             if p.pid in owner or p.pid == 1:
                 return False
