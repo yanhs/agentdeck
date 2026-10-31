@@ -9,11 +9,11 @@
  "commands": [
   {
    "command": "web",
-   "description": "адрес в браузере и пароль"
+   "description": "browser address and password"
   },
   {
    "command": "services",
-   "description": "что работает без терминала"
+   "description": "what runs without a terminal"
   }
  ],
  "ago": [
@@ -382,7 +382,7 @@
   [
    "setMyCommands",
    {
-    "commands": "[{\"command\": \"list\", \"description\": \"x\"}, {\"command\": \"web\", \"description\": \"адрес в браузере и пароль\"}, {\"command\": \"services\", \"description\": \"что работает без терминала\"}]",
+    "commands": "[{\"command\": \"list\", \"description\": \"x\"}, {\"command\": \"web\", \"description\": \"browser address and password\"}, {\"command\": \"services\", \"description\": \"what runs without a terminal\"}]",
     "scope": "{\"type\": \"chat\", \"chat_id\": 1001}"
    }
   ]
